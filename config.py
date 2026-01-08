@@ -200,22 +200,22 @@ class EmergentConfig:
             "none": {
                 "market_analysis": {
                     "accuracy": 0.45,
-                    "hallucination_rate": 0.15,
+                    "hallucination_rate": 0.22,
                     "bias": 0.05,
                 },
                 "technical_assessment": {
                     "accuracy": 0.48,
-                    "hallucination_rate": 0.14,
+                    "hallucination_rate": 0.20,
                     "bias": -0.03,
                 },
                 "uncertainty_evaluation": {
                     "accuracy": 0.42,
-                    "hallucination_rate": 0.16,
+                    "hallucination_rate": 0.25,
                     "bias": -0.04,
                 },
                 "innovation_potential": {
                     "accuracy": 0.40,
-                    "hallucination_rate": 0.18,
+                    "hallucination_rate": 0.24,
                     "bias": 0.06,
                 },
             },
