@@ -143,7 +143,7 @@ Configurations tested:
 
 ## Calibration Profiles
 
-### `minimal_causal` (Recommended for AMJ)
+### `minimal_causal` (Recommended for Academic Research)
 
 Minimal configuration optimized for causal identification:
 - Single sector (tech)
