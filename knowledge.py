@@ -48,7 +48,12 @@ class KnowledgeBase:
                 else:
                     self.DOMAIN_TO_SECTOR_MAP[domain] = available_sectors[0]
 
-        self.SECTOR_TO_DOMAIN_MAP = {v: k for k, v in self.DOMAIN_TO_SECTOR_MAP.items()}
+        # Build reverse mapping, keeping first domain for each sector
+        # (important for single-sector mode where multiple domains map to one sector)
+        self.SECTOR_TO_DOMAIN_MAP = {}
+        for domain, sector in self.DOMAIN_TO_SECTOR_MAP.items():
+            if sector not in self.SECTOR_TO_DOMAIN_MAP:
+                self.SECTOR_TO_DOMAIN_MAP[sector] = domain
         self.knowledge_pieces: Dict[str, Knowledge] = {}
         self.domain_knowledge: Dict[str, List[Knowledge]] = collections.defaultdict(list)
         self.agent_knowledge: Dict[int, Set[str]] = collections.defaultdict(set)
