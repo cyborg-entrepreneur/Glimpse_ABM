@@ -197,6 +197,28 @@ class EmergentConfig:
 
     AI_DOMAIN_CAPABILITIES: Dict = field(
         default_factory=lambda: {
+            "none": {
+                "market_analysis": {
+                    "accuracy": 0.45,
+                    "hallucination_rate": 0.15,
+                    "bias": 0.05,
+                },
+                "technical_assessment": {
+                    "accuracy": 0.48,
+                    "hallucination_rate": 0.14,
+                    "bias": -0.03,
+                },
+                "uncertainty_evaluation": {
+                    "accuracy": 0.42,
+                    "hallucination_rate": 0.16,
+                    "bias": -0.04,
+                },
+                "innovation_potential": {
+                    "accuracy": 0.40,
+                    "hallucination_rate": 0.18,
+                    "bias": 0.06,
+                },
+            },
             "basic": {
                 "market_analysis": {
                     "accuracy": 0.65,

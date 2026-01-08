@@ -2140,11 +2140,11 @@ class EmergentAgent:
         perception: Dict,
     ) -> Dict:
         
-        evals, per_use_cost = self._evaluate_portfolio_opportunities(
+        evals, _ = self._evaluate_portfolio_opportunities(
             opportunities, info_system, market_conditions, ai_level, perception
         )
         return self._make_portfolio_decision(
-            evals, market_environment, round_num, ai_level, perception, market_conditions, per_use_cost
+            evals, market_environment, round_num, ai_level, perception, market_conditions
         )
 
     def _make_exploration_decision(self, round_num: int, ai_level: str) -> Dict:
@@ -2571,7 +2571,6 @@ class EmergentAgent:
         ai_level: str,
         perception: Dict,
         market_conditions: Dict,
-        per_use_cost: float = 0.0,
     ) -> Dict:
         """Make portfolio decision based on evaluated opportunities with capital constraints."""
 
