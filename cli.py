@@ -935,6 +935,7 @@ def run_fixed_level_uncertainty_batch(
     output_dir: Optional[str] = None,
     calibration_metadata: Optional[List[Dict[str, Any]]] = None,
     cli_args: Optional[Dict[str, Any]] = None,
+    skip_visualizations: bool = False,
 ) -> Dict[str, Any]:
     """Execute the fixed-level uncertainty experiment sweep and return artefacts."""
     ai_levels = ai_levels or ["none", "basic", "advanced", "premium"]
@@ -991,9 +992,12 @@ def run_fixed_level_uncertainty_batch(
 
     analysis_metadata_path: Optional[Path] = None
     if not framework.agent_df.empty:
-        viz_suite = ComprehensiveVisualizationSuite(framework)
-        viz_suite.create_performance_dashboard()
-        viz_suite.create_uncertainty_and_market_dashboard()
+        if skip_visualizations:
+            print("   [CLI] Visualization suite skipped by user request.")
+        elif PLOTTING_LIBRARIES_AVAILABLE:
+            viz_suite = ComprehensiveVisualizationSuite(framework)
+            viz_suite.create_performance_dashboard()
+            viz_suite.create_uncertainty_and_market_dashboard()
 
         tables_dir = os.path.join(exp_output_dir, "tables")
         table_paths = framework.export_research_tables(tables_dir)
@@ -2053,6 +2057,7 @@ def run_cli(
                 output_dir=args.results_dir,
                 calibration_metadata=calibration_metadata,
                 cli_args=vars(args),
+                skip_visualizations=args.skip_visualizations,
             )
         except Exception as exc:
             print(f"[CLI] ❌ Fixed-level task failed: {exc}")

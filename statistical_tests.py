@@ -427,7 +427,7 @@ class RigorousStatisticalAnalysis:
         sample_sizes = {}
 
         for level in ai_levels:
-            mask = self.agent_df['primary_ai_level'] == level
+            mask = self.agent_df['primary_ai_canonical'] == level
             data = self.agent_df.loc[mask, 'capital_growth'].dropna().values
             if len(data) > 0:
                 groups.append(data)
@@ -560,7 +560,7 @@ class RigorousStatisticalAnalysis:
 
         # Create contingency table
         contingency = pd.crosstab(
-            self.agent_df['primary_ai_level'],
+            self.agent_df['primary_ai_canonical'],
             self.agent_df['survived']
         )
 
@@ -590,7 +590,7 @@ class RigorousStatisticalAnalysis:
         sample_sizes = contingency.sum(axis=1).to_dict()
 
         # Survival rates by AI level
-        survival_rates = self.agent_df.groupby('primary_ai_level')['survived'].mean()
+        survival_rates = self.agent_df.groupby('primary_ai_canonical')['survived'].mean()
 
         if p_value < self.alpha:
             conclusion = (f"AI tier significantly affects survival rates "
@@ -630,10 +630,10 @@ class RigorousStatisticalAnalysis:
             return
 
         uncertainty_cols = {
-            'actor_ignorance': ['perc_actor_ignorance', 'actor_ignorance_level', 'ignorance_level'],
-            'practical_indeterminism': ['perc_practical_indeterminism', 'indeterminism_level'],
-            'agentic_novelty': ['perc_agentic_novelty', 'novelty_potential'],
-            'competitive_recursion': ['perc_competitive_recursion', 'recursion_level']
+            'actor_ignorance': ['perc_actor_ignorance_level', 'perc_actor_ignorance', 'actor_ignorance_level', 'ignorance_level'],
+            'practical_indeterminism': ['perc_practical_indeterminism_level', 'perc_practical_indeterminism', 'indeterminism_level'],
+            'agentic_novelty': ['perc_agentic_novelty_potential', 'perc_agentic_novelty', 'novelty_potential'],
+            'competitive_recursion': ['perc_competitive_recursion_level', 'perc_competitive_recursion', 'recursion_level']
         }
 
         for dimension, possible_cols in uncertainty_cols.items():
@@ -943,7 +943,7 @@ class RigorousStatisticalAnalysis:
         stats_list = []
 
         for level in ['none', 'basic', 'advanced', 'premium']:
-            subset = self.agent_df[self.agent_df['primary_ai_level'] == level]
+            subset = self.agent_df[self.agent_df['primary_ai_canonical'] == level]
 
             if len(subset) == 0:
                 continue
@@ -1176,7 +1176,7 @@ class MixedEffectsAnalysis:
             return
 
         # Create dummy variables for AI level (reference = none)
-        df['ai_level'] = df['primary_ai_level'].fillna('none')
+        df['ai_level'] = df['primary_ai_canonical'].fillna('none')
         df = df[df['ai_level'].isin(['none', 'basic', 'advanced', 'premium'])]
 
         if len(df) < 50:
@@ -1796,13 +1796,11 @@ class CausalIdentificationAnalysis:
 
     def estimate_survival_effects(self) -> None:
         """Estimate causal effects of AI tier on survival."""
-        if 'primary_ai_level' not in self.agent_df.columns:
+        if 'primary_ai_canonical' not in self.agent_df.columns:
             return
 
-        # Normalize AI levels
-        self.agent_df['ai_tier'] = self.agent_df['primary_ai_level'].apply(
-            lambda x: str(x).lower().strip() if pd.notna(x) else 'none'
-        )
+        # Use canonical AI levels directly
+        self.agent_df['ai_tier'] = self.agent_df['primary_ai_canonical'].fillna('none')
 
         # Binary survival outcome
         if 'final_status' in self.agent_df.columns:
