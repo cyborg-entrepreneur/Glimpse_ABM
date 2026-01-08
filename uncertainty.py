@@ -621,20 +621,39 @@ class KnightianUncertaintyEnvironment:
         gap_coverage = len(knowledge_gaps) / max(1, total_opportunities) if total_opportunities else 0.0
         hallucination_rate = len(self.ai_uncertainty_signals["hallucination_events"]) / max(1, self._ai_signal_history)
         knowledge_gap_term = 1.0 - np.clip(knowledge_norm, 0.0, 1.0)
+
+        # Calculate weighted average AI info_quality based on tier usage
+        # This captures how AI reduces actor ignorance through better information
+        ai_tier_qualities = {
+            "none": 0.0,
+            "basic": self.config.AI_LEVELS.get("basic", {}).get("info_quality", 0.35),
+            "advanced": self.config.AI_LEVELS.get("advanced", {}).get("info_quality", 0.65),
+            "premium": self.config.AI_LEVELS.get("premium", {}).get("info_quality", 0.90),
+        }
+        # ai_shares is [none, basic, advanced, premium]
+        avg_ai_info_quality = float(
+            ai_shares[1] * ai_tier_qualities["basic"]
+            + ai_shares[2] * ai_tier_qualities["advanced"]
+            + ai_shares[3] * ai_tier_qualities["premium"]
+        )
+        # AI reduces ignorance through information quality (matching agent-level logic)
+        ai_ignorance_reduction = avg_ai_info_quality * 0.25
+
         raw_actor = (
             0.7 * knowledge_gap_term
             + 0.45 * gap_pressure
             + 0.35 * gap_coverage
             + 0.35 * hallucination_rate
+            - ai_ignorance_reduction  # AI reduces ignorance through better info
             - 0.18 * share_explore
             + 0.05 * share_maintain
         )
         actor_level = float(np.clip(stable_sigmoid(raw_actor - 0.35), 0.01, 0.99))
-        # Baseline (no AI) actor ignorance removing AI signals
+        # Baseline (no AI) actor ignorance - no AI info quality benefit, no hallucinations
         raw_actor_no_ai = (
             0.7 * knowledge_gap_term
             + 0.45 * gap_pressure
-            + 0.3 * gap_coverage
+            + 0.35 * gap_coverage  # Fixed: was 0.3, should match with-AI coefficient
             - 0.18 * share_explore
             + 0.05 * share_maintain
         )
