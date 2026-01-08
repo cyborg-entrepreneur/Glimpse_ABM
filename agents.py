@@ -2346,8 +2346,6 @@ class EmergentAgent:
                 self.ai_accuracy_observations += 1
                 if ai_was_accurate:
                     self.ai_accuracy_cumulative += 1
-            if roi is not None:
-                self._update_ai_tier_belief('none', roi)
 
         # Update traits as before
         was_successful = outcome.get('success', False)
