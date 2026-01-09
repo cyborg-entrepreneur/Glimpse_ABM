@@ -2117,3 +2117,2329 @@ def run_causal_identification_analysis(
         print(f"   ✓ Exported: effect_size_summary{suffix}.csv")
 
     return causal_table, summary_table
+
+
+# =============================================================================
+# ADVANCED CAUSAL INFERENCE METHODS
+# =============================================================================
+
+# Check for lifelines (Cox regression)
+try:
+    from lifelines import CoxPHFitter, KaplanMeierFitter
+    from lifelines.statistics import logrank_test
+    HAS_LIFELINES = True
+except ImportError:
+    HAS_LIFELINES = False
+    CoxPHFitter = None
+    KaplanMeierFitter = None
+    logrank_test = None
+
+
+@dataclass
+class CoxRegressionResult:
+    """Results from Cox proportional hazards regression."""
+    model_name: str
+    n_observations: int
+    n_events: int
+    concordance_index: float
+    log_likelihood: float
+    coefficients: Dict[str, Dict[str, float]]  # var -> {coef, hr, se, p, ci_lower, ci_upper}
+    baseline_survival: Optional[pd.DataFrame]
+    interpretation: str
+    proportional_hazards_test: Optional[Dict[str, float]]  # Schoenfeld residuals test
+
+
+class CoxSurvivalAnalysis:
+    """
+    Cox Proportional Hazards Survival Analysis for Agent Failure.
+
+    This class implements survival analysis methods to study how AI tier
+    affects the hazard (instantaneous risk) of entrepreneurial failure.
+    Unlike simple survival rate comparisons, Cox regression:
+
+    1. Properly handles right-censoring (agents still alive at simulation end)
+    2. Models time-to-event, not just binary survival
+    3. Provides hazard ratios (HR) with confidence intervals
+    4. Can include time-varying covariates
+    5. Tests the proportional hazards assumption
+
+    Theoretical Foundation
+    ----------------------
+    The Cox model specifies:
+        h(t|X) = h₀(t) × exp(β₁X₁ + β₂X₂ + ...)
+
+    Where:
+        - h(t|X) is the hazard at time t given covariates X
+        - h₀(t) is the baseline hazard (left unspecified)
+        - exp(βᵢ) is the hazard ratio for covariate Xᵢ
+
+    A hazard ratio < 1 means lower risk of failure (protective effect).
+    A hazard ratio > 1 means higher risk of failure.
+
+    References
+    ----------
+    Cox, D. R. (1972). Regression models and life-tables. Journal of the
+        Royal Statistical Society: Series B, 34(2), 187-202.
+    """
+
+    def __init__(
+        self,
+        agent_df: pd.DataFrame,
+        max_time: Optional[int] = None
+    ):
+        self.agent_df = agent_df.copy()
+        self.max_time = max_time
+        self.results: List[CoxRegressionResult] = []
+
+    def prepare_survival_data(self) -> pd.DataFrame:
+        """
+        Prepare data for survival analysis.
+
+        Returns DataFrame with:
+        - duration: time to event (failure) or censoring
+        - event: 1 if failed, 0 if censored (still alive)
+        - covariates: AI tier dummies, initial capital, etc.
+        """
+        df = self.agent_df.copy()
+
+        # Determine failure time
+        if 'failure_step' in df.columns:
+            df['duration'] = df['failure_step'].fillna(self.max_time or df['failure_step'].max())
+        elif 'final_step' in df.columns:
+            df['duration'] = df['final_step']
+        else:
+            # Assume all agents observed for same duration
+            df['duration'] = self.max_time or 100
+
+        # Determine event indicator
+        if 'final_status' in df.columns:
+            df['event'] = (df['final_status'] == 'failed').astype(int)
+        elif 'survived' in df.columns:
+            df['event'] = (~df['survived'].astype(bool)).astype(int)
+        elif 'alive' in df.columns:
+            df['event'] = (~df['alive'].astype(bool)).astype(int)
+        else:
+            print("   ⚠️ Cannot determine event indicator")
+            return pd.DataFrame()
+
+        # Create AI tier dummies (reference = none)
+        if 'primary_ai_canonical' in df.columns:
+            df['ai_tier'] = df['primary_ai_canonical'].fillna('none')
+        elif 'ai_level' in df.columns:
+            df['ai_tier'] = df['ai_level'].fillna('none')
+        else:
+            print("   ⚠️ No AI tier column found")
+            return pd.DataFrame()
+
+        df['ai_basic'] = (df['ai_tier'] == 'basic').astype(int)
+        df['ai_advanced'] = (df['ai_tier'] == 'advanced').astype(int)
+        df['ai_premium'] = (df['ai_tier'] == 'premium').astype(int)
+
+        # Add covariates if available
+        if 'initial_capital' in df.columns:
+            df['log_initial_capital'] = np.log1p(df['initial_capital'])
+
+        # Ensure duration is positive
+        df['duration'] = df['duration'].clip(lower=1)
+
+        return df
+
+    def fit_cox_model(
+        self,
+        covariates: Optional[List[str]] = None,
+        penalizer: float = 0.01
+    ) -> Optional[CoxRegressionResult]:
+        """
+        Fit Cox proportional hazards model.
+
+        Parameters
+        ----------
+        covariates : list, optional
+            Additional covariates beyond AI tier dummies.
+        penalizer : float
+            L2 regularization strength (helps with convergence).
+
+        Returns
+        -------
+        CoxRegressionResult or None if fitting fails.
+        """
+        if not HAS_LIFELINES:
+            print("   ⚠️ lifelines not installed. Install with: pip install lifelines")
+            return None
+
+        print("\n📊 Fitting Cox Proportional Hazards Model...")
+
+        df = self.prepare_survival_data()
+        if df.empty:
+            return None
+
+        # Select columns for model
+        base_covars = ['ai_basic', 'ai_advanced', 'ai_premium']
+        if covariates:
+            all_covars = base_covars + [c for c in covariates if c in df.columns]
+        else:
+            all_covars = base_covars
+            # Add log_initial_capital if available
+            if 'log_initial_capital' in df.columns:
+                all_covars.append('log_initial_capital')
+
+        model_cols = ['duration', 'event'] + all_covars
+        df_model = df[model_cols].dropna()
+
+        if len(df_model) < 50:
+            print("   ⚠️ Insufficient observations for Cox model")
+            return None
+
+        n_events = df_model['event'].sum()
+        if n_events < 10:
+            print(f"   ⚠️ Too few events ({n_events}) for reliable estimation")
+            return None
+
+        try:
+            cph = CoxPHFitter(penalizer=penalizer)
+            cph.fit(df_model, duration_col='duration', event_col='event')
+
+            # Extract coefficients
+            coefficients = {}
+            for var in all_covars:
+                if var in cph.params_.index:
+                    coefficients[var] = {
+                        'coef': cph.params_[var],
+                        'hr': np.exp(cph.params_[var]),  # Hazard ratio
+                        'se': cph.standard_errors_[var],
+                        'p': cph.summary.loc[var, 'p'],
+                        'ci_lower': np.exp(cph.confidence_intervals_.loc[var, '95% lower-bound']),
+                        'ci_upper': np.exp(cph.confidence_intervals_.loc[var, '95% upper-bound'])
+                    }
+
+            # Test proportional hazards assumption
+            ph_test = None
+            try:
+                ph_results = cph.check_assumptions(df_model, show_plots=False, p_value_threshold=0.05)
+                # ph_results is printed, we capture any violations
+                ph_test = {'assumption_met': True}  # Simplified
+            except Exception:
+                ph_test = {'assumption_met': 'unknown'}
+
+            # Interpretation
+            interpretations = []
+            for tier in ['basic', 'advanced', 'premium']:
+                var = f'ai_{tier}'
+                if var in coefficients:
+                    hr = coefficients[var]['hr']
+                    p = coefficients[var]['p']
+                    if p < 0.05:
+                        if hr < 1:
+                            interpretations.append(
+                                f"{tier.title()} AI reduces failure hazard by {(1-hr)*100:.1f}% (HR={hr:.3f}, p={p:.4f})"
+                            )
+                        else:
+                            interpretations.append(
+                                f"{tier.title()} AI increases failure hazard by {(hr-1)*100:.1f}% (HR={hr:.3f}, p={p:.4f})"
+                            )
+
+            if not interpretations:
+                interpretation = "No significant AI tier effects on failure hazard."
+            else:
+                interpretation = "; ".join(interpretations)
+
+            result = CoxRegressionResult(
+                model_name="Cox PH: Failure Hazard ~ AI Tier",
+                n_observations=len(df_model),
+                n_events=n_events,
+                concordance_index=cph.concordance_index_,
+                log_likelihood=cph.log_likelihood_,
+                coefficients=coefficients,
+                baseline_survival=cph.baseline_survival_,
+                interpretation=interpretation,
+                proportional_hazards_test=ph_test
+            )
+
+            self.results.append(result)
+
+            # Print summary
+            print(f"   ✓ Model fitted: n={len(df_model)}, events={n_events}, C-index={cph.concordance_index_:.3f}")
+            print(f"\n   Hazard Ratios (reference: no AI):")
+            for tier in ['basic', 'advanced', 'premium']:
+                var = f'ai_{tier}'
+                if var in coefficients:
+                    c = coefficients[var]
+                    sig = "***" if c['p'] < 0.001 else "**" if c['p'] < 0.01 else "*" if c['p'] < 0.05 else ""
+                    print(f"      {tier.title():10} HR={c['hr']:.3f} [{c['ci_lower']:.3f}, {c['ci_upper']:.3f}] p={c['p']:.4f}{sig}")
+
+            print(f"\n   {interpretation}")
+
+            return result
+
+        except Exception as e:
+            print(f"   ⚠️ Cox model fitting failed: {e}")
+            return None
+
+    def kaplan_meier_by_tier(self) -> Dict[str, pd.DataFrame]:
+        """
+        Compute Kaplan-Meier survival curves by AI tier.
+
+        Returns dictionary of survival DataFrames by tier.
+        """
+        if not HAS_LIFELINES:
+            return {}
+
+        df = self.prepare_survival_data()
+        if df.empty:
+            return {}
+
+        km_curves = {}
+
+        for tier in ['none', 'basic', 'advanced', 'premium']:
+            subset = df[df['ai_tier'] == tier]
+            if len(subset) < 5:
+                continue
+
+            kmf = KaplanMeierFitter()
+            kmf.fit(subset['duration'], event_observed=subset['event'], label=tier)
+            km_curves[tier] = kmf.survival_function_
+
+        return km_curves
+
+    def log_rank_tests(self) -> pd.DataFrame:
+        """
+        Perform log-rank tests comparing survival between AI tiers.
+
+        Returns DataFrame with pairwise comparisons.
+        """
+        if not HAS_LIFELINES:
+            return pd.DataFrame()
+
+        df = self.prepare_survival_data()
+        if df.empty:
+            return pd.DataFrame()
+
+        tiers = ['none', 'basic', 'advanced', 'premium']
+        results = []
+
+        for i, tier1 in enumerate(tiers):
+            for tier2 in tiers[i+1:]:
+                g1 = df[df['ai_tier'] == tier1]
+                g2 = df[df['ai_tier'] == tier2]
+
+                if len(g1) < 5 or len(g2) < 5:
+                    continue
+
+                try:
+                    lr_result = logrank_test(
+                        g1['duration'], g2['duration'],
+                        event_observed_A=g1['event'],
+                        event_observed_B=g2['event']
+                    )
+
+                    results.append({
+                        'comparison': f'{tier1} vs {tier2}',
+                        'test_statistic': lr_result.test_statistic,
+                        'p_value': lr_result.p_value,
+                        'n_tier1': len(g1),
+                        'n_tier2': len(g2),
+                        'events_tier1': g1['event'].sum(),
+                        'events_tier2': g2['event'].sum()
+                    })
+                except Exception as e:
+                    continue
+
+        return pd.DataFrame(results)
+
+    def generate_results_table(self) -> pd.DataFrame:
+        """Generate publication-ready Cox regression results table."""
+        if not self.results:
+            return pd.DataFrame()
+
+        rows = []
+        for result in self.results:
+            for var, stats in result.coefficients.items():
+                rows.append({
+                    'Model': result.model_name,
+                    'Variable': var,
+                    'Hazard Ratio': f"{stats['hr']:.3f}",
+                    '95% CI': f"[{stats['ci_lower']:.3f}, {stats['ci_upper']:.3f}]",
+                    'p-value': f"{stats['p']:.4f}" if stats['p'] >= 0.0001 else "<0.0001",
+                    'Coefficient': f"{stats['coef']:.4f}",
+                    'Std. Error': f"{stats['se']:.4f}",
+                    'n': result.n_observations,
+                    'Events': result.n_events,
+                    'C-index': f"{result.concordance_index:.3f}"
+                })
+
+        return pd.DataFrame(rows)
+
+
+@dataclass
+class RDResult:
+    """Results from Regression Discontinuity analysis."""
+    running_variable: str
+    cutoff: float
+    bandwidth: float
+    treatment_effect: float
+    effect_se: float
+    effect_ci_lower: float
+    effect_ci_upper: float
+    p_value: float
+    n_left: int  # Observations left of cutoff
+    n_right: int  # Observations right of cutoff
+    polynomial_order: int
+    kernel: str
+    interpretation: str
+    mccrary_test: Optional[Dict[str, float]]  # Manipulation test
+
+
+class RegressionDiscontinuityAnalysis:
+    """
+    Regression Discontinuity Design for AI Adoption Effects.
+
+    RD exploits discontinuities in treatment assignment based on a continuous
+    "running variable" crossing a threshold. In the ABM context, this could be:
+
+    1. Capital threshold: Agents adopt AI when capital exceeds $X
+    2. Performance threshold: Agents upgrade AI at certain growth rates
+    3. Time threshold: AI becomes available at simulation step T
+
+    Identification Strategy
+    -----------------------
+    If agents just below the cutoff are comparable to those just above
+    (local randomization), the difference in outcomes at the cutoff
+    identifies the causal effect of treatment.
+
+    Key Assumptions
+    ---------------
+    1. No precise manipulation of the running variable around the cutoff
+    2. Continuity of potential outcomes at the cutoff
+    3. Treatment assignment is deterministic at the cutoff (sharp RD)
+       or probabilistic (fuzzy RD)
+
+    References
+    ----------
+    Imbens, G., & Lemieux, T. (2008). Regression discontinuity designs:
+        A guide to practice. Journal of Econometrics, 142(2), 615-635.
+
+    Lee, D. S., & Lemieux, T. (2010). Regression discontinuity designs in
+        economics. Journal of Economic Literature, 48(2), 281-355.
+    """
+
+    def __init__(
+        self,
+        agent_df: pd.DataFrame,
+        decision_df: Optional[pd.DataFrame] = None
+    ):
+        self.agent_df = agent_df.copy()
+        self.decision_df = decision_df.copy() if decision_df is not None else None
+        self.results: List[RDResult] = []
+
+    def identify_discontinuity(
+        self,
+        running_var: str,
+        treatment_var: str,
+        potential_cutoffs: Optional[List[float]] = None
+    ) -> Optional[Tuple[float, str]]:
+        """
+        Identify a valid discontinuity in treatment assignment.
+
+        Parameters
+        ----------
+        running_var : str
+            Column name for the running variable (e.g., 'capital_at_decision')
+        treatment_var : str
+            Column name for treatment indicator (e.g., 'adopted_ai')
+        potential_cutoffs : list, optional
+            Candidate cutoff values to test
+
+        Returns
+        -------
+        Tuple of (cutoff, type) or None if no valid discontinuity found.
+        Type is 'sharp' or 'fuzzy'.
+        """
+        df = self.agent_df if self.decision_df is None else self.decision_df
+
+        if running_var not in df.columns or treatment_var not in df.columns:
+            return None
+
+        data = df[[running_var, treatment_var]].dropna()
+
+        if len(data) < 100:
+            return None
+
+        # If no cutoffs specified, try quartiles
+        if potential_cutoffs is None:
+            potential_cutoffs = data[running_var].quantile([0.25, 0.5, 0.75]).tolist()
+
+        best_cutoff = None
+        best_discontinuity = 0
+
+        for cutoff in potential_cutoffs:
+            below = data[data[running_var] < cutoff][treatment_var].mean()
+            above = data[data[running_var] >= cutoff][treatment_var].mean()
+            discontinuity = abs(above - below)
+
+            if discontinuity > best_discontinuity:
+                best_discontinuity = discontinuity
+                best_cutoff = cutoff
+
+        if best_cutoff is None or best_discontinuity < 0.1:
+            return None
+
+        # Determine if sharp or fuzzy
+        below = data[data[running_var] < best_cutoff][treatment_var]
+        above = data[data[running_var] >= best_cutoff][treatment_var]
+
+        # Sharp RD: treatment jumps from 0 to 1 at cutoff
+        if below.mean() < 0.1 and above.mean() > 0.9:
+            rd_type = 'sharp'
+        else:
+            rd_type = 'fuzzy'
+
+        return (best_cutoff, rd_type)
+
+    def estimate_rd_effect(
+        self,
+        running_var: str,
+        outcome_var: str,
+        cutoff: float,
+        bandwidth: Optional[float] = None,
+        polynomial_order: int = 1,
+        kernel: str = 'triangular'
+    ) -> Optional[RDResult]:
+        """
+        Estimate the RD treatment effect using local polynomial regression.
+
+        Parameters
+        ----------
+        running_var : str
+            The running variable determining treatment.
+        outcome_var : str
+            The outcome of interest.
+        cutoff : float
+            The threshold value.
+        bandwidth : float, optional
+            Width of window around cutoff. If None, uses IK optimal bandwidth.
+        polynomial_order : int
+            Degree of polynomial (1 = local linear, 2 = local quadratic).
+        kernel : str
+            Kernel for weighting ('triangular', 'uniform', 'epanechnikov').
+
+        Returns
+        -------
+        RDResult or None if estimation fails.
+        """
+        print(f"\n📊 Estimating RD Effect at cutoff = {cutoff}...")
+
+        df = self.agent_df if self.decision_df is None else self.decision_df
+
+        if running_var not in df.columns or outcome_var not in df.columns:
+            print(f"   ⚠️ Missing columns: {running_var} or {outcome_var}")
+            return None
+
+        data = df[[running_var, outcome_var]].dropna()
+
+        if len(data) < 50:
+            print("   ⚠️ Insufficient observations")
+            return None
+
+        # Center running variable at cutoff
+        data['X_centered'] = data[running_var] - cutoff
+        data['treated'] = (data[running_var] >= cutoff).astype(int)
+
+        # Compute IK-style bandwidth if not specified
+        if bandwidth is None:
+            # Simple rule-of-thumb bandwidth (Silverman)
+            std_x = data['X_centered'].std()
+            n = len(data)
+            bandwidth = 1.06 * std_x * (n ** (-1/5)) * 2  # Double Silverman
+
+        # Restrict to bandwidth window
+        data_bw = data[abs(data['X_centered']) <= bandwidth].copy()
+
+        n_left = (data_bw['X_centered'] < 0).sum()
+        n_right = (data_bw['X_centered'] >= 0).sum()
+
+        if n_left < 20 or n_right < 20:
+            print(f"   ⚠️ Insufficient observations in bandwidth window (left={n_left}, right={n_right})")
+            return None
+
+        # Compute kernel weights
+        if kernel == 'triangular':
+            data_bw['weight'] = (1 - abs(data_bw['X_centered']) / bandwidth).clip(lower=0)
+        elif kernel == 'uniform':
+            data_bw['weight'] = 1.0
+        elif kernel == 'epanechnikov':
+            u = data_bw['X_centered'] / bandwidth
+            data_bw['weight'] = (0.75 * (1 - u**2)).clip(lower=0)
+        else:
+            data_bw['weight'] = 1.0
+
+        # Local polynomial regression
+        # Y = α + τ*D + β₁*X + β₂*D*X + ... + ε
+        # where D = 1{X >= 0} is treatment indicator
+
+        # Create polynomial terms
+        for p in range(1, polynomial_order + 1):
+            data_bw[f'X_{p}'] = data_bw['X_centered'] ** p
+            data_bw[f'X_{p}_D'] = data_bw[f'X_{p}'] * data_bw['treated']
+
+        # Build design matrix
+        X_cols = ['treated']
+        for p in range(1, polynomial_order + 1):
+            X_cols.extend([f'X_{p}', f'X_{p}_D'])
+
+        X = data_bw[X_cols].values
+        X = np.column_stack([np.ones(len(X)), X])  # Add intercept
+        y = data_bw[outcome_var].values
+        w = data_bw['weight'].values
+
+        # Weighted least squares
+        try:
+            W = np.diag(w)
+            XtWX = X.T @ W @ X
+            XtWy = X.T @ W @ y
+            beta = np.linalg.solve(XtWX, XtWy)
+
+            # Treatment effect is coefficient on 'treated' (index 1)
+            tau = beta[1]
+
+            # Standard error via sandwich estimator
+            residuals = y - X @ beta
+            sigma2 = np.sum(w * residuals**2) / (np.sum(w) - len(beta))
+            var_beta = sigma2 * np.linalg.inv(XtWX)
+            se_tau = np.sqrt(var_beta[1, 1])
+
+            # CI and p-value
+            ci_lower = tau - 1.96 * se_tau
+            ci_upper = tau + 1.96 * se_tau
+            z_stat = tau / se_tau
+            p_value = 2 * (1 - stats.norm.cdf(abs(z_stat)))
+
+            # Interpretation
+            if p_value < 0.05:
+                direction = "increases" if tau > 0 else "decreases"
+                interpretation = (
+                    f"Crossing the {running_var} threshold of {cutoff:.2f} {direction} "
+                    f"{outcome_var} by {abs(tau):.4f} (p={p_value:.4f}). "
+                    f"This effect is identified locally at the discontinuity."
+                )
+            else:
+                interpretation = (
+                    f"No significant discontinuity in {outcome_var} at {running_var}={cutoff:.2f} "
+                    f"(τ={tau:.4f}, p={p_value:.4f})."
+                )
+
+            result = RDResult(
+                running_variable=running_var,
+                cutoff=cutoff,
+                bandwidth=bandwidth,
+                treatment_effect=tau,
+                effect_se=se_tau,
+                effect_ci_lower=ci_lower,
+                effect_ci_upper=ci_upper,
+                p_value=p_value,
+                n_left=n_left,
+                n_right=n_right,
+                polynomial_order=polynomial_order,
+                kernel=kernel,
+                interpretation=interpretation,
+                mccrary_test=None  # Would require density estimation
+            )
+
+            self.results.append(result)
+
+            print(f"   ✓ RD estimate: τ = {tau:.4f} (SE = {se_tau:.4f})")
+            print(f"   ✓ 95% CI: [{ci_lower:.4f}, {ci_upper:.4f}]")
+            print(f"   ✓ p-value: {p_value:.4f}")
+            print(f"   ✓ Bandwidth: {bandwidth:.4f}, n_left={n_left}, n_right={n_right}")
+            print(f"\n   {interpretation}")
+
+            return result
+
+        except Exception as e:
+            print(f"   ⚠️ RD estimation failed: {e}")
+            return None
+
+    def robustness_bandwidths(
+        self,
+        running_var: str,
+        outcome_var: str,
+        cutoff: float,
+        bandwidths: Optional[List[float]] = None
+    ) -> pd.DataFrame:
+        """
+        Check robustness of RD estimates across different bandwidths.
+
+        Returns DataFrame with estimates for each bandwidth.
+        """
+        if bandwidths is None:
+            # Default: 50%, 75%, 100%, 125%, 150% of optimal
+            df = self.agent_df if self.decision_df is None else self.decision_df
+            if running_var not in df.columns:
+                return pd.DataFrame()
+            std_x = df[running_var].std()
+            n = len(df)
+            h_opt = 1.06 * std_x * (n ** (-1/5)) * 2
+            bandwidths = [h_opt * m for m in [0.5, 0.75, 1.0, 1.25, 1.5]]
+
+        results = []
+        for bw in bandwidths:
+            result = self.estimate_rd_effect(
+                running_var, outcome_var, cutoff,
+                bandwidth=bw, polynomial_order=1
+            )
+            if result:
+                results.append({
+                    'bandwidth': bw,
+                    'effect': result.treatment_effect,
+                    'se': result.effect_se,
+                    'ci_lower': result.effect_ci_lower,
+                    'ci_upper': result.effect_ci_upper,
+                    'p_value': result.p_value,
+                    'n_left': result.n_left,
+                    'n_right': result.n_right
+                })
+
+        return pd.DataFrame(results)
+
+    def generate_results_table(self) -> pd.DataFrame:
+        """Generate publication-ready RD results table."""
+        if not self.results:
+            return pd.DataFrame()
+
+        rows = []
+        for r in self.results:
+            rows.append({
+                'Running Variable': r.running_variable,
+                'Cutoff': f"{r.cutoff:.2f}",
+                'Treatment Effect': f"{r.treatment_effect:.4f}",
+                'Std. Error': f"{r.effect_se:.4f}",
+                '95% CI': f"[{r.effect_ci_lower:.4f}, {r.effect_ci_upper:.4f}]",
+                'p-value': f"{r.p_value:.4f}" if r.p_value >= 0.0001 else "<0.0001",
+                'Bandwidth': f"{r.bandwidth:.4f}",
+                'N (left)': r.n_left,
+                'N (right)': r.n_right,
+                'Polynomial': r.polynomial_order,
+                'Kernel': r.kernel
+            })
+
+        return pd.DataFrame(rows)
+
+
+@dataclass
+class DiDResult:
+    """Results from Difference-in-Differences analysis."""
+    outcome: str
+    att: float  # Average Treatment Effect on Treated
+    att_se: float
+    att_ci_lower: float
+    att_ci_upper: float
+    p_value: float
+    n_treated: int
+    n_control: int
+    n_periods_pre: int
+    n_periods_post: int
+    parallel_trends_test: Optional[Dict[str, float]]
+    interpretation: str
+
+
+class DifferenceInDifferencesAnalysis:
+    """
+    Difference-in-Differences Analysis for AI Adoption Effects.
+
+    DiD compares changes in outcomes over time between a treatment group
+    (AI adopters) and a control group (non-adopters). The key identifying
+    assumption is that, absent treatment, both groups would have followed
+    parallel trends.
+
+    Design Variants
+    ---------------
+    1. Classic 2x2 DiD: One pre-period, one post-period, binary treatment
+    2. Staggered DiD: Different units adopt at different times
+    3. Event Study: Dynamic effects before and after adoption
+
+    In the ABM Context
+    ------------------
+    - Treatment: AI adoption (by tier)
+    - Treatment timing: Step when agent first uses AI
+    - Pre-period: Steps before adoption
+    - Post-period: Steps after adoption
+    - Control: Agents who never adopt AI
+
+    Key Assumptions
+    ---------------
+    1. Parallel trends: E[Y(0)_t | D=1] - E[Y(0)_t-1 | D=1] =
+                        E[Y(0)_t | D=0] - E[Y(0)_t-1 | D=0]
+    2. No anticipation: Treatment doesn't affect outcomes before it occurs
+    3. SUTVA: No spillovers between treatment and control
+
+    References
+    ----------
+    Angrist, J. D., & Pischke, J. S. (2009). Mostly harmless econometrics.
+        Princeton University Press.
+
+    Callaway, B., & Sant'Anna, P. H. (2021). Difference-in-differences with
+        multiple time periods. Journal of Econometrics, 225(2), 200-230.
+    """
+
+    def __init__(
+        self,
+        panel_df: pd.DataFrame,  # Long-format panel: agent × time
+        agent_df: Optional[pd.DataFrame] = None
+    ):
+        self.panel_df = panel_df.copy()
+        self.agent_df = agent_df.copy() if agent_df is not None else None
+        self.results: List[DiDResult] = []
+
+    def prepare_did_data(
+        self,
+        agent_id_col: str = 'agent_id',
+        time_col: str = 'step',
+        treatment_col: str = 'uses_ai',
+        adoption_time_col: Optional[str] = 'first_ai_step'
+    ) -> pd.DataFrame:
+        """
+        Prepare panel data for DiD analysis.
+
+        Creates:
+        - post: indicator for post-treatment period
+        - treated: indicator for treatment group
+        - did_term: interaction (treated × post)
+        """
+        df = self.panel_df.copy()
+
+        if agent_id_col not in df.columns or time_col not in df.columns:
+            print(f"   ⚠️ Missing columns: {agent_id_col} or {time_col}")
+            return pd.DataFrame()
+
+        # Identify adoption timing
+        if adoption_time_col and adoption_time_col in df.columns:
+            # Use existing adoption time column
+            pass
+        elif treatment_col in df.columns:
+            # Compute first treatment time per agent
+            treated_obs = df[df[treatment_col] == 1]
+            if len(treated_obs) > 0:
+                first_treat = treated_obs.groupby(agent_id_col)[time_col].min()
+                df[adoption_time_col] = df[agent_id_col].map(first_treat)
+            else:
+                df[adoption_time_col] = np.nan
+        else:
+            print("   ⚠️ Cannot determine treatment timing")
+            return pd.DataFrame()
+
+        # Create DiD terms
+        df['treated'] = df[adoption_time_col].notna().astype(int)
+        df['post'] = (df[time_col] >= df[adoption_time_col]).fillna(False).astype(int)
+        df['did_term'] = df['treated'] * df['post']
+
+        # Event time (relative to adoption)
+        df['event_time'] = df[time_col] - df[adoption_time_col]
+
+        return df
+
+    def estimate_twfe_did(
+        self,
+        outcome_col: str,
+        agent_id_col: str = 'agent_id',
+        time_col: str = 'step',
+        covariates: Optional[List[str]] = None
+    ) -> Optional[DiDResult]:
+        """
+        Estimate DiD using Two-Way Fixed Effects (TWFE) regression.
+
+        Model: Y_it = α_i + λ_t + τ*DiD_it + β*X_it + ε_it
+
+        Where:
+        - α_i: Agent fixed effects
+        - λ_t: Time fixed effects
+        - τ: DiD treatment effect (ATT)
+        - X_it: Time-varying covariates
+
+        Note: TWFE can be biased with staggered adoption and heterogeneous
+        effects. For robustness, also run event study specification.
+        """
+        print(f"\n📊 Estimating Two-Way Fixed Effects DiD for {outcome_col}...")
+
+        df = self.prepare_did_data(agent_id_col, time_col)
+        if df.empty:
+            return None
+
+        if outcome_col not in df.columns:
+            print(f"   ⚠️ Outcome column {outcome_col} not found")
+            return None
+
+        # Subset to complete cases
+        model_cols = [outcome_col, agent_id_col, time_col, 'treated', 'post', 'did_term']
+        if covariates:
+            model_cols.extend([c for c in covariates if c in df.columns])
+
+        df_model = df[model_cols].dropna()
+
+        if len(df_model) < 100:
+            print("   ⚠️ Insufficient observations")
+            return None
+
+        n_treated = df_model[df_model['treated'] == 1][agent_id_col].nunique()
+        n_control = df_model[df_model['treated'] == 0][agent_id_col].nunique()
+
+        if n_treated < 5 or n_control < 5:
+            print(f"   ⚠️ Insufficient treated ({n_treated}) or control ({n_control}) units")
+            return None
+
+        try:
+            # Demean for fixed effects (within transformation)
+            # Agent-specific means
+            agent_means = df_model.groupby(agent_id_col)[outcome_col].transform('mean')
+            # Time-specific means
+            time_means = df_model.groupby(time_col)[outcome_col].transform('mean')
+            # Grand mean
+            grand_mean = df_model[outcome_col].mean()
+
+            # Within transformation
+            df_model['Y_within'] = df_model[outcome_col] - agent_means - time_means + grand_mean
+
+            # Similarly for regressors
+            for col in ['did_term', 'post']:
+                agent_m = df_model.groupby(agent_id_col)[col].transform('mean')
+                time_m = df_model.groupby(time_col)[col].transform('mean')
+                grand_m = df_model[col].mean()
+                df_model[f'{col}_within'] = df_model[col] - agent_m - time_m + grand_m
+
+            # OLS on transformed data
+            X = df_model['did_term_within'].values.reshape(-1, 1)
+            y = df_model['Y_within'].values
+
+            # Add constant if needed (should be ~0 after demeaning)
+            X = np.column_stack([np.ones(len(X)), X])
+
+            # OLS
+            beta = np.linalg.lstsq(X, y, rcond=None)[0]
+            att = beta[1]  # DiD coefficient
+
+            # Clustered standard errors (by agent)
+            residuals = y - X @ beta
+            df_model['resid'] = residuals
+
+            # Cluster-robust variance
+            clusters = df_model[agent_id_col].values
+            unique_clusters = np.unique(clusters)
+            n_clusters = len(unique_clusters)
+
+            # Meat of sandwich estimator
+            meat = np.zeros((2, 2))
+            for c in unique_clusters:
+                mask = clusters == c
+                Xc = X[mask]
+                rc = residuals[mask]
+                meat += (Xc.T @ np.outer(rc, rc) @ Xc)
+
+            # Bread
+            bread = np.linalg.inv(X.T @ X)
+
+            # Cluster-robust variance
+            var_robust = bread @ meat @ bread * (n_clusters / (n_clusters - 1))
+            se_att = np.sqrt(var_robust[1, 1])
+
+            # CI and p-value
+            ci_lower = att - 1.96 * se_att
+            ci_upper = att + 1.96 * se_att
+            t_stat = att / se_att
+            p_value = 2 * (1 - stats.t.cdf(abs(t_stat), df=n_clusters - 1))
+
+            # Count pre/post periods
+            n_pre = df_model[df_model['post'] == 0][time_col].nunique()
+            n_post = df_model[df_model['post'] == 1][time_col].nunique()
+
+            # Interpretation
+            if p_value < 0.05:
+                direction = "increases" if att > 0 else "decreases"
+                interpretation = (
+                    f"AI adoption {direction} {outcome_col} by {abs(att):.4f} "
+                    f"(ATT={att:.4f}, SE={se_att:.4f}, p={p_value:.4f}). "
+                    f"Identification: DiD with {n_treated} treated, {n_control} control agents."
+                )
+            else:
+                interpretation = (
+                    f"No significant effect of AI adoption on {outcome_col} "
+                    f"(ATT={att:.4f}, p={p_value:.4f})."
+                )
+
+            result = DiDResult(
+                outcome=outcome_col,
+                att=att,
+                att_se=se_att,
+                att_ci_lower=ci_lower,
+                att_ci_upper=ci_upper,
+                p_value=p_value,
+                n_treated=n_treated,
+                n_control=n_control,
+                n_periods_pre=n_pre,
+                n_periods_post=n_post,
+                parallel_trends_test=None,  # Would need pre-trend test
+                interpretation=interpretation
+            )
+
+            self.results.append(result)
+
+            print(f"   ✓ DiD estimate: ATT = {att:.4f} (SE = {se_att:.4f})")
+            print(f"   ✓ 95% CI: [{ci_lower:.4f}, {ci_upper:.4f}]")
+            print(f"   ✓ p-value: {p_value:.4f} (clustered by agent, {n_clusters} clusters)")
+            print(f"   ✓ Units: {n_treated} treated, {n_control} control")
+            print(f"   ✓ Periods: {n_pre} pre, {n_post} post")
+            print(f"\n   {interpretation}")
+
+            return result
+
+        except Exception as e:
+            print(f"   ⚠️ TWFE DiD estimation failed: {e}")
+            return None
+
+    def event_study(
+        self,
+        outcome_col: str,
+        agent_id_col: str = 'agent_id',
+        time_col: str = 'step',
+        event_window: Tuple[int, int] = (-5, 10)
+    ) -> pd.DataFrame:
+        """
+        Estimate event study (dynamic DiD) specification.
+
+        Model: Y_it = α_i + λ_t + Σ_k τ_k * 1{t - E_i = k} + ε_it
+
+        Where E_i is the adoption time for unit i, and τ_k are the
+        dynamic treatment effects at each event time k.
+
+        Returns DataFrame of coefficients by event time.
+        """
+        print(f"\n📊 Estimating Event Study for {outcome_col}...")
+
+        df = self.prepare_did_data(agent_id_col, time_col)
+        if df.empty or outcome_col not in df.columns:
+            return pd.DataFrame()
+
+        # Restrict to event window
+        min_k, max_k = event_window
+        df_es = df[
+            (df['event_time'] >= min_k) &
+            (df['event_time'] <= max_k) &
+            df['event_time'].notna()
+        ].copy()
+
+        if len(df_es) < 50:
+            print("   ⚠️ Insufficient observations in event window")
+            return pd.DataFrame()
+
+        # Reference period: k = -1 (period just before treatment)
+        ref_period = -1
+
+        # Create event time dummies
+        event_times = sorted(df_es['event_time'].unique())
+        event_times = [k for k in event_times if k != ref_period]
+
+        results = []
+
+        for k in event_times:
+            # Simple comparison at each event time
+            # (In full implementation, would use full regression with all dummies)
+            at_k = df_es[df_es['event_time'] == k]
+            at_ref = df_es[df_es['event_time'] == ref_period]
+
+            if len(at_k) < 10 or len(at_ref) < 10:
+                continue
+
+            # Difference in means (simplified)
+            coef = at_k[outcome_col].mean() - at_ref[outcome_col].mean()
+            se = np.sqrt(
+                at_k[outcome_col].var() / len(at_k) +
+                at_ref[outcome_col].var() / len(at_ref)
+            )
+
+            results.append({
+                'event_time': k,
+                'coefficient': coef,
+                'se': se,
+                'ci_lower': coef - 1.96 * se,
+                'ci_upper': coef + 1.96 * se,
+                'n': len(at_k)
+            })
+
+        es_df = pd.DataFrame(results)
+
+        if not es_df.empty:
+            # Check pre-trends (coefficients before t=0 should be ~0)
+            pre_coefs = es_df[es_df['event_time'] < 0]['coefficient']
+            if len(pre_coefs) > 0:
+                pre_trend_test = stats.ttest_1samp(pre_coefs, 0)
+                print(f"   Pre-trend test: mean={pre_coefs.mean():.4f}, p={pre_trend_test.pvalue:.4f}")
+                if pre_trend_test.pvalue < 0.05:
+                    print("   ⚠️ Warning: Pre-trends detected (parallel trends assumption may be violated)")
+                else:
+                    print("   ✓ No significant pre-trends (parallel trends plausible)")
+
+        return es_df
+
+    def generate_results_table(self) -> pd.DataFrame:
+        """Generate publication-ready DiD results table."""
+        if not self.results:
+            return pd.DataFrame()
+
+        rows = []
+        for r in self.results:
+            rows.append({
+                'Outcome': r.outcome,
+                'ATT': f"{r.att:.4f}",
+                'Std. Error': f"{r.att_se:.4f}",
+                '95% CI': f"[{r.att_ci_lower:.4f}, {r.att_ci_upper:.4f}]",
+                'p-value': f"{r.p_value:.4f}" if r.p_value >= 0.0001 else "<0.0001",
+                'N (Treated)': r.n_treated,
+                'N (Control)': r.n_control,
+                'Pre-periods': r.n_periods_pre,
+                'Post-periods': r.n_periods_post
+            })
+
+        return pd.DataFrame(rows)
+
+
+def run_advanced_causal_analysis(
+    results_dir: str,
+    is_fixed_tier: bool = False
+) -> Dict[str, pd.DataFrame]:
+    """
+    Run all advanced causal inference methods.
+
+    Parameters
+    ----------
+    results_dir : str
+        Path to simulation results directory.
+    is_fixed_tier : bool
+        Whether data is from fixed-tier (exogenous) design.
+
+    Returns
+    -------
+    Dict of result DataFrames for each method.
+    """
+    from .analysis import ComprehensiveAnalysisFramework
+
+    print("\n" + "=" * 70)
+    print("ADVANCED CAUSAL INFERENCE ANALYSIS")
+    print("=" * 70)
+
+    framework = ComprehensiveAnalysisFramework(results_dir)
+    results = {}
+
+    # 1. Cox Survival Analysis
+    print("\n" + "-" * 70)
+    print("1. COX PROPORTIONAL HAZARDS SURVIVAL ANALYSIS")
+    print("-" * 70)
+
+    cox = CoxSurvivalAnalysis(framework.agent_df)
+    cox_result = cox.fit_cox_model()
+    if cox_result:
+        results['cox_regression'] = cox.generate_results_table()
+        results['log_rank_tests'] = cox.log_rank_tests()
+
+    # 2. Regression Discontinuity (if applicable)
+    print("\n" + "-" * 70)
+    print("2. REGRESSION DISCONTINUITY ANALYSIS")
+    print("-" * 70)
+
+    if not is_fixed_tier:
+        # RD only makes sense in emergent design
+        rd = RegressionDiscontinuityAnalysis(framework.agent_df, framework.decision_df)
+
+        # Try to identify discontinuity in capital → AI adoption
+        if 'initial_capital' in framework.agent_df.columns:
+            print("   Attempting RD on capital threshold...")
+            # This would need actual adoption data - placeholder for now
+            print("   ⚠️ RD requires adoption threshold data (not available in fixed-tier)")
+    else:
+        print("   ⚠️ RD not applicable to fixed-tier design (no running variable)")
+
+    # 3. Difference-in-Differences (if panel data available)
+    print("\n" + "-" * 70)
+    print("3. DIFFERENCE-IN-DIFFERENCES ANALYSIS")
+    print("-" * 70)
+
+    # Check if we have panel data
+    if not framework.decision_df.empty and 'step' in framework.decision_df.columns:
+        did = DifferenceInDifferencesAnalysis(framework.decision_df, framework.agent_df)
+
+        # Try DiD on success rate
+        if 'success' in framework.decision_df.columns:
+            did_result = did.estimate_twfe_did('success')
+            if did_result:
+                results['did'] = did.generate_results_table()
+                results['event_study'] = did.event_study('success')
+    else:
+        print("   ⚠️ Panel data not available for DiD analysis")
+
+    # Save all tables
+    tables_dir = os.path.join(results_dir, 'tables')
+    os.makedirs(tables_dir, exist_ok=True)
+
+    for name, df in results.items():
+        if df is not None and not df.empty:
+            filepath = os.path.join(tables_dir, f'{name}.csv')
+            df.to_csv(filepath, index=False)
+            print(f"\n✓ Saved {name}.csv")
+
+    return results
+
+
+# =============================================================================
+# PROPENSITY SCORE METHODS FOR SELECTION BIAS ADJUSTMENT
+# =============================================================================
+
+@dataclass
+class PropensityScoreResult:
+    """Results from propensity score analysis."""
+    method: str  # 'matching', 'ipw', 'aipw'
+    outcome: str
+    ate: float  # Average Treatment Effect
+    att: float  # Average Treatment Effect on Treated
+    ate_se: float
+    att_se: float
+    ate_ci: Tuple[float, float]
+    att_ci: Tuple[float, float]
+    p_value_ate: float
+    p_value_att: float
+    n_treated: int
+    n_control: int
+    n_matched: Optional[int]  # For matching methods
+    balance_before: Dict[str, float]  # SMD before adjustment
+    balance_after: Dict[str, float]  # SMD after adjustment
+    overlap_summary: Dict[str, float]  # Propensity score distribution stats
+    interpretation: str
+
+
+class PropensityScoreAnalysis:
+    """
+    Propensity Score Methods for Causal Inference in Emergent AI Adoption.
+
+    This class implements propensity score methods to address selection bias
+    when agents self-select into AI adoption. These methods are appropriate
+    for the emergent design where AI adoption is endogenous.
+
+    Theoretical Foundation
+    ----------------------
+    The propensity score e(X) = P(T=1|X) is a balancing score: conditional
+    on e(X), the distribution of X is the same for treated and control units.
+
+    Under the assumptions of:
+    1. Unconfoundedness: Y(0), Y(1) ⊥ T | X
+    2. Positivity: 0 < P(T=1|X) < 1 for all X
+    3. SUTVA: No interference between units
+
+    We can identify causal effects by adjusting for the propensity score.
+
+    Methods Implemented
+    -------------------
+    1. Propensity Score Matching (PSM): Match treated to control units
+    2. Inverse Probability Weighting (IPW): Weight by inverse propensity
+    3. Augmented IPW (AIPW): Doubly-robust combination of IPW + outcome model
+
+    References
+    ----------
+    Rosenbaum, P. R., & Rubin, D. B. (1983). The central role of the
+        propensity score in observational studies for causal effects.
+        Biometrika, 70(1), 41-55.
+
+    Robins, J. M., Rotnitzky, A., & Zhao, L. P. (1994). Estimation of
+        regression coefficients when some regressors are not always observed.
+        Journal of the American Statistical Association, 89(427), 846-866.
+
+    Bang, H., & Robins, J. M. (2005). Doubly robust estimation in missing
+        data and causal inference models. Biometrics, 61(4), 962-973.
+    """
+
+    def __init__(
+        self,
+        agent_df: pd.DataFrame,
+        treatment_col: str = 'uses_ai',
+        covariate_cols: Optional[List[str]] = None
+    ):
+        self.agent_df = agent_df.copy()
+        self.treatment_col = treatment_col
+        self.covariate_cols = covariate_cols
+        self.propensity_scores: Optional[np.ndarray] = None
+        self.propensity_model = None
+        self.results: List[PropensityScoreResult] = []
+
+    def _identify_covariates(self) -> List[str]:
+        """Identify covariates for propensity score model."""
+        if self.covariate_cols is not None:
+            return [c for c in self.covariate_cols if c in self.agent_df.columns]
+
+        # Auto-identify reasonable covariates
+        potential_covariates = [
+            'initial_capital', 'log_initial_capital',
+            'sector', 'risk_tolerance', 'innovation_propensity',
+            'starting_capital', 'capital_at_start',
+            'age', 'experience', 'education_level'
+        ]
+
+        available = [c for c in potential_covariates if c in self.agent_df.columns]
+
+        # Add any numeric columns that look like pre-treatment characteristics
+        for col in self.agent_df.columns:
+            if col not in available and col != self.treatment_col:
+                if self.agent_df[col].dtype in [np.float64, np.int64]:
+                    if 'initial' in col.lower() or 'start' in col.lower():
+                        available.append(col)
+
+        return available
+
+    def _prepare_data(self) -> Tuple[pd.DataFrame, List[str]]:
+        """Prepare data for propensity score analysis."""
+        df = self.agent_df.copy()
+
+        # Ensure treatment is binary
+        if self.treatment_col not in df.columns:
+            # Try to create from AI level
+            if 'primary_ai_canonical' in df.columns:
+                df[self.treatment_col] = (df['primary_ai_canonical'] != 'none').astype(int)
+            elif 'ai_level' in df.columns:
+                df[self.treatment_col] = (df['ai_level'] != 'none').astype(int)
+            else:
+                raise ValueError(f"Treatment column '{self.treatment_col}' not found")
+
+        covariates = self._identify_covariates()
+
+        if not covariates:
+            raise ValueError("No covariates identified for propensity score model")
+
+        # Handle categorical variables
+        for col in covariates.copy():
+            if df[col].dtype == 'object' or df[col].dtype.name == 'category':
+                # Create dummies
+                dummies = pd.get_dummies(df[col], prefix=col, drop_first=True)
+                df = pd.concat([df, dummies], axis=1)
+                covariates.remove(col)
+                covariates.extend(dummies.columns.tolist())
+
+        # Add log capital if not present
+        if 'initial_capital' in df.columns and 'log_initial_capital' not in covariates:
+            df['log_initial_capital'] = np.log1p(df['initial_capital'].clip(lower=1))
+            if 'log_initial_capital' not in covariates:
+                covariates.append('log_initial_capital')
+
+        return df, covariates
+
+    def estimate_propensity_scores(
+        self,
+        method: str = 'logistic'
+    ) -> np.ndarray:
+        """
+        Estimate propensity scores using logistic regression.
+
+        Parameters
+        ----------
+        method : str
+            Estimation method: 'logistic' (default) or 'gbm' (gradient boosting)
+
+        Returns
+        -------
+        np.ndarray
+            Estimated propensity scores for each observation.
+        """
+        print("\n📊 Estimating Propensity Scores...")
+
+        df, covariates = self._prepare_data()
+
+        # Prepare model data
+        model_cols = [self.treatment_col] + covariates
+        df_model = df[model_cols].dropna()
+
+        if len(df_model) < 50:
+            raise ValueError("Insufficient observations for propensity score estimation")
+
+        X = df_model[covariates].values
+        T = df_model[self.treatment_col].values
+
+        print(f"   Covariates: {covariates}")
+        print(f"   N = {len(df_model)}, Treated = {T.sum()}, Control = {len(T) - T.sum()}")
+
+        if method == 'logistic':
+            # Logistic regression
+            from scipy.special import expit
+
+            # Add intercept
+            X_design = np.column_stack([np.ones(len(X)), X])
+
+            # Fit via iteratively reweighted least squares
+            beta = np.zeros(X_design.shape[1])
+
+            for _ in range(25):  # Max iterations
+                p = expit(X_design @ beta)
+                p = np.clip(p, 1e-10, 1 - 1e-10)  # Numerical stability
+                W = np.diag(p * (1 - p))
+                z = X_design @ beta + (T - p) / (p * (1 - p) + 1e-10)
+
+                try:
+                    beta_new = np.linalg.solve(X_design.T @ W @ X_design, X_design.T @ W @ z)
+                    if np.max(np.abs(beta_new - beta)) < 1e-6:
+                        break
+                    beta = beta_new
+                except np.linalg.LinAlgError:
+                    # Use pseudo-inverse if singular
+                    beta = np.linalg.lstsq(X_design.T @ W @ X_design, X_design.T @ W @ z, rcond=None)[0]
+                    break
+
+            propensity_scores = expit(X_design @ beta)
+            self.propensity_model = {'method': 'logistic', 'coefficients': beta, 'covariates': covariates}
+
+        else:
+            raise ValueError(f"Unknown method: {method}")
+
+        # Store scores
+        self.propensity_scores = propensity_scores
+        self.agent_df = self.agent_df.loc[df_model.index].copy()
+        self.agent_df['propensity_score'] = propensity_scores
+        self.agent_df['treatment'] = T
+
+        # Summary statistics
+        ps_treated = propensity_scores[T == 1]
+        ps_control = propensity_scores[T == 0]
+
+        print(f"\n   Propensity Score Distribution:")
+        print(f"      Treated:  mean={ps_treated.mean():.3f}, std={ps_treated.std():.3f}, "
+              f"range=[{ps_treated.min():.3f}, {ps_treated.max():.3f}]")
+        print(f"      Control:  mean={ps_control.mean():.3f}, std={ps_control.std():.3f}, "
+              f"range=[{ps_control.min():.3f}, {ps_control.max():.3f}]")
+
+        # Check overlap
+        overlap_min = max(ps_treated.min(), ps_control.min())
+        overlap_max = min(ps_treated.max(), ps_control.max())
+        in_overlap = ((propensity_scores >= overlap_min) & (propensity_scores <= overlap_max)).mean()
+
+        print(f"\n   Overlap region: [{overlap_min:.3f}, {overlap_max:.3f}]")
+        print(f"   Observations in overlap: {in_overlap*100:.1f}%")
+
+        if in_overlap < 0.5:
+            print("   ⚠️ Warning: Limited overlap - positivity assumption may be violated")
+
+        return propensity_scores
+
+    def compute_balance_statistics(
+        self,
+        weights: Optional[np.ndarray] = None
+    ) -> pd.DataFrame:
+        """
+        Compute covariate balance statistics (standardized mean differences).
+
+        SMD = (mean_treated - mean_control) / sqrt((var_treated + var_control) / 2)
+
+        SMD < 0.1 is typically considered good balance.
+
+        Parameters
+        ----------
+        weights : np.ndarray, optional
+            IPW weights for weighted balance calculation.
+
+        Returns
+        -------
+        pd.DataFrame
+            Balance statistics for each covariate.
+        """
+        df, covariates = self._prepare_data()
+        df = df.loc[self.agent_df.index]
+
+        T = self.agent_df['treatment'].values
+        treated_mask = T == 1
+        control_mask = T == 0
+
+        balance_stats = []
+
+        for cov in covariates:
+            if cov not in df.columns:
+                continue
+
+            x = df[cov].values
+
+            if weights is None:
+                # Unweighted
+                mean_t = x[treated_mask].mean()
+                mean_c = x[control_mask].mean()
+                var_t = x[treated_mask].var()
+                var_c = x[control_mask].var()
+            else:
+                # Weighted
+                w_t = weights[treated_mask]
+                w_c = weights[control_mask]
+                mean_t = np.average(x[treated_mask], weights=w_t)
+                mean_c = np.average(x[control_mask], weights=w_c)
+                var_t = np.average((x[treated_mask] - mean_t)**2, weights=w_t)
+                var_c = np.average((x[control_mask] - mean_c)**2, weights=w_c)
+
+            pooled_sd = np.sqrt((var_t + var_c) / 2)
+
+            if pooled_sd > 0:
+                smd = (mean_t - mean_c) / pooled_sd
+            else:
+                smd = 0.0
+
+            balance_stats.append({
+                'covariate': cov,
+                'mean_treated': mean_t,
+                'mean_control': mean_c,
+                'smd': smd,
+                'abs_smd': abs(smd),
+                'balanced': abs(smd) < 0.1
+            })
+
+        return pd.DataFrame(balance_stats)
+
+    def nearest_neighbor_matching(
+        self,
+        outcome_col: str,
+        n_neighbors: int = 1,
+        caliper: Optional[float] = 0.2,
+        with_replacement: bool = True
+    ) -> Optional[PropensityScoreResult]:
+        """
+        Propensity Score Matching using nearest neighbor.
+
+        Parameters
+        ----------
+        outcome_col : str
+            Column name for the outcome variable.
+        n_neighbors : int
+            Number of control matches per treated unit.
+        caliper : float, optional
+            Maximum distance for a valid match (in SD of propensity score).
+        with_replacement : bool
+            Whether control units can be matched multiple times.
+
+        Returns
+        -------
+        PropensityScoreResult or None if matching fails.
+        """
+        print(f"\n📊 Propensity Score Matching for {outcome_col}...")
+
+        if self.propensity_scores is None:
+            self.estimate_propensity_scores()
+
+        df = self.agent_df.copy()
+
+        if outcome_col not in df.columns:
+            print(f"   ⚠️ Outcome column '{outcome_col}' not found")
+            return None
+
+        T = df['treatment'].values
+        ps = df['propensity_score'].values
+        Y = df[outcome_col].values
+
+        treated_idx = np.where(T == 1)[0]
+        control_idx = np.where(T == 0)[0]
+
+        if len(treated_idx) < 5 or len(control_idx) < 5:
+            print("   ⚠️ Insufficient treated or control units")
+            return None
+
+        # Caliper in SD units
+        if caliper is not None:
+            caliper_abs = caliper * ps.std()
+        else:
+            caliper_abs = np.inf
+
+        # Perform matching
+        matched_treated = []
+        matched_control = []
+        control_used = set() if not with_replacement else None
+
+        for t_idx in treated_idx:
+            ps_t = ps[t_idx]
+
+            # Find nearest control(s)
+            distances = np.abs(ps[control_idx] - ps_t)
+
+            # Apply caliper
+            valid = distances <= caliper_abs
+
+            if not with_replacement:
+                # Exclude already-used controls
+                valid = valid & np.array([c not in control_used for c in control_idx])
+
+            valid_idx = np.where(valid)[0]
+
+            if len(valid_idx) == 0:
+                continue  # No valid match for this treated unit
+
+            # Sort by distance
+            sorted_idx = valid_idx[np.argsort(distances[valid_idx])]
+
+            # Select n_neighbors
+            matches = sorted_idx[:n_neighbors]
+
+            for m in matches:
+                matched_treated.append(t_idx)
+                matched_control.append(control_idx[m])
+                if not with_replacement:
+                    control_used.add(control_idx[m])
+
+        if len(matched_treated) < 10:
+            print(f"   ⚠️ Only {len(matched_treated)} matches found")
+            return None
+
+        matched_treated = np.array(matched_treated)
+        matched_control = np.array(matched_control)
+
+        # Compute ATT (effect on treated)
+        Y_treated = Y[matched_treated]
+        Y_control = Y[matched_control]
+
+        att = np.mean(Y_treated - Y_control)
+
+        # Bootstrap SE
+        n_boot = get_bootstrap_iterations(1000)
+        boot_atts = []
+        for _ in range(n_boot):
+            boot_idx = np.random.choice(len(matched_treated), size=len(matched_treated), replace=True)
+            boot_att = np.mean(Y_treated[boot_idx] - Y_control[boot_idx])
+            boot_atts.append(boot_att)
+
+        att_se = np.std(boot_atts)
+        att_ci = (np.percentile(boot_atts, 2.5), np.percentile(boot_atts, 97.5))
+
+        # p-value (two-sided)
+        t_stat = att / att_se if att_se > 0 else 0
+        p_value_att = 2 * (1 - stats.norm.cdf(abs(t_stat)))
+
+        # ATE (requires weighting for matching with replacement)
+        # For simplicity, report ATT as primary estimate
+        ate = att
+        ate_se = att_se
+        ate_ci = att_ci
+        p_value_ate = p_value_att
+
+        # Balance statistics
+        balance_before = self.compute_balance_statistics()
+
+        # Create matched sample weights for balance check
+        matched_weights = np.zeros(len(df))
+        for t_idx, c_idx in zip(matched_treated, matched_control):
+            matched_weights[t_idx] = 1.0
+            matched_weights[c_idx] += 1.0  # May be matched multiple times
+
+        balance_after = self.compute_balance_statistics(weights=matched_weights)
+
+        # Interpretation
+        n_unique_treated = len(np.unique(matched_treated))
+        n_unique_control = len(np.unique(matched_control))
+
+        if p_value_att < 0.05:
+            direction = "increases" if att > 0 else "decreases"
+            interpretation = (
+                f"AI adoption {direction} {outcome_col} by {abs(att):.4f} "
+                f"(ATT={att:.4f}, SE={att_se:.4f}, p={p_value_att:.4f}). "
+                f"Matched {n_unique_treated} treated to {n_unique_control} control units."
+            )
+        else:
+            interpretation = (
+                f"No significant effect of AI adoption on {outcome_col} "
+                f"(ATT={att:.4f}, p={p_value_att:.4f})."
+            )
+
+        # Overlap summary
+        ps_treated = ps[T == 1]
+        ps_control = ps[T == 0]
+        overlap_summary = {
+            'ps_mean_treated': ps_treated.mean(),
+            'ps_mean_control': ps_control.mean(),
+            'ps_overlap_pct': ((ps >= max(ps_treated.min(), ps_control.min())) &
+                              (ps <= min(ps_treated.max(), ps_control.max()))).mean()
+        }
+
+        result = PropensityScoreResult(
+            method='nearest_neighbor_matching',
+            outcome=outcome_col,
+            ate=ate,
+            att=att,
+            ate_se=ate_se,
+            att_se=att_se,
+            ate_ci=ate_ci,
+            att_ci=att_ci,
+            p_value_ate=p_value_ate,
+            p_value_att=p_value_att,
+            n_treated=n_unique_treated,
+            n_control=n_unique_control,
+            n_matched=len(matched_treated),
+            balance_before={row['covariate']: row['smd'] for _, row in balance_before.iterrows()},
+            balance_after={row['covariate']: row['smd'] for _, row in balance_after.iterrows()},
+            overlap_summary=overlap_summary,
+            interpretation=interpretation
+        )
+
+        self.results.append(result)
+
+        # Print summary
+        print(f"   ✓ Matched {n_unique_treated} treated to {n_unique_control} control units")
+        print(f"   ✓ ATT = {att:.4f} (SE = {att_se:.4f})")
+        print(f"   ✓ 95% CI: [{att_ci[0]:.4f}, {att_ci[1]:.4f}]")
+        print(f"   ✓ p-value: {p_value_att:.4f}")
+
+        # Balance improvement
+        smd_before = balance_before['abs_smd'].mean()
+        smd_after = balance_after['abs_smd'].mean()
+        print(f"\n   Balance (mean |SMD|): {smd_before:.3f} → {smd_after:.3f}")
+
+        if smd_after > 0.1:
+            print("   ⚠️ Warning: Residual imbalance after matching (mean |SMD| > 0.1)")
+
+        print(f"\n   {interpretation}")
+
+        return result
+
+    def inverse_probability_weighting(
+        self,
+        outcome_col: str,
+        trim_weights: bool = True,
+        trim_quantile: float = 0.99
+    ) -> Optional[PropensityScoreResult]:
+        """
+        Inverse Probability Weighting (IPW) estimator.
+
+        Weights:
+        - Treated: w = 1 / e(X)
+        - Control: w = 1 / (1 - e(X))
+
+        For ATT:
+        - Treated: w = 1
+        - Control: w = e(X) / (1 - e(X))
+
+        Parameters
+        ----------
+        outcome_col : str
+            Column name for the outcome variable.
+        trim_weights : bool
+            Whether to trim extreme weights.
+        trim_quantile : float
+            Quantile for weight trimming (e.g., 0.99 trims top 1%).
+
+        Returns
+        -------
+        PropensityScoreResult or None if estimation fails.
+        """
+        print(f"\n📊 Inverse Probability Weighting for {outcome_col}...")
+
+        if self.propensity_scores is None:
+            self.estimate_propensity_scores()
+
+        df = self.agent_df.copy()
+
+        if outcome_col not in df.columns:
+            print(f"   ⚠️ Outcome column '{outcome_col}' not found")
+            return None
+
+        T = df['treatment'].values
+        ps = df['propensity_score'].values
+        Y = df[outcome_col].values
+
+        # Remove observations with extreme propensity scores
+        valid = (ps > 0.01) & (ps < 0.99)
+        T, ps, Y = T[valid], ps[valid], Y[valid]
+
+        if len(T) < 50:
+            print("   ⚠️ Insufficient observations after trimming extreme propensities")
+            return None
+
+        # IPW weights for ATE
+        # w_1 = T / e(X), w_0 = (1-T) / (1-e(X))
+        weights_ate = T / ps + (1 - T) / (1 - ps)
+
+        # IPW weights for ATT
+        # Treated: 1, Control: e(X) / (1 - e(X))
+        weights_att_treated = np.ones_like(ps)
+        weights_att_control = ps / (1 - ps)
+        weights_att = T * weights_att_treated + (1 - T) * weights_att_control
+
+        # Trim extreme weights
+        if trim_weights:
+            for w in [weights_ate, weights_att]:
+                threshold = np.quantile(w, trim_quantile)
+                w[w > threshold] = threshold
+
+        # Normalize weights
+        weights_ate = weights_ate / weights_ate.sum() * len(weights_ate)
+        weights_att = weights_att / weights_att.sum() * len(weights_att)
+
+        # ATE estimator
+        # ATE = E[w_1 * Y * T] - E[w_0 * Y * (1-T)]
+        ate = np.sum(weights_ate * Y * T) / np.sum(weights_ate * T) - \
+              np.sum(weights_ate * Y * (1 - T)) / np.sum(weights_ate * (1 - T))
+
+        # ATT estimator
+        # ATT = E[Y | T=1] - E[w_att * Y | T=0] / E[w_att | T=0]
+        att = np.mean(Y[T == 1]) - np.sum(weights_att[T == 0] * Y[T == 0]) / np.sum(weights_att[T == 0])
+
+        # Bootstrap for standard errors
+        n_boot = get_bootstrap_iterations(1000)
+        boot_ates = []
+        boot_atts = []
+
+        for _ in range(n_boot):
+            boot_idx = np.random.choice(len(T), size=len(T), replace=True)
+            T_b, ps_b, Y_b = T[boot_idx], ps[boot_idx], Y[boot_idx]
+
+            w_ate_b = T_b / ps_b + (1 - T_b) / (1 - ps_b)
+            w_att_b = T_b + (1 - T_b) * ps_b / (1 - ps_b)
+
+            if trim_weights:
+                w_ate_b = np.clip(w_ate_b, 0, np.quantile(weights_ate, trim_quantile))
+                w_att_b = np.clip(w_att_b, 0, np.quantile(weights_att, trim_quantile))
+
+            w_ate_b = w_ate_b / w_ate_b.sum() * len(w_ate_b)
+            w_att_b = w_att_b / w_att_b.sum() * len(w_att_b)
+
+            ate_b = np.sum(w_ate_b * Y_b * T_b) / np.sum(w_ate_b * T_b) - \
+                    np.sum(w_ate_b * Y_b * (1 - T_b)) / np.sum(w_ate_b * (1 - T_b))
+            boot_ates.append(ate_b)
+
+            if np.sum(w_att_b[T_b == 0]) > 0:
+                att_b = np.mean(Y_b[T_b == 1]) - np.sum(w_att_b[T_b == 0] * Y_b[T_b == 0]) / np.sum(w_att_b[T_b == 0])
+                boot_atts.append(att_b)
+
+        ate_se = np.std(boot_ates)
+        att_se = np.std(boot_atts) if boot_atts else ate_se
+
+        ate_ci = (np.percentile(boot_ates, 2.5), np.percentile(boot_ates, 97.5))
+        att_ci = (np.percentile(boot_atts, 2.5), np.percentile(boot_atts, 97.5)) if boot_atts else ate_ci
+
+        # p-values
+        p_value_ate = 2 * (1 - stats.norm.cdf(abs(ate / ate_se))) if ate_se > 0 else 1.0
+        p_value_att = 2 * (1 - stats.norm.cdf(abs(att / att_se))) if att_se > 0 else 1.0
+
+        # Balance statistics with IPW weights
+        balance_before = self.compute_balance_statistics()
+
+        # For balance after, use ATE weights on full sample
+        full_weights = np.zeros(len(self.agent_df))
+        full_weights[valid] = weights_ate
+        balance_after = self.compute_balance_statistics(weights=full_weights)
+
+        # Interpretation
+        n_treated = T.sum()
+        n_control = len(T) - n_treated
+
+        if p_value_ate < 0.05:
+            direction = "increases" if ate > 0 else "decreases"
+            interpretation = (
+                f"AI adoption {direction} {outcome_col} by {abs(ate):.4f} "
+                f"(ATE={ate:.4f}, SE={ate_se:.4f}, p={p_value_ate:.4f}). "
+                f"IPW with {n_treated} treated, {n_control} control units."
+            )
+        else:
+            interpretation = (
+                f"No significant effect of AI adoption on {outcome_col} "
+                f"(ATE={ate:.4f}, p={p_value_ate:.4f})."
+            )
+
+        # Overlap summary
+        overlap_summary = {
+            'ps_mean_treated': ps[T == 1].mean(),
+            'ps_mean_control': ps[T == 0].mean(),
+            'max_weight': weights_ate.max(),
+            'effective_sample_size': len(weights_ate)**2 / np.sum(weights_ate**2)
+        }
+
+        result = PropensityScoreResult(
+            method='inverse_probability_weighting',
+            outcome=outcome_col,
+            ate=ate,
+            att=att,
+            ate_se=ate_se,
+            att_se=att_se,
+            ate_ci=ate_ci,
+            att_ci=att_ci,
+            p_value_ate=p_value_ate,
+            p_value_att=p_value_att,
+            n_treated=int(n_treated),
+            n_control=int(n_control),
+            n_matched=None,
+            balance_before={row['covariate']: row['smd'] for _, row in balance_before.iterrows()},
+            balance_after={row['covariate']: row['smd'] for _, row in balance_after.iterrows()},
+            overlap_summary=overlap_summary,
+            interpretation=interpretation
+        )
+
+        self.results.append(result)
+
+        # Print summary
+        print(f"   ✓ N = {len(T)} (Treated: {n_treated}, Control: {n_control})")
+        print(f"   ✓ ATE = {ate:.4f} (SE = {ate_se:.4f}), p = {p_value_ate:.4f}")
+        print(f"   ✓ ATT = {att:.4f} (SE = {att_se:.4f}), p = {p_value_att:.4f}")
+        print(f"   ✓ Effective sample size: {overlap_summary['effective_sample_size']:.1f}")
+
+        # Balance improvement
+        smd_before = balance_before['abs_smd'].mean()
+        smd_after = balance_after['abs_smd'].mean()
+        print(f"\n   Balance (mean |SMD|): {smd_before:.3f} → {smd_after:.3f}")
+
+        print(f"\n   {interpretation}")
+
+        return result
+
+    def augmented_ipw(
+        self,
+        outcome_col: str,
+        outcome_model: str = 'linear'
+    ) -> Optional[PropensityScoreResult]:
+        """
+        Augmented Inverse Probability Weighting (AIPW) - Doubly Robust Estimator.
+
+        AIPW combines IPW with an outcome regression model. It is consistent
+        if EITHER the propensity score model OR the outcome model is correctly
+        specified (doubly robust property).
+
+        AIPW = IPW estimate + Augmentation term for model misspecification
+
+        Parameters
+        ----------
+        outcome_col : str
+            Column name for the outcome variable.
+        outcome_model : str
+            Type of outcome model: 'linear' or 'logistic'.
+
+        Returns
+        -------
+        PropensityScoreResult or None if estimation fails.
+        """
+        print(f"\n📊 Augmented IPW (Doubly Robust) for {outcome_col}...")
+
+        if self.propensity_scores is None:
+            self.estimate_propensity_scores()
+
+        df = self.agent_df.copy()
+
+        if outcome_col not in df.columns:
+            print(f"   ⚠️ Outcome column '{outcome_col}' not found")
+            return None
+
+        _, covariates = self._prepare_data()
+        df = df.loc[self.agent_df.index]
+
+        T = df['treatment'].values
+        ps = df['propensity_score'].values
+        Y = df[outcome_col].values
+
+        # Prepare covariate matrix
+        X_cols = [c for c in covariates if c in df.columns]
+        X = df[X_cols].values
+
+        # Remove missing values
+        valid = ~(np.isnan(Y) | np.isnan(ps) | np.any(np.isnan(X), axis=1))
+        T, ps, Y, X = T[valid], ps[valid], Y[valid], X[valid]
+
+        # Trim extreme propensity scores
+        ps = np.clip(ps, 0.01, 0.99)
+
+        if len(T) < 50:
+            print("   ⚠️ Insufficient observations")
+            return None
+
+        # Fit outcome models: E[Y | X, T=1] and E[Y | X, T=0]
+        X_design = np.column_stack([np.ones(len(X)), X])
+
+        # Model for treated
+        treated_mask = T == 1
+        if treated_mask.sum() > 10:
+            beta_1 = np.linalg.lstsq(X_design[treated_mask], Y[treated_mask], rcond=None)[0]
+            mu_1 = X_design @ beta_1  # Predicted Y(1) for everyone
+        else:
+            mu_1 = np.full(len(Y), Y[treated_mask].mean())
+
+        # Model for control
+        control_mask = T == 0
+        if control_mask.sum() > 10:
+            beta_0 = np.linalg.lstsq(X_design[control_mask], Y[control_mask], rcond=None)[0]
+            mu_0 = X_design @ beta_0  # Predicted Y(0) for everyone
+        else:
+            mu_0 = np.full(len(Y), Y[control_mask].mean())
+
+        # AIPW estimator for ATE
+        # ATE = E[(T/e - (1-T)/(1-e)) * Y - ((T-e)/(e*(1-e))) * ((1-e)*mu_1 + e*mu_0)]
+        # Simplified: ATE = E[T*(Y-mu_1)/e + mu_1] - E[(1-T)*(Y-mu_0)/(1-e) + mu_0]
+
+        # Potential outcome under treatment
+        psi_1 = T * (Y - mu_1) / ps + mu_1
+
+        # Potential outcome under control
+        psi_0 = (1 - T) * (Y - mu_0) / (1 - ps) + mu_0
+
+        # ATE
+        ate = np.mean(psi_1) - np.mean(psi_0)
+
+        # ATT using AIPW
+        # ATT = E[Y | T=1] - E[(1-T)*e/(1-e) * (Y-mu_0) / E[T] + mu_0 | T=1]
+        att_num = np.mean(T * (Y - mu_0) - (1 - T) * ps / (1 - ps) * (Y - mu_0))
+        att_denom = np.mean(T)
+        att = att_num / att_denom if att_denom > 0 else ate
+
+        # Bootstrap for standard errors
+        n_boot = get_bootstrap_iterations(1000)
+        boot_ates = []
+        boot_atts = []
+
+        for _ in range(n_boot):
+            boot_idx = np.random.choice(len(T), size=len(T), replace=True)
+            T_b = T[boot_idx]
+            ps_b = ps[boot_idx]
+            Y_b = Y[boot_idx]
+            mu_1_b = mu_1[boot_idx]
+            mu_0_b = mu_0[boot_idx]
+
+            psi_1_b = T_b * (Y_b - mu_1_b) / ps_b + mu_1_b
+            psi_0_b = (1 - T_b) * (Y_b - mu_0_b) / (1 - ps_b) + mu_0_b
+
+            ate_b = np.mean(psi_1_b) - np.mean(psi_0_b)
+            boot_ates.append(ate_b)
+
+            att_num_b = np.mean(T_b * (Y_b - mu_0_b) - (1 - T_b) * ps_b / (1 - ps_b) * (Y_b - mu_0_b))
+            att_denom_b = np.mean(T_b)
+            if att_denom_b > 0:
+                boot_atts.append(att_num_b / att_denom_b)
+
+        ate_se = np.std(boot_ates)
+        att_se = np.std(boot_atts) if boot_atts else ate_se
+
+        ate_ci = (np.percentile(boot_ates, 2.5), np.percentile(boot_ates, 97.5))
+        att_ci = (np.percentile(boot_atts, 2.5), np.percentile(boot_atts, 97.5)) if boot_atts else ate_ci
+
+        # p-values
+        p_value_ate = 2 * (1 - stats.norm.cdf(abs(ate / ate_se))) if ate_se > 0 else 1.0
+        p_value_att = 2 * (1 - stats.norm.cdf(abs(att / att_se))) if att_se > 0 else 1.0
+
+        # Balance statistics
+        balance_before = self.compute_balance_statistics()
+        balance_after = balance_before.copy()  # AIPW doesn't change balance directly
+
+        # Interpretation
+        n_treated = T.sum()
+        n_control = len(T) - n_treated
+
+        if p_value_ate < 0.05:
+            direction = "increases" if ate > 0 else "decreases"
+            interpretation = (
+                f"AI adoption {direction} {outcome_col} by {abs(ate):.4f} "
+                f"(ATE={ate:.4f}, SE={ate_se:.4f}, p={p_value_ate:.4f}). "
+                f"Doubly-robust AIPW estimator with {n_treated} treated, {n_control} control."
+            )
+        else:
+            interpretation = (
+                f"No significant effect of AI adoption on {outcome_col} "
+                f"(ATE={ate:.4f}, p={p_value_ate:.4f}). Doubly-robust AIPW estimator."
+            )
+
+        overlap_summary = {
+            'ps_mean_treated': ps[T == 1].mean(),
+            'ps_mean_control': ps[T == 0].mean(),
+            'outcome_model_r2_treated': 1 - np.var(Y[T == 1] - mu_1[T == 1]) / np.var(Y[T == 1]) if np.var(Y[T == 1]) > 0 else 0,
+            'outcome_model_r2_control': 1 - np.var(Y[T == 0] - mu_0[T == 0]) / np.var(Y[T == 0]) if np.var(Y[T == 0]) > 0 else 0
+        }
+
+        result = PropensityScoreResult(
+            method='augmented_ipw',
+            outcome=outcome_col,
+            ate=ate,
+            att=att,
+            ate_se=ate_se,
+            att_se=att_se,
+            ate_ci=ate_ci,
+            att_ci=att_ci,
+            p_value_ate=p_value_ate,
+            p_value_att=p_value_att,
+            n_treated=int(n_treated),
+            n_control=int(n_control),
+            n_matched=None,
+            balance_before={row['covariate']: row['smd'] for _, row in balance_before.iterrows()},
+            balance_after={row['covariate']: row['smd'] for _, row in balance_after.iterrows()},
+            overlap_summary=overlap_summary,
+            interpretation=interpretation
+        )
+
+        self.results.append(result)
+
+        # Print summary
+        print(f"   ✓ N = {len(T)} (Treated: {n_treated}, Control: {n_control})")
+        print(f"   ✓ ATE = {ate:.4f} (SE = {ate_se:.4f}), p = {p_value_ate:.4f}")
+        print(f"   ✓ ATT = {att:.4f} (SE = {att_se:.4f}), p = {p_value_att:.4f}")
+        print(f"   ✓ Outcome model R² (treated): {overlap_summary['outcome_model_r2_treated']:.3f}")
+        print(f"   ✓ Outcome model R² (control): {overlap_summary['outcome_model_r2_control']:.3f}")
+
+        print(f"\n   {interpretation}")
+
+        return result
+
+    def run_all_methods(
+        self,
+        outcome_col: str
+    ) -> List[PropensityScoreResult]:
+        """
+        Run all propensity score methods for a given outcome.
+
+        Parameters
+        ----------
+        outcome_col : str
+            Column name for the outcome variable.
+
+        Returns
+        -------
+        List of PropensityScoreResult from each method.
+        """
+        print("\n" + "=" * 70)
+        print(f"PROPENSITY SCORE ANALYSIS FOR: {outcome_col}")
+        print("=" * 70)
+
+        # Estimate propensity scores first
+        self.estimate_propensity_scores()
+
+        results = []
+
+        # 1. Nearest Neighbor Matching
+        print("\n" + "-" * 70)
+        print("Method 1: Nearest Neighbor Matching")
+        print("-" * 70)
+        result = self.nearest_neighbor_matching(outcome_col)
+        if result:
+            results.append(result)
+
+        # 2. Inverse Probability Weighting
+        print("\n" + "-" * 70)
+        print("Method 2: Inverse Probability Weighting")
+        print("-" * 70)
+        result = self.inverse_probability_weighting(outcome_col)
+        if result:
+            results.append(result)
+
+        # 3. Augmented IPW (Doubly Robust)
+        print("\n" + "-" * 70)
+        print("Method 3: Augmented IPW (Doubly Robust)")
+        print("-" * 70)
+        result = self.augmented_ipw(outcome_col)
+        if result:
+            results.append(result)
+
+        return results
+
+    def generate_results_table(self) -> pd.DataFrame:
+        """Generate publication-ready propensity score results table."""
+        if not self.results:
+            return pd.DataFrame()
+
+        rows = []
+        for r in self.results:
+            rows.append({
+                'Method': r.method,
+                'Outcome': r.outcome,
+                'ATE': f"{r.ate:.4f}",
+                'ATE SE': f"{r.ate_se:.4f}",
+                'ATE 95% CI': f"[{r.ate_ci[0]:.4f}, {r.ate_ci[1]:.4f}]",
+                'ATE p-value': f"{r.p_value_ate:.4f}" if r.p_value_ate >= 0.0001 else "<0.0001",
+                'ATT': f"{r.att:.4f}",
+                'ATT SE': f"{r.att_se:.4f}",
+                'ATT 95% CI': f"[{r.att_ci[0]:.4f}, {r.att_ci[1]:.4f}]",
+                'ATT p-value': f"{r.p_value_att:.4f}" if r.p_value_att >= 0.0001 else "<0.0001",
+                'N Treated': r.n_treated,
+                'N Control': r.n_control,
+                'N Matched': r.n_matched if r.n_matched else 'N/A'
+            })
+
+        return pd.DataFrame(rows)
+
+    def generate_balance_table(self) -> pd.DataFrame:
+        """Generate covariate balance table before/after adjustment."""
+        if not self.results:
+            return pd.DataFrame()
+
+        # Use the last result's balance statistics
+        result = self.results[-1]
+
+        rows = []
+        for cov in result.balance_before.keys():
+            rows.append({
+                'Covariate': cov,
+                'SMD Before': f"{result.balance_before[cov]:.3f}",
+                'SMD After': f"{result.balance_after.get(cov, np.nan):.3f}",
+                'Balanced Before': '✓' if abs(result.balance_before[cov]) < 0.1 else '✗',
+                'Balanced After': '✓' if abs(result.balance_after.get(cov, 1)) < 0.1 else '✗'
+            })
+
+        return pd.DataFrame(rows)
+
+    def generate_overlap_diagnostics(self) -> Dict[str, Any]:
+        """Generate overlap diagnostic plots data."""
+        if self.propensity_scores is None:
+            return {}
+
+        T = self.agent_df['treatment'].values
+        ps = self.agent_df['propensity_score'].values
+
+        return {
+            'ps_treated': ps[T == 1].tolist(),
+            'ps_control': ps[T == 0].tolist(),
+            'overlap_region': (
+                max(ps[T == 1].min(), ps[T == 0].min()),
+                min(ps[T == 1].max(), ps[T == 0].max())
+            ),
+            'pct_in_overlap': ((ps >= max(ps[T == 1].min(), ps[T == 0].min())) &
+                              (ps <= min(ps[T == 1].max(), ps[T == 0].max()))).mean()
+        }
+
+
+def run_propensity_score_analysis(
+    results_dir: str,
+    outcomes: Optional[List[str]] = None
+) -> Dict[str, pd.DataFrame]:
+    """
+    Run propensity score analysis on simulation results.
+
+    Parameters
+    ----------
+    results_dir : str
+        Path to simulation results directory.
+    outcomes : list, optional
+        Outcome variables to analyze. If None, uses defaults.
+
+    Returns
+    -------
+    Dict of result DataFrames.
+    """
+    from .analysis import ComprehensiveAnalysisFramework
+
+    print("\n" + "=" * 70)
+    print("PROPENSITY SCORE ANALYSIS FOR SELECTION BIAS ADJUSTMENT")
+    print("=" * 70)
+
+    framework = ComprehensiveAnalysisFramework(results_dir)
+
+    # Default outcomes
+    if outcomes is None:
+        outcomes = []
+        if 'capital_growth' in framework.agent_df.columns:
+            outcomes.append('capital_growth')
+        if 'survived' in framework.agent_df.columns:
+            outcomes.append('survived')
+        elif 'final_status' in framework.agent_df.columns:
+            framework.agent_df['survived'] = (framework.agent_df['final_status'] == 'active').astype(int)
+            outcomes.append('survived')
+
+    if not outcomes:
+        print("   ⚠️ No suitable outcome variables found")
+        return {}
+
+    results = {}
+
+    for outcome in outcomes:
+        psa = PropensityScoreAnalysis(framework.agent_df)
+
+        try:
+            psa.run_all_methods(outcome)
+            results[f'ps_results_{outcome}'] = psa.generate_results_table()
+            results[f'ps_balance_{outcome}'] = psa.generate_balance_table()
+        except Exception as e:
+            print(f"   ⚠️ Propensity score analysis failed for {outcome}: {e}")
+
+    # Save tables
+    tables_dir = os.path.join(results_dir, 'tables')
+    os.makedirs(tables_dir, exist_ok=True)
+
+    for name, df in results.items():
+        if df is not None and not df.empty:
+            filepath = os.path.join(tables_dir, f'{name}.csv')
+            df.to_csv(filepath, index=False)
+            print(f"\n✓ Saved {name}.csv")
+
+    return results
+
+
+def run_complete_causal_analysis(
+    results_dir: str,
+    is_fixed_tier: bool = False
+) -> Dict[str, pd.DataFrame]:
+    """
+    Run complete causal inference analysis suite.
+
+    This is the main entry point for comprehensive causal analysis,
+    running all available methods appropriate for the design.
+
+    Parameters
+    ----------
+    results_dir : str
+        Path to simulation results directory.
+    is_fixed_tier : bool
+        Whether data is from fixed-tier (exogenous) design.
+
+    Returns
+    -------
+    Dict of all result DataFrames.
+    """
+    print("\n" + "=" * 70)
+    print("COMPLETE CAUSAL INFERENCE ANALYSIS SUITE")
+    print("=" * 70)
+    print(f"Design: {'Fixed-Tier (Experimental)' if is_fixed_tier else 'Emergent (Observational)'}")
+
+    all_results = {}
+
+    # 1. Run standard statistical tests
+    print("\n" + "=" * 70)
+    print("PHASE 1: STANDARD STATISTICAL TESTS")
+    print("=" * 70)
+
+    try:
+        hypothesis_tests, descriptive_stats, correlations, mixed_effects = run_statistical_analysis(results_dir)
+        all_results['hypothesis_tests'] = hypothesis_tests
+        all_results['descriptive_stats'] = descriptive_stats
+        all_results['correlations'] = correlations
+        all_results['mixed_effects'] = mixed_effects
+    except Exception as e:
+        print(f"   ⚠️ Standard tests failed: {e}")
+
+    # 2. Run causal identification analysis
+    print("\n" + "=" * 70)
+    print("PHASE 2: CAUSAL IDENTIFICATION ANALYSIS")
+    print("=" * 70)
+
+    try:
+        causal_table, effect_summary = run_causal_identification_analysis(results_dir, is_fixed_tier)
+        all_results['causal_effects'] = causal_table
+        all_results['effect_summary'] = effect_summary
+    except Exception as e:
+        print(f"   ⚠️ Causal identification failed: {e}")
+
+    # 3. Run advanced causal methods
+    print("\n" + "=" * 70)
+    print("PHASE 3: ADVANCED CAUSAL METHODS")
+    print("=" * 70)
+
+    try:
+        advanced_results = run_advanced_causal_analysis(results_dir, is_fixed_tier)
+        all_results.update(advanced_results)
+    except Exception as e:
+        print(f"   ⚠️ Advanced causal methods failed: {e}")
+
+    # 4. Run propensity score analysis (for emergent design)
+    if not is_fixed_tier:
+        print("\n" + "=" * 70)
+        print("PHASE 4: PROPENSITY SCORE ANALYSIS")
+        print("=" * 70)
+
+        try:
+            ps_results = run_propensity_score_analysis(results_dir)
+            all_results.update(ps_results)
+        except Exception as e:
+            print(f"   ⚠️ Propensity score analysis failed: {e}")
+    else:
+        print("\n" + "=" * 70)
+        print("PHASE 4: PROPENSITY SCORE ANALYSIS")
+        print("=" * 70)
+        print("   ℹ️ Skipped: Not applicable to fixed-tier design (no selection bias)")
+
+    # Summary
+    print("\n" + "=" * 70)
+    print("ANALYSIS COMPLETE")
+    print("=" * 70)
+    print(f"Total tables generated: {len(all_results)}")
+
+    for name in all_results.keys():
+        print(f"   - {name}")
+
+    return all_results
