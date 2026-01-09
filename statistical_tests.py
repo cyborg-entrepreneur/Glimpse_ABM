@@ -45,6 +45,23 @@ except ImportError:
     HAS_STATSMODELS = False
     multipletests = None
 
+# Fast stats mode reduces bootstrap iterations for robustness sweeps
+# Set via set_fast_stats_mode(True) before running analyses
+_FAST_STATS_MODE = False
+
+def set_fast_stats_mode(enabled: bool = True) -> None:
+    """Enable/disable fast stats mode (reduced bootstrap iterations)."""
+    global _FAST_STATS_MODE
+    _FAST_STATS_MODE = enabled
+    if enabled:
+        print("[Stats] Fast stats mode ENABLED (500 bootstrap iterations)")
+
+def get_bootstrap_iterations(full_iterations: int = 5000) -> int:
+    """Get bootstrap iterations based on current mode."""
+    if _FAST_STATS_MODE:
+        return min(500, full_iterations)  # Cap at 500 in fast mode
+    return full_iterations
+
 try:
     import statsmodels.formula.api as smf
     from statsmodels.regression.mixed_linear_model import MixedLM
@@ -178,8 +195,9 @@ class EffectSizeCalculator:
         """
         rng = np.random.default_rng(42)
         d_boots = []
+        n_iter = get_bootstrap_iterations(n_bootstrap)
 
-        for _ in range(n_bootstrap):
+        for _ in range(n_iter):
             boot1 = rng.choice(group1, size=len(group1), replace=True)
             boot2 = rng.choice(group2, size=len(group2), replace=True)
             d, _ = EffectSizeCalculator.cohens_d(boot1, boot2)
@@ -462,7 +480,8 @@ class RigorousStatisticalAnalysis:
         # Bootstrap CI for effect size
         rng = np.random.default_rng(42)
         boot_effects = []
-        for _ in range(1000):
+        n_boot = get_bootstrap_iterations(1000)
+        for _ in range(n_boot):
             boot_groups = [rng.choice(g, size=len(g), replace=True) for g in groups]
             h_boot, _ = kruskal(*boot_groups)
             eff, _ = self.effect_calculator.epsilon_squared(h_boot, n_total, len(groups))
@@ -523,7 +542,8 @@ class RigorousStatisticalAnalysis:
                 # Bootstrap CI for Cliff's delta
                 rng = np.random.default_rng(42)
                 boot_deltas = []
-                for _ in range(1000):
+                n_boot = get_bootstrap_iterations(1000)
+                for _ in range(n_boot):
                     boot1 = rng.choice(g1, size=len(g1), replace=True)
                     boot2 = rng.choice(g2, size=len(g2), replace=True)
                     d, _ = self.effect_calculator.cliffs_delta(boot1, boot2)
@@ -1736,7 +1756,8 @@ class CausalIdentificationAnalysis:
 
         # Bootstrap for CI
         bootstrap_ates = []
-        for _ in range(n_bootstrap):
+        n_iter = get_bootstrap_iterations(n_bootstrap)
+        for _ in range(n_iter):
             t_sample = np.random.choice(treatment_values, size=len(treatment_values), replace=True)
             c_sample = np.random.choice(control_values, size=len(control_values), replace=True)
             bootstrap_ates.append(np.mean(t_sample) - np.mean(c_sample))
@@ -1775,7 +1796,8 @@ class CausalIdentificationAnalysis:
 
         # Bootstrap for CI
         bootstrap_ds = []
-        for _ in range(n_bootstrap):
+        n_iter = get_bootstrap_iterations(n_bootstrap)
+        for _ in range(n_iter):
             t_sample = np.random.choice(treatment_values, size=len(treatment_values), replace=True)
             c_sample = np.random.choice(control_values, size=len(control_values), replace=True)
             var_t = np.var(t_sample, ddof=1)

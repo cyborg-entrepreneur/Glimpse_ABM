@@ -36,14 +36,16 @@ run_config() {
             --task fixed \
             --calibration-profile minimal_causal \
             --results-dir "$OUTPUT_BASE/$name" \
-            --skip-visualizations
+            --skip-visualizations \
+            --fast-stats
     else
         python3 -m glimpse_abm.cli \
             --task fixed \
             --calibration-profile minimal_causal \
             --calibration-file "$override_file" \
             --results-dir "$OUTPUT_BASE/$name" \
-            --skip-visualizations
+            --skip-visualizations \
+            --fast-stats
     fi
 
     echo "[$name] Completed at $(date)"

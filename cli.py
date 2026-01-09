@@ -1764,6 +1764,11 @@ def _parse_cli_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Skip visualization rendering after analysis (useful for large batches or profiling).",
     )
     parser.add_argument(
+        "--fast-stats",
+        action="store_true",
+        help="Use reduced bootstrap iterations (500 vs 5000) for faster statistical tests. Useful for robustness sweeps.",
+    )
+    parser.add_argument(
         "--experiment-profile",
         choices=["baseline", "agi2027"],
         help="Apply predefined experimental overrides (e.g., AGI-tier pricing/capabilities).",
@@ -1978,6 +1983,9 @@ def run_cli(
         print(f"[CLI] Results directory override: {args.results_dir}")
     if args.skip_visualizations:
         print("[CLI] Visualization suite disabled (--skip-visualizations).")
+    if args.fast_stats:
+        from .statistical_tests import set_fast_stats_mode
+        set_fast_stats_mode(True)
     if args.ai_levels:
         print(f"[CLI] AI levels requested: {args.ai_levels}")
     if args.monitor_progress:
