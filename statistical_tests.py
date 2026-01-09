@@ -216,14 +216,35 @@ class EffectSizeCalculator:
 
         Appropriate when data are ordinal or non-normally distributed.
         Ranges from -1 to +1.
+
+        Uses O(n log n) algorithm via rank sums instead of O(n*m) pairwise comparisons.
         """
         n1, n2 = len(group1), len(group2)
 
-        # Count dominance
-        more = sum(1 for x in group1 for y in group2 if x > y)
-        less = sum(1 for x in group1 for y in group2 if x < y)
+        if n1 == 0 or n2 == 0:
+            return 0.0, "negligible"
 
-        delta = (more - less) / (n1 * n2)
+        # Efficient O(n log n) algorithm using rank sums
+        # Cliff's delta = (2 * U) / (n1 * n2) - 1
+        # where U is the Mann-Whitney U statistic
+        #
+        # U = R1 - n1*(n1+1)/2, where R1 is sum of ranks for group1
+        # in the combined ranked data
+
+        combined = np.concatenate([group1, group2])
+        ranks = stats.rankdata(combined, method='average')
+
+        # Sum of ranks for group1
+        r1 = np.sum(ranks[:n1])
+
+        # Mann-Whitney U for group1
+        u1 = r1 - n1 * (n1 + 1) / 2
+
+        # Cliff's delta from U statistic
+        # delta = (more - less) / (n1 * n2)
+        # more = u1, less = n1*n2 - u1 (ignoring ties)
+        # delta = (2*u1 - n1*n2) / (n1*n2) = 2*u1/(n1*n2) - 1
+        delta = (2 * u1) / (n1 * n2) - 1
 
         # Interpretation (Romano et al., 2006)
         abs_delta = abs(delta)
