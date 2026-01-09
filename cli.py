@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import importlib.util
 import json
 import multiprocessing as mp
 import os
@@ -104,6 +103,7 @@ from .config import (
     load_calibration_profile,
 )
 from .simulation import EmergentSimulation
+from .utils import normalize_ai_label
 
 try:  # pragma: no cover - optional dependency
     from IPython.display import display  # type: ignore
@@ -1581,28 +1581,19 @@ def _plot_performance_vs_uncertainty(
 
 AI_LEVEL_ORDER = {"none": 0, "basic": 1, "advanced": 2, "premium": 3}
 AI_LEVEL_CANONICAL = list(AI_LEVEL_ORDER.keys())
-AI_LEVEL_NORMALISATION = {
-    "human": "none",
-    "none": "none",
-    "basic": "basic",
-    "basic_ai": "basic",
-    "advanced": "advanced",
-    "advanced_ai": "advanced",
-    "premium": "premium",
-    "premium_ai": "premium",
-    "emergent": "premium",
-}
 
 
 def _normalize_ai_level_label(value: Any) -> Optional[str]:
+    """Normalize AI level labels, returning None for missing/invalid values."""
     if value is None:
         return None
     if isinstance(value, (float, int)) and pd.isna(value):
         return None
-    label = str(value).strip().lower()
-    if not label:
+    # Use canonical normalize_ai_label from utils
+    normalized = normalize_ai_label(value, default="")
+    if not normalized or normalized not in AI_LEVEL_ORDER:
         return None
-    return AI_LEVEL_NORMALISATION.get(label, label if label in AI_LEVEL_ORDER else None)
+    return normalized
 
 
 def _encode_ai_level(df: pd.DataFrame, col: str = "primary_ai_level") -> pd.DataFrame:

@@ -8,7 +8,6 @@ import glob
 import os
 import warnings
 import gc
-from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -29,7 +28,7 @@ except ModuleNotFoundError:  # pragma: no cover
 import numpy as np
 import pandas as pd
 from scipy import stats
-from scipy.stats import entropy, ks_2samp, mannwhitneyu, kruskal
+from scipy.stats import entropy, mannwhitneyu, kruskal
 from sklearn.cluster import KMeans
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.metrics import roc_auc_score, silhouette_score
@@ -70,6 +69,60 @@ if HAS_PLOTTING_LIBRARIES:
         'savefig.dpi': 300,
         'savefig.bbox': 'tight',
     })
+
+
+def _apply_standard_transforms(
+    df: pd.DataFrame,
+    rename_map: Optional[Dict[str, str]] = None,
+    numeric_cols: Optional[List[str]] = None,
+    ensure_round: bool = True,
+    ensure_run_id: bool = True,
+) -> pd.DataFrame:
+    """
+    Apply common DataFrame standardization transforms.
+
+    Args:
+        df: DataFrame to transform
+        rename_map: Column rename mapping {old_name: new_name}
+        numeric_cols: Columns to convert to numeric
+        ensure_round: If True, ensure 'round' column exists as Int64
+        ensure_run_id: If True, ensure 'run_id' column exists as str
+
+    Returns:
+        Transformed DataFrame copy
+    """
+    if df.empty:
+        return df
+    df = df.copy()
+
+    # Apply column renames
+    if rename_map:
+        for src, dst in rename_map.items():
+            if src in df.columns and dst not in df.columns:
+                df.rename(columns={src: dst}, inplace=True)
+
+    # Ensure round column
+    if ensure_round:
+        if 'round' in df.columns:
+            df['round'] = pd.to_numeric(df['round'], errors='coerce').astype('Int64')
+        else:
+            df['round'] = np.arange(len(df))
+
+    # Ensure run_id column
+    if ensure_run_id:
+        if 'run_id' in df.columns:
+            df['run_id'] = df['run_id'].astype(str)
+        else:
+            df['run_id'] = 'default_run'
+
+    # Convert numeric columns
+    if numeric_cols:
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    return df
+
 
 class ComprehensiveAnalysisFramework:
     """
@@ -215,87 +268,37 @@ class ComprehensiveAnalysisFramework:
         return df
 
     def _standardize_market_df(self, df: pd.DataFrame) -> pd.DataFrame:
-        if df.empty:
-            return df
-        df = df.copy()
-
-        rename_map = {
-            'round_idx': 'round',
-            'step': 'round',
-            'time': 'round',
-            'market_regime': 'regime'
-        }
-        for src, dst in rename_map.items():
-            if src in df.columns and dst not in df.columns:
-                df.rename(columns={src: dst}, inplace=True)
-
-        if 'round' in df.columns:
-            df['round'] = pd.to_numeric(df['round'], errors='coerce').astype('Int64')
-
-        if 'run_id' in df.columns:
-            df['run_id'] = df['run_id'].astype(str)
-        else:
-            df['run_id'] = 'default_run'
-
-        return df
+        return _apply_standard_transforms(
+            df,
+            rename_map={
+                'round_idx': 'round',
+                'step': 'round',
+                'time': 'round',
+                'market_regime': 'regime'
+            }
+        )
 
     def _standardize_uncertainty_df(self, df: pd.DataFrame) -> pd.DataFrame:
-        if df.empty:
-            return df
-        df = df.copy()
-
-        rename_map = {
-            'round_idx': 'round',
-            'time': 'round',
-            'actor_ignorance': 'actor_ignorance_level',
-            'practical_indeterminism': 'practical_indeterminism_level',
-            'agentic_novelty': 'agentic_novelty_level',
-            'competitive_recursion': 'competitive_recursion_level'
-        }
-        for src, dst in rename_map.items():
-            if src in df.columns and dst not in df.columns:
-                df.rename(columns={src: dst}, inplace=True)
-
-        if 'round' in df.columns:
-            df['round'] = pd.to_numeric(df['round'], errors='coerce').astype('Int64')
-
-        if 'run_id' in df.columns:
-            df['run_id'] = df['run_id'].astype(str)
-        else:
-            df['run_id'] = 'default_run'
-
-        return df
+        return _apply_standard_transforms(
+            df,
+            rename_map={
+                'round_idx': 'round',
+                'time': 'round',
+                'actor_ignorance': 'actor_ignorance_level',
+                'practical_indeterminism': 'practical_indeterminism_level',
+                'agentic_novelty': 'agentic_novelty_level',
+                'competitive_recursion': 'competitive_recursion_level'
+            }
+        )
 
     def _standardize_innovation_df(self, df: pd.DataFrame) -> pd.DataFrame:
-        if df.empty:
-            return df
-        df = df.copy()
-        if 'round' in df.columns:
-            df['round'] = pd.to_numeric(df['round'], errors='coerce').astype('Int64')
-        else:
-            df['round'] = np.arange(len(df))
-        if 'run_id' in df.columns:
-            df['run_id'] = df['run_id'].astype(str)
-        else:
-            df['run_id'] = 'default_run'
-        for col in ['quality', 'novelty', 'market_impact']:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-        return df
+        return _apply_standard_transforms(
+            df,
+            numeric_cols=['quality', 'novelty', 'market_impact']
+        )
 
     def _standardize_knowledge_df(self, df: pd.DataFrame) -> pd.DataFrame:
-        if df.empty:
-            return df
-        df = df.copy()
-        if 'round' in df.columns:
-            df['round'] = pd.to_numeric(df['round'], errors='coerce').astype('Int64')
-        else:
-            df['round'] = np.arange(len(df))
-        if 'run_id' in df.columns:
-            df['run_id'] = df['run_id'].astype(str)
-        else:
-            df['run_id'] = 'default_run'
-        return df
+        return _apply_standard_transforms(df)
 
     def _standardize_summary_df(self, df: pd.DataFrame) -> pd.DataFrame:
         if df.empty:
