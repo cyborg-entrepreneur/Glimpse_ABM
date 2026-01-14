@@ -270,6 +270,34 @@ parameters preserved for exact behavioral compatibility.
     COMPETITION_INTENSITY::Float64 = 1.0
 
     # ========================================================================
+    # HALLUCINATION INTENSITY (for robustness testing)
+    # ========================================================================
+    # Scales AI hallucination rates from 0.0 (no hallucinations) to 1.0 (full)
+    # Tests whether AI misinformation/false positives drive the paradox.
+    HALLUCINATION_INTENSITY::Float64 = 1.0
+
+    # ========================================================================
+    # OVERCONFIDENCE INTENSITY (for robustness testing)
+    # ========================================================================
+    # Scales AI overconfidence effects from 0.0 (no overconfidence) to 1.0 (full)
+    # Tests whether inflated confidence estimates drive the paradox.
+    OVERCONFIDENCE_INTENSITY::Float64 = 1.0
+
+    # ========================================================================
+    # AI NOVELTY CONSTRAINT INTENSITY (for robustness testing)
+    # ========================================================================
+    # Scales the negative effect of premium AI on agentic novelty (0.0 to 1.0)
+    # Tests whether AI-induced anchoring on historical patterns drives the paradox.
+    AI_NOVELTY_CONSTRAINT_INTENSITY::Float64 = 1.0
+
+    # ========================================================================
+    # AI COST INTENSITY (for robustness testing)
+    # ========================================================================
+    # Scales AI subscription/usage costs from 0.0 (free AI) to 1.0 (full cost)
+    # Tests whether opportunity costs from AI fees drive the paradox.
+    AI_COST_INTENSITY::Float64 = 1.0
+
+    # ========================================================================
     # RECURSION WEIGHTS
     # ========================================================================
     RECURSION_WEIGHTS::Dict{String,Float64} = Dict(

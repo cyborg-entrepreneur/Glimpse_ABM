@@ -1,0 +1,17 @@
+outcome,tier,mean,ate,direction
+survival,none,0.587800,0.000000,neutral
+survival,basic,0.584550,-0.003250,negative
+survival,advanced,0.531050,-0.056750,negative
+survival,premium,0.529850,-0.057950,negative
+mean_capital,none,2606770.449626,0.000000,neutral
+mean_capital,basic,2794917.280702,188146.831076,positive
+mean_capital,advanced,2233785.640151,-372984.809474,negative
+mean_capital,premium,2122128.360690,-484642.088936,negative
+median_capital,none,2300907.581867,0.000000,neutral
+median_capital,basic,2483978.787022,183071.205155,positive
+median_capital,advanced,1976899.132640,-324008.449227,negative
+median_capital,premium,1908770.446900,-392137.134967,negative
+innovations,none,15.586150,0.000000,neutral
+innovations,basic,16.111750,0.525600,positive
+innovations,advanced,15.872600,0.286450,positive
+innovations,premium,16.520450,0.934300,positive

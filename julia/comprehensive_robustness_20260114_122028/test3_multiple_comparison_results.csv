@@ -1,0 +1,4 @@
+tier,ate,p_value,bh_threshold,bonf_threshold,bh_significant,bonf_significant
+basic,-0.029450,0.083372,0.016667,0.016667,false,false
+premium,-0.027300,0.095413,0.033333,0.016667,false,false
+advanced,0.000250,0.987746,0.050000,0.016667,false,false

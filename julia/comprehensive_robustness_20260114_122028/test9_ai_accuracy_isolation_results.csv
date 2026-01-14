@@ -1,0 +1,5 @@
+tier,mean_survival,std_survival,ate,interpretation
+none,0.583700,0.067101,0.000000,neutral
+basic,0.556700,0.049883,-0.027000,harmful
+advanced,0.555700,0.052529,-0.028000,harmful
+premium,0.555950,0.056467,-0.027750,harmful

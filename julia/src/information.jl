@@ -174,7 +174,9 @@ function get_information(
     base_accuracy = domain_cap["accuracy"]
     actual_accuracy = clamp(randn(rng) * 0.1 + base_accuracy, 0.0, 1.0)
 
-    hallucination_rate = domain_cap["hallucination_rate"]
+    # Scale hallucination rate by intensity parameter (for robustness testing)
+    hallucination_intensity = sys.config.HALLUCINATION_INTENSITY
+    hallucination_rate = domain_cap["hallucination_rate"] * hallucination_intensity
     bias = domain_cap["bias"]
 
     # Estimate return with noise
@@ -206,7 +208,10 @@ function get_information(
     # Compute confidence
     info_quality = get(ai_config, "info_quality", 0.0)
     true_confidence = actual_accuracy * (1 - opp.complexity * (1 - actual_accuracy))
-    overconfidence_factor = info_quality < 0.5 ? 1.0 + (0.5 - info_quality) * 0.5 : 1.0
+    # Scale overconfidence by intensity parameter (for robustness testing)
+    overconfidence_intensity = sys.config.OVERCONFIDENCE_INTENSITY
+    base_overconfidence = info_quality < 0.5 ? (0.5 - info_quality) * 0.5 : 0.0
+    overconfidence_factor = 1.0 + base_overconfidence * overconfidence_intensity
     stated_confidence = clamp(true_confidence * overconfidence_factor, 0.1, 0.95)
 
     # Generate insights

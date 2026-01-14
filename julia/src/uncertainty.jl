@@ -378,10 +378,12 @@ function measure_uncertainty_state!(
 
     # AI can both enable and constrain novelty
     # Premium AI may anchor on historical patterns
+    # Scale the constraint effect by AI_NOVELTY_CONSTRAINT_INTENSITY (for robustness testing)
+    novelty_constraint_intensity = env.config.AI_NOVELTY_CONSTRAINT_INTENSITY
     ai_novelty_effect = (
         0.3 * ai_shares[2] +  # Basic enables some novelty
         0.4 * ai_shares[3] -  # Advanced enables more
-        0.1 * ai_shares[4]    # Premium may constrain
+        0.1 * ai_shares[4] * novelty_constraint_intensity  # Premium constraint scaled
     )
 
     agentic_novelty_level = (

@@ -727,14 +727,17 @@ function estimate_ai_cost(
     ai_config = get(agent.config.AI_LEVELS, ai_level, agent.config.AI_LEVELS["none"])
     cost_type = get(ai_config, "cost_type", "none")
 
+    # Scale costs by AI_COST_INTENSITY (for robustness testing)
+    cost_intensity = agent.config.AI_COST_INTENSITY
+
     if cost_type == "subscription"
-        base_cost = Float64(get(ai_config, "cost", 0.0))
-        per_use = Float64(get(ai_config, "per_use_cost", 0.0))
+        base_cost = Float64(get(ai_config, "cost", 0.0)) * cost_intensity
+        per_use = Float64(get(ai_config, "per_use_cost", 0.0)) * cost_intensity
         # Amortize subscription over rounds
         amort_rounds = max(1, get(agent.config.AI_SUBSCRIPTION_AMORTIZATION_ROUNDS, 20))
         return base_cost / amort_rounds + per_use * max(expected_calls, 0.0)
     elseif cost_type == "per_use"
-        return Float64(get(ai_config, "cost", 0.0)) * max(expected_calls, 0.0)
+        return Float64(get(ai_config, "cost", 0.0)) * cost_intensity * max(expected_calls, 0.0)
     end
 
     return 0.0
@@ -829,6 +832,9 @@ function choose_ai_level(
     amort_horizon = max(1, get(agent.config.AI_SUBSCRIPTION_AMORTIZATION_ROUNDS, 20))
     ref_scale = max(operating_cost * 4.0, cash_buffer * 0.12, 1.0)
 
+    # Scale costs by AI_COST_INTENSITY (for robustness testing)
+    cost_intensity = agent.config.AI_COST_INTENSITY
+
     cost_ratios = Dict{String,Float64}()
     for tier in order
         if tier == "none"
@@ -837,8 +843,8 @@ function choose_ai_level(
         end
         cfg = get(agent.config.AI_LEVELS, tier, Dict())
         cost_type = get(cfg, "cost_type", "none")
-        base_cost = Float64(get(cfg, "cost", 0.0))
-        per_use_cost = Float64(get(cfg, "per_use_cost", 0.0))
+        base_cost = Float64(get(cfg, "cost", 0.0)) * cost_intensity
+        per_use_cost = Float64(get(cfg, "per_use_cost", 0.0)) * cost_intensity
 
         total_cost = if cost_type == "subscription"
             per_round = base_cost / amort_horizon
