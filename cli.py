@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import copy
 import json
 import multiprocessing as mp
 import os
 import shutil
+import signal
 import threading
 import time
 import traceback
@@ -15,8 +17,85 @@ import warnings
 from datetime import datetime
 import itertools
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set
 from concurrent.futures import ProcessPoolExecutor, wait
+import weakref
+
+# =============================================================================
+# PROCESS POOL CLEANUP INFRASTRUCTURE
+# =============================================================================
+# Track active executors globally to ensure cleanup on exit/suspend/interrupt.
+# This prevents zombie worker processes when the parent is killed or suspended.
+
+_active_executors: Set[ProcessPoolExecutor] = set()
+_executor_lock = threading.Lock()
+_cleanup_registered = False
+
+
+def _register_executor(executor: ProcessPoolExecutor) -> None:
+    """Register an executor for cleanup tracking."""
+    with _executor_lock:
+        _active_executors.add(executor)
+
+
+def _unregister_executor(executor: ProcessPoolExecutor) -> None:
+    """Unregister an executor after normal shutdown."""
+    with _executor_lock:
+        _active_executors.discard(executor)
+
+
+def _cleanup_all_executors(signum: Optional[int] = None, frame: Any = None) -> None:
+    """
+    Emergency cleanup of all active executors.
+    Called on exit, interrupt (Ctrl+C), or termination signals.
+    """
+    with _executor_lock:
+        executors_to_cleanup = list(_active_executors)
+        _active_executors.clear()
+
+    for executor in executors_to_cleanup:
+        try:
+            # Force immediate shutdown without waiting
+            executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass  # Best effort cleanup
+
+    # If called from signal handler, may need to re-raise or exit
+    if signum is not None:
+        # For SIGTERM/SIGINT, exit cleanly after cleanup
+        if signum in (signal.SIGTERM, signal.SIGINT):
+            import sys
+            sys.exit(128 + signum)
+
+
+def _setup_executor_cleanup() -> None:
+    """
+    Register cleanup handlers once at module load.
+    Ensures worker processes are terminated even if parent dies unexpectedly.
+    """
+    global _cleanup_registered
+    if _cleanup_registered:
+        return
+    _cleanup_registered = True
+
+    # Register atexit handler for normal exit
+    atexit.register(_cleanup_all_executors)
+
+    # Register signal handlers for interrupts/termination
+    # Note: Only works in main thread, so we guard against RuntimeError
+    try:
+        signal.signal(signal.SIGTERM, _cleanup_all_executors)
+        signal.signal(signal.SIGINT, _cleanup_all_executors)
+        # SIGHUP: terminal closed
+        if hasattr(signal, 'SIGHUP'):
+            signal.signal(signal.SIGHUP, _cleanup_all_executors)
+    except (ValueError, RuntimeError):
+        # Signal handlers can only be set in main thread
+        pass
+
+
+# Initialize cleanup handlers at module import
+_setup_executor_cleanup()
 
 # Force Matplotlib into a non-interactive backend for headless execution.
 os.environ.setdefault("MPLBACKEND", "Agg")
@@ -451,7 +530,11 @@ def _execute_parallel_tasks(
     desc: str = "tasks",
     timeout: Optional[float] = None,
 ):
-    """Execute ``worker`` across ``tasks`` using a guarded process pool."""
+    """Execute ``worker`` across ``tasks`` using a guarded process pool.
+
+    Workers are registered with the global cleanup system to ensure they
+    are terminated even if the parent process is killed or suspended.
+    """
     tasks = list(tasks)
     if not tasks:
         return []
@@ -466,6 +549,8 @@ def _execute_parallel_tasks(
             mp_context=mp.get_context("spawn"),
             initializer=_configure_worker_process,
         )
+        # Register executor for emergency cleanup on exit/interrupt
+        _register_executor(executor)
         results: List[Any] = [None] * len(tasks)
         future_map: Dict[Any, int] = {}
         next_idx = 0
@@ -512,6 +597,7 @@ def _execute_parallel_tasks(
                 for fut in pending_futs:
                     fut.cancel()
                 executor.shutdown(wait=False, cancel_futures=True)
+                _unregister_executor(executor)
                 executor = None
                 print(
                     f"[Parallel] Timeout after {timeout:.0f}s during {desc}; "
@@ -535,6 +621,7 @@ def _execute_parallel_tasks(
         # Catch any remaining submissions if executor survived
         if executor is not None:
             executor.shutdown(wait=True)
+            _unregister_executor(executor)
         return results
     except (PermissionError, OSError) as exc:
         print(f"[Parallel] Falling back to sequential execution ({exc}).")
@@ -542,6 +629,7 @@ def _execute_parallel_tasks(
     finally:
         if executor is not None:
             executor.shutdown(wait=True)
+            _unregister_executor(executor)
 
 
 class ProgressMonitor:

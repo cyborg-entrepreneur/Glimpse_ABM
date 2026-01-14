@@ -2,12 +2,23 @@
 
 This repository contains the agent-based model (ABM) for investigating how artificial intelligence affects entrepreneurial decision-making under Knightian uncertainty. The simulation operationalizes the theoretical framework from Townsend, Hunt, Rady, Manocha, & Jin (2025, The Academy of Management Review) and Townsend, Hunt, & Rady (2024, Strategic Entrepreneurship Journal).
 
+## Implementations
+
+This repository contains **two implementations** of the GLIMPSE ABM:
+
+| Implementation | Language | Performance | Use Case |
+|----------------|----------|-------------|----------|
+| **Python** (root) | Python 3.8+ | ~70k agent-rounds/s | Research, prototyping, analysis |
+| **Julia** (`julia/`) | Julia 1.9+ | ~5M agent-rounds/s | Large-scale sweeps, production |
+
+Both implementations produce statistically equivalent results. The Julia version is **~65x faster** and recommended for parameter sweeps and robustness analysis.
+
 ## Repository Structure
 
 ```
 glimpse_abm/
-├── __init__.py              # Package initialization
-├── cli.py                   # Command-line interface
+├── __init__.py              # Python package initialization
+├── cli.py                   # Python command-line interface
 ├── config.py                # Configuration and calibration profiles
 ├── simulation.py            # Core simulation orchestration
 ├── agents.py                # Agent architecture and behavior
@@ -18,24 +29,18 @@ glimpse_abm/
 ├── information.py           # Information systems and signals
 ├── models.py                # Data models and structures
 ├── analysis.py              # Results analysis and statistics
-├── statistical_tests.py     # Hypothesis testing framework
-├── utils.py                 # Utility functions
-├── profile_simulation.py    # Performance profiling
 ├── docs/                    # Documentation
-│   ├── PARAMETER_GLOSSARY.md
-│   ├── CALIBRATION_GUIDE.md
-│   └── CALIBRATION_BASELINE.md
 ├── parameters/              # LHS parameter range configurations
-│   ├── lhs_ranges.yaml
-│   └── lhs_niche_ranges.yaml
 ├── scripts/                 # Automation scripts
-│   ├── run_robustness_sweep.sh
-│   └── analyze_robustness.py
 ├── tests/                   # Test suite
-│   └── test_smoke.py
-└── tools/                   # Progress tracking utilities
-    ├── watch_progress.py
-    └── progress_tracker.py
+├── tools/                   # Progress tracking utilities
+└── julia/                   # Julia implementation (GlimpseABM.jl)
+    ├── src/                 # Core Julia modules
+    ├── test/                # Julia test suite
+    ├── analysis/            # Analysis functions
+    ├── causal/              # Causal analysis
+    ├── benchmark/           # Performance benchmarks
+    └── README.md            # Julia-specific documentation
 ```
 
 ## Theoretical Foundation
@@ -62,6 +67,8 @@ A central insight from Townsend et al. (2025) is that AI creates a "paradox of f
 
 ## Installation
 
+### Python (Default)
+
 ```bash
 # Clone the repository
 git clone https://github.com/yourusername/glimpse_abm.git
@@ -74,7 +81,24 @@ pip install numpy pandas scipy matplotlib seaborn tqdm pyyaml
 python3 -m glimpse_abm.cli --help
 ```
 
+### Julia (High-Performance)
+
+```bash
+# From Julia REPL
+using Pkg
+Pkg.add(url="https://github.com/yourusername/glimpse_abm", subdir="julia")
+
+# Or install locally
+cd glimpse_abm/julia
+julia --project=. -e 'using Pkg; Pkg.instantiate()'
+
+# Run tests
+julia --project=. -e 'using Pkg; Pkg.test()'
+```
+
 ## Quick Start
+
+### Python
 
 ```bash
 # Basic simulation with venture calibration
@@ -88,6 +112,29 @@ python3 -m glimpse_abm.cli --task master --smoke --results-dir ./smoke_test
 python3 -m glimpse_abm.cli --task fixed --calibration-profile minimal_causal \
   --results-dir ./fixed_tier_results
 ```
+
+### Julia
+
+```julia
+using GlimpseABM
+
+# Create configuration
+config = EmergentConfig(
+    N_AGENTS = 100,
+    N_ROUNDS = 50,
+    RANDOM_SEED = 42
+)
+
+# Run simulation
+sim = EmergentSimulation(config)
+run!(sim)
+
+# Check results
+alive = count(a -> a.alive, sim.agents)
+println("Survival rate: $(alive)/$(config.N_AGENTS)")
+```
+
+See `julia/README.md` for more Julia examples including fixed-tier sweeps.
 
 ## CLI Tasks
 
