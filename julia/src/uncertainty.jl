@@ -343,14 +343,16 @@ function measure_uncertainty_state!(
         0.0
     end
 
-    # Crowding increases indeterminism
+    # Crowding increases indeterminism (scaled by competition intensity)
     crowding = get(market.crowding_metrics, "crowding_index", 0.25)
+    competition_intensity = env.config.COMPETITION_INTENSITY
 
+    # Scale the herding and crowding components by competition intensity
     practical_indet_level = (
         0.3 * regime_instability +
-        0.3 * ai_herding_intensity +
-        0.2 * crowding +
-        0.2 * (1.0 - ai_share_none) * 0.5  # AI increases execution uncertainty
+        0.3 * ai_herding_intensity * competition_intensity +  # Herding effect scaled
+        0.2 * crowding * competition_intensity +              # Crowding effect scaled
+        0.2 * (1.0 - ai_share_none) * 0.5  # AI increases execution uncertainty (not competitive)
     )
     practical_indet_level = clamp(practical_indet_level, 0.0, 1.0)
 
@@ -402,13 +404,14 @@ function measure_uncertainty_state!(
     premium_share = ai_shares[4]
     advanced_share = ai_shares[3]
 
-    # Herding pressure
-    herding_pressure = ai_herding_intensity
+    # Herding pressure (scaled by competition intensity)
+    herding_pressure = ai_herding_intensity * competition_intensity
 
+    # Competitive recursion - scale the crowding and herding components
     competitive_recursion_level = (
-        0.3 * invest_concentration^2 +  # Investment crowding
-        0.3 * herding_pressure +
-        0.2 * premium_share * 2.0 +  # Premium creates more recursion
+        0.3 * invest_concentration^2 * competition_intensity +  # Investment crowding scaled
+        0.3 * herding_pressure +                                # Already scaled above
+        0.2 * premium_share * 2.0 +  # Premium creates more recursion (not purely competitive)
         0.2 * advanced_share
     )
     competitive_recursion_level = clamp(competitive_recursion_level, 0.0, 1.0)

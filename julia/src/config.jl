@@ -262,6 +262,14 @@ parameters preserved for exact behavioral compatibility.
     FAILURE_DEMAND_PRESSURE::Float64 = 0.20
 
     # ========================================================================
+    # COMPETITION INTENSITY (for robustness testing)
+    # ========================================================================
+    # Scales ALL competition/crowding effects from 0.0 (disabled) to 1.0 (full)
+    # This allows testing whether the information paradox persists without
+    # competition penalties driving the results.
+    COMPETITION_INTENSITY::Float64 = 1.0
+
+    # ========================================================================
     # RECURSION WEIGHTS
     # ========================================================================
     RECURSION_WEIGHTS::Dict{String,Float64} = Dict(

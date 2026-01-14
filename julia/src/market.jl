@@ -537,6 +537,9 @@ function get_demand_adjustments(market::MarketEnvironment, sector::String)::Dict
         clearing_ratio = market.aggregate_clearing_ratio
     end
 
+    # Competition intensity scaling (for robustness testing)
+    competition_intensity = market.config.COMPETITION_INTENSITY
+
     # Crowding calculations
     crowd_threshold = get(market.config.RETURN_DEMAND_CROWDING_THRESHOLD, 0.35)
     flow_share = 0.0
@@ -547,14 +550,16 @@ function get_demand_adjustments(market::MarketEnvironment, sector::String)::Dict
     crowd_excess = max(0.0, flow_share - crowd_threshold)
     crowd_relief = max(0.0, crowd_threshold - flow_share)
 
-    penalty_strength = get(market.config.RETURN_DEMAND_CROWDING_PENALTY, 0.4)
+    # Scale penalty strength by competition intensity
+    penalty_strength = get(market.config.RETURN_DEMAND_CROWDING_PENALTY, 0.4) * competition_intensity
 
-    # Convex crowding penalty and relief
+    # Convex crowding penalty and relief (scaled by competition intensity)
     return_penalty = 1.0 - penalty_strength * crowd_excess^2
-    return_penalty *= 1.0 + 0.35 * crowd_relief^2
+    return_penalty *= 1.0 + 0.35 * competition_intensity * crowd_relief^2
 
-    failure_pressure = 1.0 + get(market.config.FAILURE_DEMAND_PRESSURE, 0.25) * crowd_excess^2
-    failure_pressure *= 1.0 - 0.2 * crowd_relief^2
+    failure_pressure_base = get(market.config.FAILURE_DEMAND_PRESSURE, 0.25) * competition_intensity
+    failure_pressure = 1.0 + failure_pressure_base * crowd_excess^2
+    failure_pressure *= 1.0 - 0.2 * competition_intensity * crowd_relief^2
 
     # Supply/demand adjustments
     if clearing_ratio > 1.0
@@ -692,10 +697,11 @@ function update_macro_regime!(
         end
     end
 
-    # Crowding effects
+    # Crowding effects (scaled by competition intensity)
+    competition_intensity = market.config.COMPETITION_INTENSITY
     crowd_threshold = get(market.config.RETURN_DEMAND_CROWDING_THRESHOLD, 0.35)
     if crowding > crowd_threshold
-        penalty = 0.05 * (crowding - crowd_threshold)
+        penalty = 0.05 * competition_intensity * (crowding - crowd_threshold)
         if haskey(idx_map, "recession")
             adjustments[idx_map["recession"]] += penalty
         end
@@ -703,7 +709,7 @@ function update_macro_regime!(
             adjustments[idx_map["crisis"]] += penalty * 0.6
         end
     else
-        relief = 0.03 * (crowd_threshold - crowding)
+        relief = 0.03 * competition_intensity * (crowd_threshold - crowding)
         if haskey(idx_map, "normal")
             adjustments[idx_map["normal"]] += relief
         end
@@ -712,9 +718,9 @@ function update_macro_regime!(
         end
     end
 
-    # AI activity can increase crisis risk
+    # AI activity can increase crisis risk (scaled by competition intensity)
     if ai_activity > 0.3 && haskey(idx_map, "crisis")
-        adjustments[idx_map["crisis"]] += 0.02 * ai_activity
+        adjustments[idx_map["crisis"]] += 0.02 * competition_intensity * ai_activity
     end
 
     # Black swan effect

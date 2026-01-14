@@ -249,10 +249,13 @@ function realized_return(
     scarcity_ceiling = 4.5 + 1.4 * scarcity_signal
     base_mean = clamp(base_mean, 0.2, min(15.0, scarcity_ceiling))
 
-    # Crowding penalties
+    # Crowding penalties (scaled by COMPETITION_INTENSITY for robustness testing)
+    competition_intensity = isnothing(config) ? 1.0 : config.COMPETITION_INTENSITY
+
     combo_hhi = Float64(get(market_conditions, "combo_hhi", 0.0))
     reuse_penalty = coalesce(opp.crowding_penalty, 0.0)
-    crowding_penalty = (0.25 * combo_hhi + 0.2 * reuse_penalty + 0.1 * reuse_pressure) * max(0.0, 1.0 - scarcity_signal)
+    # Scale crowding penalty by competition intensity
+    crowding_penalty = competition_intensity * (0.25 * combo_hhi + 0.2 * reuse_penalty + 0.1 * reuse_pressure) * max(0.0, 1.0 - scarcity_signal)
     scarcity_bonus = 0.15 * scarcity_signal
     novelty_relief = max(0.0, novelty_signal - 0.5) * 0.3
 
@@ -263,21 +266,25 @@ function realized_return(
     )
     base_mean *= structural_adjustment
 
-    # Crowding metrics
+    # Crowding metrics (scaled by competition intensity)
     crowding_metrics = get(market_conditions, "crowding_metrics", Dict{String,Any}())
     crowding_index = Float64(get(crowding_metrics, "crowding_index", 0.25))
 
     crowd_threshold = isnothing(config) ? 0.35 : config.RETURN_DEMAND_CROWDING_THRESHOLD
     if crowding_index > crowd_threshold
-        crowd_penalty_extra = clamp(1.0 - 0.25 * (crowding_index - crowd_threshold), 0.5, 1.0)
+        # Scale the penalty strength by competition intensity
+        penalty_strength = 0.25 * competition_intensity
+        crowd_penalty_extra = clamp(1.0 - penalty_strength * (crowding_index - crowd_threshold), 0.5, 1.0)
         base_mean *= crowd_penalty_extra
     end
 
-    # Tier-specific crowding
+    # Tier-specific crowding (scaled by competition intensity)
     tier_shares = get(market_conditions, "tier_invest_share", Dict{String,Float64}())
     tier_share = isnothing(investor_tier) ? 0.0 : Float64(get(tier_shares, investor_tier, 0.0))
     if tier_share > 0.45
-        crowd_penalty = 1.0 - 0.6 * (tier_share - 0.45)
+        # Scale the tier crowding penalty by competition intensity
+        tier_penalty_strength = 0.6 * competition_intensity
+        crowd_penalty = 1.0 - tier_penalty_strength * (tier_share - 0.45)
         base_mean *= clamp(crowd_penalty, 0.35, 1.0)
     end
 
