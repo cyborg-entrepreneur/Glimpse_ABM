@@ -351,6 +351,39 @@ class EmergentConfig:
     })
     # AI uplift on agentic novelty
     AI_NOVELTY_UPLIFT: float = 0.08
+
+    # ========================================================================
+    # ROBUSTNESS TEST PARAMETERS
+    # ========================================================================
+    # These parameters allow systematic isolation of different mechanisms
+    # that could drive the AI Paradox, supporting comprehensive robustness
+    # testing as described in the validation framework.
+
+    # HALLUCINATION_INTENSITY: Scales AI hallucination rates from 0.0 (no
+    # hallucinations) to 1.0 (full). Tests whether AI misinformation/false
+    # positives drive the paradox.
+    HALLUCINATION_INTENSITY: float = 1.0
+
+    # OVERCONFIDENCE_INTENSITY: Scales AI overconfidence effects from 0.0
+    # (no overconfidence) to 1.0 (full). Tests whether inflated confidence
+    # estimates drive the paradox.
+    OVERCONFIDENCE_INTENSITY: float = 1.0
+
+    # AI_NOVELTY_CONSTRAINT_INTENSITY: Scales the negative effect of premium
+    # AI on agentic novelty (0.0 to 1.0). Tests whether AI-induced anchoring
+    # on historical patterns drives the paradox.
+    AI_NOVELTY_CONSTRAINT_INTENSITY: float = 1.0
+
+    # AI_COST_INTENSITY: Scales AI subscription/usage costs from 0.0 (free AI)
+    # to 1.0 (full cost). Tests whether opportunity costs from AI fees drive
+    # the paradox.
+    AI_COST_INTENSITY: float = 1.0
+
+    # COMPETITION_INTENSITY: Scales competition effects from 0.0 (no competition
+    # penalties) to 1.0 (full). Tests whether market-level competition dynamics
+    # drive the paradox.
+    COMPETITION_INTENSITY: float = 1.0
+
     # Downside oversupply weight in realized returns
     DOWNSIDE_OVERSUPPLY_WEIGHT: float = 0.65
     # Lower bound on realized ROI (allows sensitivity sweeps of tail risk)

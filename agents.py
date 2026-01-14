@@ -1400,6 +1400,8 @@ class EmergentAgent:
         recent_activity = max(1.0, metrics.get('recent_ai_activity', 1.0))
         amortization_horizon = max(1, int(getattr(self.config, "AI_SUBSCRIPTION_AMORTIZATION_ROUNDS", 20)))
         ref_scale = max(operating_cost * 4.0, cash_buffer * 0.12, 1.0)
+        # Scale costs by AI_COST_INTENSITY (for robustness testing)
+        cost_intensity = getattr(self.config, 'AI_COST_INTENSITY', 1.0)
         cost_ratios: Dict[str, float] = {}
         for tier in order:
             if tier == 'none':
@@ -1407,8 +1409,8 @@ class EmergentAgent:
                 continue
             cfg = self.config.AI_LEVELS.get(tier, {})
             cost_type = cfg.get('cost_type', 'none')
-            base_cost = float(cfg.get('cost', 0.0))
-            per_use_cost = float(cfg.get('per_use_cost', 0.0))
+            base_cost = float(cfg.get('cost', 0.0)) * cost_intensity
+            per_use_cost = float(cfg.get('per_use_cost', 0.0)) * cost_intensity
             if cost_type == 'subscription':
                 per_round = base_cost / amortization_horizon
                 total_cost = per_round + per_use_cost * recent_activity
@@ -1505,17 +1507,19 @@ class EmergentAgent:
     def _estimate_ai_cost(self, ai_level: str, expected_calls: float = 1.0) -> float:
         ai_config = self.config.AI_LEVELS.get(ai_level, self.config.AI_LEVELS['none'])
         cost_type = ai_config.get('cost_type', 'none')
+        # Scale costs by AI_COST_INTENSITY (for robustness testing)
+        cost_intensity = getattr(self.config, 'AI_COST_INTENSITY', 1.0)
         if cost_type == 'subscription':
             if ai_level == 'none':
                 return 0.0
             if self._subscription_accounts.get(ai_level, 0) > 0:
-                installment = self._subscription_rates.get(ai_level, 0.0)
+                installment = self._subscription_rates.get(ai_level, 0.0) * cost_intensity
             else:
                 installment = 0.0
-            per_use_cost = ai_config.get('per_use_cost', 0.0)
+            per_use_cost = ai_config.get('per_use_cost', 0.0) * cost_intensity
             return installment + per_use_cost * max(expected_calls, 0.0)
         if cost_type == 'per_use':
-            return ai_config.get('cost', 0.0) * max(expected_calls, 0.0)
+            return ai_config.get('cost', 0.0) * cost_intensity * max(expected_calls, 0.0)
         return 0.0
 
     def _compute_ai_switch_penalty(self, current_level: str, proposed_level: str) -> float:

@@ -816,8 +816,17 @@ class KnightianUncertaintyEnvironment:
         combo_pressure = float(np.clip(combo_rate + reuse_pressure * 0.4, 0.0, 1.0))
         # AI quality uplift on novelty
         ai_quality = float(np.clip(ai_usage_pressure, 0.0, 1.0))
+        # AI can both enable and constrain novelty (matching Julia implementation)
+        # Premium AI may anchor on historical patterns, reducing novelty
+        # Scale the constraint effect by AI_NOVELTY_CONSTRAINT_INTENSITY (for robustness testing)
+        novelty_constraint_intensity = float(getattr(self.config, "AI_NOVELTY_CONSTRAINT_INTENSITY", 1.0))
+        ai_novelty_effect = (
+            0.3 * float(ai_shares[1] if ai_shares.size > 1 else 0.0) +  # Basic enables some novelty
+            0.4 * float(ai_shares[2] if ai_shares.size > 2 else 0.0) -  # Advanced enables more
+            0.1 * float(ai_shares[3] if ai_shares.size > 3 else 0.0) * novelty_constraint_intensity  # Premium constraint scaled
+        )
         agentic_level = float(np.clip(
-            0.25 + 0.38 * novelty_level + 0.25 * combo_pressure + 0.25 * scarcity_signal + 0.1 * disruption_avg + float(getattr(self.config, "AI_NOVELTY_UPLIFT", 0.08)) * ai_quality,
+            0.25 + 0.38 * novelty_level + 0.25 * combo_pressure + 0.25 * scarcity_signal + 0.1 * disruption_avg + float(getattr(self.config, "AI_NOVELTY_UPLIFT", 0.08)) * ai_quality + ai_novelty_effect,
             0.0,
             1.0
         ))

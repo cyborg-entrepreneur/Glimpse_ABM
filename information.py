@@ -33,6 +33,7 @@ def get_enhanced_ai_analysis_numba(
     bias,
     return_range,
     uncertainty_range,
+    overconfidence_intensity=1.0,
 ):
     actual_accuracy = max(0.0, min(np.random.normal(base_accuracy, 0.1), 1.0))
     return_noise = np.random.normal(0, (1 - actual_accuracy) * 0.5)
@@ -53,9 +54,9 @@ def get_enhanced_ai_analysis_numba(
     )
 
     true_confidence = actual_accuracy * (1 - complexity * (1 - actual_accuracy))
-    overconfidence_factor = (
-        1.0 + (0.5 - base_quality) * 0.5 if base_quality < 0.5 else 1.0
-    )
+    # Scale overconfidence by intensity parameter (for robustness testing)
+    base_overconfidence = (0.5 - base_quality) * 0.5 if base_quality < 0.5 else 0.0
+    overconfidence_factor = 1.0 + base_overconfidence * overconfidence_intensity
     stated_confidence = max(0.1, min(true_confidence * overconfidence_factor, 0.95))
 
     return estimated_return, estimated_uncertainty, stated_confidence, contains_hallucination
@@ -91,7 +92,9 @@ class InformationSystem:
         domain_cap = self.config.get_ai_domain_capability(ai_level, domain)
 
         actual_accuracy = float(np.clip(np.random.normal(domain_cap["accuracy"], 0.1), 0, 1))
-        hallucination_rate = domain_cap["hallucination_rate"]
+        # Scale hallucination rate by intensity parameter (for robustness testing)
+        hallucination_intensity = getattr(self.config, 'HALLUCINATION_INTENSITY', 1.0)
+        hallucination_rate = domain_cap["hallucination_rate"] * hallucination_intensity
         bias = domain_cap["bias"]
 
         return_noise = np.random.normal(0, 1) * (1 - actual_accuracy) * 0.5
@@ -122,11 +125,10 @@ class InformationSystem:
         true_confidence = actual_accuracy * (
             1 - opportunity.complexity * (1 - actual_accuracy)
         )
-        overconfidence_factor = (
-            1.0 + (0.5 - ai_config["info_quality"]) * 0.5
-            if ai_config["info_quality"] < 0.5
-            else 1.0
-        )
+        # Scale overconfidence by intensity parameter (for robustness testing)
+        overconfidence_intensity = getattr(self.config, 'OVERCONFIDENCE_INTENSITY', 1.0)
+        base_overconfidence = (0.5 - ai_config["info_quality"]) * 0.5 if ai_config["info_quality"] < 0.5 else 0.0
+        overconfidence_factor = 1.0 + base_overconfidence * overconfidence_intensity
         stated_confidence = float(np.clip(true_confidence * overconfidence_factor, 0.1, 0.95))
 
         info = Information(
@@ -345,15 +347,20 @@ class EnhancedInformationSystem(InformationSystem):
         info_breadth = ai_config.get("info_breadth", 0.0)
         base_accuracy = domain_cap.get("accuracy", 0.5)
         base_hallucination_rate = domain_cap.get("hallucination_rate", 0.1)
+        # Scale hallucination rate by intensity parameter (for robustness testing)
+        hallucination_intensity = getattr(self.config, 'HALLUCINATION_INTENSITY', 1.0)
         hallucination_rate = self.get_stochastic_hallucination_rate(
             base_hallucination_rate, domain
         )
         tier_noise = max(0.1, 1.2 - info_quality)
         hallucination_rate *= float(np.clip(np.random.lognormal(mean=0.0, sigma=0.25 * tier_noise), 0.2, 3.0))
-        hallucination_rate = float(np.clip(hallucination_rate, 0.0, 1.0))
+        hallucination_rate = float(np.clip(hallucination_rate * hallucination_intensity, 0.0, 1.0))
         accuracy_noise = float(np.clip(np.random.normal(loc=1.0 - 0.35 * (1.0 - info_quality), scale=0.12 + 0.08 * tier_noise), 0.4, 1.2))
         base_accuracy = float(np.clip(base_accuracy * accuracy_noise, 0.35, 0.99))
         bias = domain_cap.get("bias", 0.0)
+
+        # Scale overconfidence by intensity parameter (for robustness testing)
+        overconfidence_intensity = getattr(self.config, 'OVERCONFIDENCE_INTENSITY', 1.0)
 
         est_return, est_uncertainty, stated_confidence, contains_hallucination = get_enhanced_ai_analysis_numba(
             opportunity.latent_return_potential,
@@ -365,12 +372,16 @@ class EnhancedInformationSystem(InformationSystem):
             bias,
             self.config.OPPORTUNITY_RETURN_RANGE,
             self.config.OPPORTUNITY_UNCERTAINTY_RANGE,
+            overconfidence_intensity,
         )
 
         true_insights = self._generate_insights(opportunity, info_breadth, domain)
         false_insights = (
             self._generate_false_insights(opportunity, domain) if contains_hallucination else []
         )
+
+        base_overconfidence = (0.5 - info_quality) * 0.5 if info_quality < 0.5 else 0.0
+        overconfidence_factor = 1.0 + base_overconfidence * overconfidence_intensity
 
         analysis = AIAnalysis(
             estimated_return=est_return,
@@ -386,9 +397,7 @@ class EnhancedInformationSystem(InformationSystem):
             bias_applied=bias,
             domain=domain,
             false_insights=tuple(false_insights),
-            overconfidence_factor=(
-                1.0 + (0.5 - info_quality) * 0.5 if info_quality < 0.5 else 1.0
-            ),
+            overconfidence_factor=overconfidence_factor,
         )
         info = self._convert_to_information(analysis)
 
