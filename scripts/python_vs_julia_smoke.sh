@@ -12,11 +12,14 @@ N_ROUNDS="${2:-200}"
 SEED="${3:-42}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_ROOT="$(cd "${REPO_ROOT}/.." && pwd)"
 PY_TMP="$(mktemp -d "${TMPDIR:-/tmp}/py_smoke.XXXXXX")"
 JL_TMP="$(mktemp -d "${TMPDIR:-/tmp}/jl_smoke.XXXXXX")"
 
 echo "Running Python simulation... (agents=${N_AGENTS}, rounds=${N_ROUNDS}, seed=${SEED})"
-PY_JSON="$(PYTHONPATH="${REPO_ROOT}" python - <<'PY' "${N_AGENTS}" "${N_ROUNDS}" "${SEED}" "${PY_TMP}"
+PY_JSON="$(
+  cd "${PROJECT_ROOT}" && \
+  PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}" python3 - <<'PY' "${N_AGENTS}" "${N_ROUNDS}" "${SEED}" "${PY_TMP}"
 import json, sys, pathlib
 from glimpse_abm.config import EmergentConfig
 from glimpse_abm.simulation import EmergentSimulation
@@ -52,7 +55,9 @@ PY
 )"
 
 echo "Running Julia simulation... (agents=${N_AGENTS}, rounds=${N_ROUNDS}, seed=${SEED})"
-JL_JSON="$(julia --project="${REPO_ROOT}/julia" -e '
+JL_JSON="$(
+  cd "${REPO_ROOT}" && \
+  JULIA_PKG_PRECOMPILE_AUTO=0 JULIA_PKG_PRECOMPILE=0 julia --compiled-modules=no --project="${REPO_ROOT}/julia" -e '
     using JSON3
     include(joinpath("julia", "src", "GlimpseABM.jl"))
     using .GlimpseABM
@@ -64,7 +69,7 @@ JL_JSON="$(julia --project="${REPO_ROOT}/julia" -e '
     cfg.RANDOM_SEED = seed
     sim = EmergentSimulation(config=cfg, output_dir=outdir, run_id="jl_smoke_" * string(seed), seed=seed)
     run!(sim)
-    stats = summary_stats(sim)
+    stats = GlimpseABM.summary_stats(sim)
     # Normalize field names to match Python summary
     summary = Dict(
         "impl" => "julia",
@@ -77,7 +82,8 @@ JL_JSON="$(julia --project="${REPO_ROOT}/julia" -e '
         "output_dir" => outdir,
     )
     println(JSON3.write(summary))
-' "${N_AGENTS}" "${N_ROUNDS}" "${SEED}" "${JL_TMP}")"
+' "${N_AGENTS}" "${N_ROUNDS}" "${SEED}" "${JL_TMP}"
+)"
 
 echo
 echo "=== Python Summary ==="
@@ -87,7 +93,7 @@ echo "=== Julia Summary ==="
 echo "${JL_JSON}"
 echo
 
-python - <<'PY' "${PY_JSON}" "${JL_JSON}"
+python3 - <<'PY' "${PY_JSON}" "${JL_JSON}"
 import json, sys
 py = json.loads(sys.argv[1]); jl = json.loads(sys.argv[2])
 metrics = ["survival_rate", "mean_final_capital", "total_innovations"]
