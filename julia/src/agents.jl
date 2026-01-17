@@ -93,6 +93,7 @@ mutable struct EmergentAgent
     burn_history::Vector{Float64}  # Last N rounds of capital deltas (max BURN_HISTORY_WINDOW)
     failure_reason::Union{String,Nothing}  # Reason for failure if dead
     operating_cost_estimate::Float64  # Latest operating cost estimate for liquidity floor calculation
+    insolvency_streak::Int      # Pre-decision insolvency check (matches Python make_decision)
 
     # Decision state
     uncertainty_response::UncertaintyResponseProfile
@@ -178,6 +179,7 @@ function EmergentAgent(
         Float64[],  # burn_history (distress tracking)
         nothing,  # failure_reason
         config.BASE_OPERATIONAL_COST,  # operating_cost_estimate
+        0,  # insolvency_streak (pre-decision check)
         UncertaintyResponseProfile(rng=rng),
         String[],  # action_history
         "maintain",  # last_action
@@ -2645,6 +2647,47 @@ function make_decision!(
 
     # Apply subscription charges at start of decision (matches Python make_decision)
     apply_subscription_carry!(agent, round_num)
+
+    # Pre-decision insolvency check (matches Python make_decision lines 1085-1117)
+    capital_before_action = Float64(agent.resources.capital)
+    grace_period = max(1, agent.config.INSOLVENCY_GRACE_ROUNDS)
+    initial_equity = max(agent.resources.performance.initial_equity, 1.0)
+    capital_ratio = agent.resources.capital / initial_equity
+    ratio_floor = agent.config.SURVIVAL_CAPITAL_RATIO
+    below_floor = (agent.resources.capital < agent.config.SURVIVAL_THRESHOLD) || (capital_ratio < ratio_floor)
+
+    if below_floor
+        agent.insolvency_streak += 1
+        if agent.insolvency_streak >= grace_period
+            agent.alive = false
+            agent.failure_reason = "bankruptcy"
+            return Dict{String,Any}(
+                "action" => "exit",
+                "agent_id" => agent.id,
+                "round" => round_num,
+                "reason" => "bankruptcy",
+                "ai_level_used" => "none",
+                "portfolio_size" => length(agent.active_investments)
+            )
+        end
+        # Restructuring round: force maintain decision without AI spend
+        return Dict{String,Any}(
+            "action" => "maintain",
+            "agent_id" => agent.id,
+            "round" => round_num,
+            "reason" => "distress_restructuring",
+            "ai_level_used" => "none",
+            "ai_per_use_cost" => 0.0,
+            "ai_call_count" => 0,
+            "portfolio_size" => length(agent.active_investments),
+            "capital_before_action" => capital_before_action,
+            "capital_after_action" => Float64(agent.resources.capital)
+        )
+    else
+        if agent.insolvency_streak > 0
+            agent.insolvency_streak = 0
+        end
+    end
 
     # Choose AI level
     ai_level = if !isnothing(ai_level_override)
