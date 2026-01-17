@@ -120,7 +120,7 @@ mutable struct EmergentAgent
     last_perception::Dict{String,Any}
 
     # RNG
-    rng::AbstractRNG
+    rng::Random.AbstractRNG
 end
 
 function EmergentAgent(
@@ -129,7 +129,7 @@ function EmergentAgent(
     initial_capital::Union{Float64,Nothing} = nothing,
     fixed_ai_level::Union{String,Nothing} = nothing,
     initial_ai_level::String = "none",
-    rng::AbstractRNG = Random.default_rng()
+    rng::Random.AbstractRNG = Random.default_rng()
 )
     # Sample initial capital
     capital = if isnothing(initial_capital)
@@ -1025,7 +1025,8 @@ Matches Python check_matured_investments with binary success/failure and severe 
 function process_matured_investments!(
     agent::EmergentAgent,
     market::MarketEnvironment,
-    round::Int
+    round::Int;
+    market_conditions::Union{Dict{String,Any},Nothing} = nothing
 )::Vector{Dict{String,Any}}
     if !agent.alive
         return Dict{String,Any}[]
@@ -1034,7 +1035,8 @@ function process_matured_investments!(
     matured_outcomes = Dict{String,Any}[]
     remaining_investments = Dict{String,Any}[]
 
-    market_conditions = get_market_conditions(market)
+    # Use provided market_conditions if given, otherwise get from market
+    market_conditions = isnothing(market_conditions) ? get_market_conditions(market) : market_conditions
 
     for investment in agent.active_investments
         if investment["maturity_round"] <= round
@@ -1902,17 +1904,26 @@ function calculate_investment_utility(
     opportunities::Vector{Opportunity},
     market_conditions::Dict{String,Any},
     perception::Dict{String,Any};
-    ai_level::String = "none"
+    ai_level::String = "none",
+    info_system::Union{InformationSystem,Nothing} = nothing
 )::Float64
     if isempty(opportunities)
         return 0.0
     end
 
-    # Get best opportunity score
+    # Get best opportunity score (matches Python: evaluate + apply_uncertainty_adjustments)
     max_score = 0.0
     for opp in opportunities
-        score = evaluate_opportunity_basic(agent, opp, market_conditions)
-        max_score = max(max_score, score)
+        # Use InformationSystem if available (matches Python _evaluate_portfolio_opportunities)
+        if !isnothing(info_system)
+            info = get_information(info_system, opp, ai_level; agent_id=agent.id, rng=agent.rng)
+            base_score = evaluate_opportunity_with_info(agent, opp, info, market_conditions)
+        else
+            base_score = evaluate_opportunity_basic(agent, opp, market_conditions)
+        end
+        # Apply uncertainty adjustments like Python does
+        adjusted_score = apply_uncertainty_adjustments(agent, base_score, opp, perception)
+        max_score = max(max_score, adjusted_score)
     end
 
     scaled_score = stable_sigmoid(max_score - 1.0)
@@ -2277,16 +2288,42 @@ function calculate_maintain_utility(
     capital_buffer_in_rounds = get_capital(agent) / (cost + 1e-9)
     buffer_pressure = stable_sigmoid(2.0 - capital_buffer_in_rounds)
 
-    # Diversification (use active investments as proxy)
-    sectors = String[]
+    # Diversification (entropy-based, matching Python portfolio.diversification_score)
+    sector_amounts = Dict{String,Float64}()
+    total_amount = 0.0
     for inv in agent.active_investments
-        opp = get(inv, "opportunity", nothing)
-        if !isnothing(opp) && !isnothing(opp.sector)
-            push!(sectors, opp.sector)
+        sector = get(inv, "sector", nothing)
+        if isnothing(sector)
+            opp = get(inv, "opportunity", nothing)
+            if !isnothing(opp)
+                sector = hasfield(typeof(opp), :sector) ? opp.sector : nothing
+            end
+        end
+        if isnothing(sector)
+            sector = "unknown"
+        end
+        amount = Float64(get(inv, "amount", 0.0))
+        if amount > 0
+            sector_amounts[sector] = get(sector_amounts, sector, 0.0) + amount
+            total_amount += amount
         end
     end
-    n_sectors = length(unique(sectors))
-    diversification = min(1.0, n_sectors / 4.0)
+
+    diversification = 0.0
+    if total_amount > 0 && !isempty(sector_amounts)
+        # Compute Shannon entropy normalized by max entropy (log(4) for 4 sectors)
+        max_entropy = log(4)
+        if max_entropy > 0
+            entropy = 0.0
+            for amt in values(sector_amounts)
+                p = amt / total_amount
+                if p > 0
+                    entropy -= p * log(p + 1e-12)
+                end
+            end
+            diversification = clamp(entropy / max_entropy, 0.0, 1.0)
+        end
+    end
 
     practical_unc = Float64(get(get(perception, "practical_indeterminism", Dict()), "level", 0.5))
     uncertainty_penalty = practical_unc * 0.3
@@ -2345,6 +2382,61 @@ function evaluate_opportunity_basic(
     sector = coalesce(opportunity.sector, "unknown")
     sector_knowledge = get(agent.resources.knowledge, sector, 0.1)
     score *= 1.0 + sector_knowledge * 0.5
+
+    return max(0.1, score)
+end
+
+"""
+Evaluate opportunity using InformationSystem (matches Python _evaluate_opportunity).
+Uses info.estimated_return instead of raw latent_return_potential.
+"""
+function evaluate_opportunity_with_info(
+    agent::EmergentAgent,
+    opportunity::Opportunity,
+    info::Information,
+    market_conditions::Dict{String,Any}
+)::Float64
+    # Use estimated_return from info (matches Python line 2420)
+    expected_profit_margin = info.estimated_return - 1.0
+    uncertainty_adjusted_margin = expected_profit_margin * (1.0 - info.estimated_uncertainty * 0.5)
+    score = uncertainty_adjusted_margin * (1.0 + get(agent.traits, "uncertainty_tolerance", 0.5))
+
+    # Apply market regime modifier
+    regime = get(market_conditions, "regime", "normal")
+    regime_mult = Dict("boom" => 1.2, "growth" => 1.1, "normal" => 1.0, "volatile" => 0.9, "crisis" => 0.7)
+    score *= get(regime_mult, regime, 1.0)
+
+    # Apply sector knowledge bonus
+    sector = coalesce(opportunity.sector, "unknown")
+    sector_knowledge = get(agent.resources.knowledge, sector, 0.1)
+    score *= 1.0 + sector_knowledge * 0.5
+
+    # --- Logic for Qualitative Insights (matches Python lines 2432-2469) ---
+    perceived_complexity = coalesce(opportunity.complexity, 0.5)
+    perceived_uncertainty = info.estimated_uncertainty
+    perceived_return = info.estimated_return
+    analytical_ability = get(agent.traits, "analytical_ability", 0.5)
+
+    for insight in info.insights
+        trait_multiplier = 1.0 + (analytical_ability - 0.5) * 0.2
+
+        if insight == "Requires specialized capabilities"
+            perceived_complexity *= 1.25 * trait_multiplier
+        elseif insight == "Strong first-mover advantages"
+            score *= 1.1 * trait_multiplier
+        elseif insight == "High competitive pressure detected"
+            perceived_uncertainty *= 1.15 * (2.0 - trait_multiplier)
+        elseif insight == "Untapped customer segment identified in emerging markets"
+            perceived_return *= 1.2 * trait_multiplier
+        end
+    end
+
+    # Final score adjustment based on perceptions (matches Python lines 2471-2477)
+    complexity_penalty = 1.0 - (perceived_complexity * (1.0 - analytical_ability) * 0.1)
+    score *= complexity_penalty
+
+    # Scale by AI's confidence in its analysis
+    score *= 0.5 + info.confidence * 0.5
 
     return max(0.1, score)
 end
@@ -2888,7 +2980,7 @@ function make_decision!(
     ai_cost_est = estimate_ai_cost(agent, ai_level; expected_calls=expected_calls)
     estimated_cost = op_cost + ai_cost_est
 
-    invest_utility = calculate_investment_utility(agent, opportunities, market_conditions, perception; ai_level=ai_level)
+    invest_utility = calculate_investment_utility(agent, opportunities, market_conditions, perception; ai_level=ai_level, info_system=info_system)
     innovate_utility = calculate_innovation_utility(agent, market_conditions, perception)
     explore_utility = calculate_exploration_utility(agent, perception; ai_level=ai_level)
     maintain_utility = calculate_maintain_utility(agent, market_conditions, perception; estimated_cost=estimated_cost)

@@ -32,7 +32,7 @@ mutable struct EmergentSimulation
     history::Vector{Dict{String,Any}}
     run_id::String
     output_dir::String
-    rng::AbstractRNG
+    rng::Random.AbstractRNG
     start_time::DateTime
 end
 
@@ -61,7 +61,13 @@ function EmergentSimulation(;
         # Fallback to random seed
         rand(1:2^31-1)
     end
-    rng = MersenneTwister(actual_seed)
+
+    # Create RNG - use NumpyRNG for cross-language reproducibility if configured
+    rng = if config.USE_NUMPY_RNG
+        NumpyRNG(actual_seed)
+    else
+        MersenneTwister(actual_seed)
+    end
 
     # Create uncertainty environment
     uncertainty_env = KnightianUncertaintyEnvironment(config; rng=rng)
@@ -201,12 +207,13 @@ function step!(sim::EmergentSimulation, round::Int)
     end
 
     # Phase 2: Process matured investments (matching Python BLOCK 1)
+    # Pass market_conditions with uncertainty_state (matches Python line 913)
     all_matured = Dict{String,Any}[]
     for agent in sim.agents
         if !agent.alive
             continue
         end
-        matured = process_matured_investments!(agent, sim.market, round)
+        matured = process_matured_investments!(agent, sim.market, round; market_conditions=market_conditions)
         for m in matured
             # Update tier beliefs based on investment outcomes
             ai_tier = get(m, "ai_level", get_ai_level(agent))
@@ -295,6 +302,24 @@ function step!(sim::EmergentSimulation, round::Int)
                 ai_level_used=get(action, "ai_level_used", "none")
             )
             push!(innovations, innov)
+            # Spawn derivative opportunity from successful innovation (Python match)
+            cash_multiple = Float64(get(action, "cash_multiple", 1.5))
+            spawn_opportunity_from_innovation!(sim.market, innov, cash_multiple)
+        end
+    end
+
+    # Create niche opportunities from exploration discoveries (Python match)
+    for action in agent_actions
+        if get(action, "action", "") == "explore" && get(action, "exploration_type", "") == "niche_discovery"
+            agent_id = get(action, "agent_id", 0)
+            niche_id = get(action, "discovered_sector", nothing)
+            if !isnothing(niche_id)
+                # Create 1-3 new opportunities in the discovered niche (matches Python)
+                n_niche_opps = rand(sim.rng, 1:3)
+                for _ in 1:n_niche_opps
+                    create_niche_opportunity(sim.market, string(niche_id), agent_id, round)
+                end
+            end
         end
     end
 
@@ -905,7 +930,7 @@ end
 """
 Create a Watts-Strogatz style agent network.
 """
-function AgentNetwork(n_agents::Int; n_neighbors::Int=6, rewiring_prob::Float64=0.1, rng::AbstractRNG=Random.default_rng())
+function AgentNetwork(n_agents::Int; n_neighbors::Int=6, rewiring_prob::Float64=0.1, rng::Random.AbstractRNG=Random.default_rng())
     adjacency = [Set{Int}() for _ in 1:n_agents]
 
     # Create ring lattice
@@ -970,7 +995,7 @@ mutable struct EnhancedSimulation
     run_id::String
     output_dir::String
     data_paths::Dict{String,String}
-    rng::AbstractRNG
+    rng::Random.AbstractRNG
     start_time::DateTime
     last_uncertainty_state::Union{Dict{String,Any},Nothing}
     previous_uncertainty_levels::Dict{String,Float64}
@@ -997,7 +1022,13 @@ function EnhancedSimulation(;
     else
         rand(1:2^31-1)
     end
-    rng = MersenneTwister(actual_seed)
+
+    # Create RNG - use NumpyRNG for cross-language reproducibility if configured
+    rng = if config.USE_NUMPY_RNG
+        NumpyRNG(actual_seed)
+    else
+        MersenneTwister(actual_seed)
+    end
 
     # Create components
     uncertainty_env = KnightianUncertaintyEnvironment(config; rng=rng)
@@ -1388,6 +1419,8 @@ function enhanced_step!(sim::EnhancedSimulation, round::Int)
                     ai_level_used=get(action, "ai_level_used", "none")
                 )
                 push!(innovations_this_round, innov)
+                # Spawn derivative opportunity from successful innovation (Python match)
+                spawn_opportunity_from_innovation!(sim.market, innov, cash_multiple)
             end
         end
 

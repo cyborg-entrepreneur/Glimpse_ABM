@@ -55,12 +55,12 @@ mutable struct MarketEnvironment
     _last_crowding_metrics::Dict{String,Any}  # Cache for uncertainty module
     _last_market_shift::Union{Dict{String,Any},Nothing}  # Market shift event tracking
     sector_pressure::Dict{String,Float64}  # Sector performance pressure from realized returns
-    rng::AbstractRNG
+    rng::Random.AbstractRNG
 end
 
 function MarketEnvironment(
     config::EmergentConfig;
-    rng::AbstractRNG = Random.default_rng()
+    rng::Random.AbstractRNG = Random.default_rng()
 )
     initialize!(config)  # Ensure SECTORS is populated
 
@@ -403,6 +403,9 @@ function step!(
     ai_invest_share = 1.0 - get(market.tier_invest_share, "none", 1.0)
     update_market_dynamics!(market, agent_actions, total_investment, ai_invest_share)
 
+    # Update clearing metrics (demand vs capacity ratios) - Python match
+    update_clearing_metrics!(market, agent_actions)
+
     # Check for market shift events (Python match)
     shift_event = _check_market_shift_event!(market)
     if !isnothing(shift_event)
@@ -517,6 +520,9 @@ end
 Get current market conditions dictionary.
 """
 function get_market_conditions(market::MarketEnvironment)::Dict{String,Any}
+    # Get combination diversity metrics (matches Python implementation)
+    combo_hhi, sector_hhi = get_combination_diversity_metrics(market)
+
     return Dict{String,Any}(
         "regime" => market.market_regime,
         "volatility" => market.volatility,
@@ -530,6 +536,11 @@ function get_market_conditions(market::MarketEnvironment)::Dict{String,Any}
         "sector_clearing_index" => market.sector_clearing_index,
         "aggregate_clearing_ratio" => market.aggregate_clearing_ratio,
         "crowding_metrics" => market.crowding_metrics,
+        "combo_hhi" => combo_hhi,
+        "sector_hhi" => sector_hhi,
+        "sector_demand_adjustments" => market.sector_demand_adjustments,
+        "sector_pressure" => market.sector_pressure,
+        "tier_capital_flow" => market.tier_capital_flow,
         "round" => market.current_round
     )
 end
@@ -1309,8 +1320,8 @@ function create_niche_opportunity(
         latent_failure_potential=clamp(latent_failure, 0.1, 0.95),
         complexity=rand(market.rng, Uniform(0.4, 0.8)),
         discovered=false,
+        created_by=discoverer_id,
         discovery_round=round_num,
-        creator_id=discoverer_id,
         sector=branch_name,
         capital_requirements=capital_req,
         time_to_maturity=maturity,
@@ -1360,16 +1371,19 @@ function spawn_opportunity_from_innovation!(
     cash_multiple::Float64
 )
     sector = isnothing(innovation.sector) ? "tech" : innovation.sector
-    scarcity = clamp(innovation.scarcity, 0.0, 1.0)
-    novelty = clamp(innovation.novelty, 0.0, 1.0)
+    scarcity_raw = isnothing(innovation.scarcity) ? 0.5 : Float64(innovation.scarcity)
+    scarcity = clamp(scarcity_raw, 0.0, 1.0)
+    novelty_raw = isnothing(innovation.novelty) ? 0.5 : Float64(innovation.novelty)
+    novelty = clamp(novelty_raw, 0.0, 1.0)
 
     scarcity_scale = 0.85 + scarcity * 0.7
     novelty_scale = 0.9 + novelty * 0.6
+    quality_raw = isnothing(innovation.quality) ? 0.5 : Float64(innovation.quality)
 
     intrinsic_multiple = clamp(
         1.05 + (cash_multiple - 1.0) * 0.6,
         0.8, 3.2
-    ) * scarcity_scale * novelty_scale * (0.9 + clamp(innovation.quality, 0.0, 1.5) * 0.2)
+    ) * scarcity_scale * novelty_scale * (0.9 + clamp(quality_raw, 0.0, 1.5) * 0.2)
 
     derived_multiplier = clamp(intrinsic_multiple, 0.65, 3.8)
     base_failure_signal = clamp(0.35 - scarcity * 0.2 - novelty * 0.1, 0.04, 0.9)
@@ -1388,10 +1402,10 @@ function spawn_opportunity_from_innovation!(
         id=opp_id,
         latent_return_potential=clamp(latent_return, 0.5, 25.0),
         latent_failure_potential=clamp(latent_failure, 0.1, 0.95),
-        complexity=clamp(0.3 + innovation.quality * 0.3, 0.3, 1.0),
+        complexity=clamp(0.3 + quality_raw * 0.3, 0.3, 1.0),
         discovered=false,
         discovery_round=market.current_round,
-        creator_id=innovation.creator_id,
+        created_by=innovation.creator_id,
         config=market.config,
         sector=branch_name,
         capital_requirements=capital_req,

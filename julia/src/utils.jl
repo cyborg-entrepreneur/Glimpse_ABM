@@ -15,7 +15,7 @@ using Distributions
 """
 Sample a trait value from a distribution specification.
 """
-function sample_trait(dist_spec::TraitDistribution; rng::AbstractRNG = Random.default_rng())::Float64
+function sample_trait(dist_spec::TraitDistribution; rng::Random.AbstractRNG = Random.default_rng())::Float64
     dist_type = dist_spec.dist
     params = dist_spec.params
 
@@ -49,7 +49,7 @@ end
 """
 Sample all traits for an agent based on configuration.
 """
-function sample_all_traits(config::EmergentConfig; rng::AbstractRNG = Random.default_rng())::Dict{String,Float64}
+function sample_all_traits(config::EmergentConfig; rng::Random.AbstractRNG = Random.default_rng())::Dict{String,Float64}
     traits = Dict{String,Float64}()
     for (trait_name, dist_spec) in config.TRAIT_DISTRIBUTIONS
         traits[trait_name] = sample_trait(dist_spec; rng=rng)
@@ -242,7 +242,7 @@ end
 """
 Weighted random choice from an array.
 """
-function weighted_choice(items::Vector{T}, weights::Vector{Float64}; rng::AbstractRNG = Random.default_rng()) where T
+function weighted_choice(items::Vector{T}, weights::Vector{Float64}; rng::Random.AbstractRNG = Random.default_rng()) where T
     if isempty(items)
         error("Cannot choose from empty array")
     end
@@ -263,7 +263,7 @@ Sample next regime based on transition probabilities.
 function sample_next_regime(
     current_regime::String,
     transitions::Dict{String,Dict{String,Float64}};
-    rng::AbstractRNG = Random.default_rng()
+    rng::Random.AbstractRNG = Random.default_rng()
 )::String
     if !haskey(transitions, current_regime)
         return current_regime

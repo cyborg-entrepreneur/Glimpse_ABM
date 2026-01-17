@@ -161,7 +161,7 @@ function realized_return(
     opp::Opportunity,
     market_conditions::Dict{String,Any},
     investor_tier::Union{String,Nothing} = nothing;
-    rng::AbstractRNG = Random.default_rng()
+    rng::Random.AbstractRNG = Random.default_rng()
 )::Float64
     # Base multiple from latent potential
     base_multiple = clamp(coalesce(opp.latent_return_potential, 1.0), 0.3, 10.0)
@@ -932,7 +932,7 @@ function check_matured_investments!(
     portfolio::Portfolio,
     current_round::Int,
     market_conditions::Dict{String,Any};
-    rng::AbstractRNG = Random.default_rng()
+    rng::Random.AbstractRNG = Random.default_rng()
 )::Vector{Dict{String,Any}}
     newly_matured = Dict{String,Any}[]
 
@@ -1111,7 +1111,7 @@ mutable struct UncertaintyResponseProfile
     outcome_history::Dict{String,Vector{Tuple{Float64,Float64,Bool}}}
 end
 
-function UncertaintyResponseProfile(; rng::AbstractRNG = Random.default_rng())
+function UncertaintyResponseProfile(; rng::Random.AbstractRNG = Random.default_rng())
     UncertaintyResponseProfile(
         0.15,
         60,
@@ -1139,7 +1139,7 @@ function get_response_factor(
     uncertainty_type::String,
     uncertainty_level::Float64;
     explore::Bool = true,
-    rng::AbstractRNG = Random.default_rng()
+    rng::Random.AbstractRNG = Random.default_rng()
 )::Float64
     if explore && rand(rng) < profile.exploration_rate
         experimental_weight = rand(rng)
@@ -1308,7 +1308,7 @@ Select AI tier using Thompson Sampling.
 function select_tier_thompson(
     beliefs::AITierBeliefs;
     available_tiers::Vector{String} = ["none", "basic", "advanced", "premium"],
-    rng::AbstractRNG = Random.default_rng()
+    rng::Random.AbstractRNG = Random.default_rng()
 )::String
     best_tier = "none"
     best_sample = -Inf

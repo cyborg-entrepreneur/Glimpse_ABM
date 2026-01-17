@@ -86,7 +86,7 @@ end
 """
 Sample a random combination signature from history.
 """
-function sample_signature(tracker::CombinationTracker; lookback::Int=100, rng::AbstractRNG=Random.default_rng())::Union{String,Nothing}
+function sample_signature(tracker::CombinationTracker; lookback::Int=100, rng::Random.AbstractRNG=Random.default_rng())::Union{String,Nothing}
     if isempty(tracker.combination_history)
         return nothing
     end
@@ -164,7 +164,7 @@ function attempt_innovation!(
     ai_level::String="none",
     uncertainty_perception::Union{Dict{String,Any},Nothing}=nothing,
     decision_perception::Union{Dict{String,Any},Nothing}=nothing,
-    rng::AbstractRNG=Random.default_rng()
+    rng::Random.AbstractRNG=Random.default_rng()
 )::Union{Innovation,Nothing}
     # Get accessible knowledge
     accessible_knowledge = get_accessible_knowledge(
@@ -355,7 +355,7 @@ function determine_innovation_type(
     market_conditions::Dict{String,Any};
     ai_assisted::Bool=false,
     experience_units::Float64=0.0,
-    rng::AbstractRNG=Random.default_rng()
+    rng::Random.AbstractRNG=Random.default_rng()
 )::String
     base_probabilities = Dict{String,Float64}(
         "incremental" => 0.4 + max(experience_units, 0) * 0.01,
@@ -388,7 +388,7 @@ end
 """
 Get the number of knowledge components for an innovation type.
 """
-function get_component_count(innovation_type::String; rng::AbstractRNG=Random.default_rng())::Int
+function get_component_count(innovation_type::String; rng::Random.AbstractRNG=Random.default_rng())::Int
     if innovation_type == "incremental"
         return rand(rng) < 0.7 ? 2 : 3
     elseif innovation_type == "architectural"
@@ -411,7 +411,7 @@ function select_knowledge_combination(
     agent_traits::Dict{String,Float64},
     ai_learning_profile::Union{AILearningProfile,Nothing},
     ai_level::String;
-    rng::AbstractRNG=Random.default_rng()
+    rng::Random.AbstractRNG=Random.default_rng()
 )::Union{Vector{Knowledge},Nothing}
     if isempty(accessible_knowledge) || length(accessible_knowledge) < n_components
         return nothing
@@ -580,7 +580,7 @@ function create_innovation(
     ai_assisted::Bool=false,
     ai_domains_used::Vector{String}=String[],
     sector::Union{String,Nothing}=nothing,
-    rng::AbstractRNG=Random.default_rng()
+    rng::Random.AbstractRNG=Random.default_rng()
 )::Innovation
     knowledge_levels = [k.level for k in knowledge_pieces]
     base_quality = mean(knowledge_levels) * 0.7 + rand(rng) * 0.2 + 0.2
@@ -641,7 +641,7 @@ function evaluate_innovation_success!(
     innovation::Innovation,
     market_conditions::Dict{String,Any},
     market_innovations::Vector{Innovation};
-    rng::AbstractRNG=Random.default_rng()
+    rng::Random.AbstractRNG=Random.default_rng()
 )::Tuple{Bool,Float64,Float64}
     potential = calculate_potential(innovation, market_conditions)
 

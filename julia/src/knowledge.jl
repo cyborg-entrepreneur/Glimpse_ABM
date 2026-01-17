@@ -317,7 +317,7 @@ function get_accessible_knowledge(
     ai_level::String="none";
     agent_resources=nothing,  # AgentResources - untyped to avoid circular deps
     agent_traits::Union{Dict{String,Float64},Nothing}=nothing,
-    rng::AbstractRNG=Random.default_rng()
+    rng::Random.AbstractRNG=Random.default_rng()
 )::Vector{Knowledge}
     ensure_starter_knowledge!(kb, agent_id)
     agent_knowledge_ids = kb.agent_knowledge[agent_id]
@@ -515,7 +515,7 @@ function learn_from_failure!(
     agent_id::Int,
     innovation::Innovation;
     agent_resources=nothing,  # AgentResources - untyped to avoid circular deps
-    rng::AbstractRNG=Random.default_rng()
+    rng::Random.AbstractRNG=Random.default_rng()
 )
     if !haskey(kb.agent_knowledge, agent_id)
         kb.agent_knowledge[agent_id] = Set{String}()
@@ -875,7 +875,7 @@ function apply_tier_decay!(
     kb::KnowledgeBase,
     agent_id::Int,
     ai_level::String;
-    rng::AbstractRNG=Random.default_rng()
+    rng::Random.AbstractRNG=Random.default_rng()
 )
     tier = normalize_ai_label(ai_level)
 

@@ -92,13 +92,13 @@ mutable struct KnightianUncertaintyEnvironment
     # Last alive agents count
     _last_alive_agents::Int
 
-    rng::AbstractRNG
+    rng::Random.AbstractRNG
 end
 
 function KnightianUncertaintyEnvironment(
     config::EmergentConfig;
     knowledge_base::Union{Nothing,Any} = nothing,
-    rng::AbstractRNG = Random.default_rng()
+    rng::Random.AbstractRNG = Random.default_rng()
 )
     history_window = max(5, Int(getfield_default(config, :NOVELTY_HISTORY_WINDOW, 15)))
     short_term_window = Int(getfield_default(config, :UNCERTAINTY_SHORT_WINDOW, 5))
@@ -514,8 +514,8 @@ function _summarize_actions(env::KnightianUncertaintyEnvironment, agent_actions:
     summary["tier_adoption_rate"] = tier_adoption_rate
 
     # Get combination diversity metrics from market if available
-    if !isnothing(market) && hasfield(typeof(market), :get_combination_diversity_metrics)
-        combo_hhi, sector_hhi = market.get_combination_diversity_metrics()
+    if !isnothing(market)
+        combo_hhi, sector_hhi = get_combination_diversity_metrics(market)
         summary["combo_hhi"] = combo_hhi
         summary["sector_hhi"] = sector_hhi
     end
@@ -527,8 +527,8 @@ end
 Compute component scarcity from knowledge base.
 """
 function _compute_component_scarcity(env::KnightianUncertaintyEnvironment)::Float64
-    if !isnothing(env.knowledge_base) && hasfield(typeof(env.knowledge_base), :get_component_scarcity_metric)
-        raw_scarcity = Float64(env.knowledge_base.get_component_scarcity_metric())
+    if !isnothing(env.knowledge_base)
+        raw_scarcity = Float64(get_component_scarcity_metric(env.knowledge_base))
     else
         raw_scarcity = Float64(get(env.agentic_novelty_state, "scarcity_signal", 0.5))
     end
@@ -712,8 +712,8 @@ function measure_uncertainty_state!(
     end
 
     # Calculate knowledge-based metrics
-    avg_knowledge = if !isnothing(env.knowledge_base) && hasfield(typeof(env.knowledge_base), :get_average_agent_knowledge)
-        Float64(env.knowledge_base.get_average_agent_knowledge())
+    avg_knowledge = if !isnothing(env.knowledge_base)
+        Float64(get_average_agent_knowledge(env.knowledge_base))
     else
         0.0
     end

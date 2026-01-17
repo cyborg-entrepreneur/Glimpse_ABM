@@ -112,7 +112,7 @@ end
 """
 Generate false insights for hallucination modeling.
 """
-function generate_false_insights(domain::String; rng::AbstractRNG=Random.default_rng())::Vector{String}
+function generate_false_insights(domain::String; rng::Random.AbstractRNG=Random.default_rng())::Vector{String}
     false_insight_templates = Dict(
         "market_analysis" => [
             "Untapped customer segment identified in emerging markets",
@@ -154,7 +154,7 @@ function get_information(
     opp::Opportunity,
     ai_level::String;
     agent_id::Union{Int,Nothing}=nothing,
-    rng::AbstractRNG=Random.default_rng()
+    rng::Random.AbstractRNG=Random.default_rng()
 )::Information
     cache_key = (opp.id, ai_level)
 
@@ -278,7 +278,7 @@ function get_human_information(
     sys::InformationSystem,
     opp::Opportunity,
     agent_traits::Dict{String,Float64};
-    rng::AbstractRNG=Random.default_rng()
+    rng::Random.AbstractRNG=Random.default_rng()
 )::Information
     # Human quality based on traits
     quality = (
@@ -348,7 +348,7 @@ function get_enhanced_ai_analysis(
     bias::Float64,
     return_range::Tuple{Float64,Float64},
     uncertainty_range::Tuple{Float64,Float64};
-    rng::AbstractRNG=Random.default_rng()
+    rng::Random.AbstractRNG=Random.default_rng()
 )
     actual_accuracy = clamp(randn(rng) * 0.1 + base_accuracy, 0.0, 1.0)
 
@@ -383,7 +383,7 @@ Get stochastic hallucination rate with domain-specific adjustments.
 function get_stochastic_hallucination_rate(
     base_rate::Float64,
     domain::String;
-    rng::AbstractRNG=Random.default_rng()
+    rng::Random.AbstractRNG=Random.default_rng()
 )::Float64
     # Beta distribution parameters based on base rate
     if base_rate < 0.1

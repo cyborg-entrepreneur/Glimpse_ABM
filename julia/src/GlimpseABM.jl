@@ -51,6 +51,9 @@ include("simulation.jl")
 include("utils.jl")
 include("io.jl")
 
+# NumPy-compatible RNG for cross-language reproducibility
+include("numpy_rng.jl")
+
 # Causal inference module
 include("../causal/causal.jl")
 using .Causal
@@ -117,6 +120,10 @@ export get_capital, set_capital!, get_ai_level
 export stable_sigmoid, safe_exp, safe_mean, fast_mean
 export normalize_ai_label, compute_hhi, compute_gini
 export perceive_uncertainty, measure_uncertainty_state!
+
+# Exports - NumPy-compatible RNG
+export NumpyRNG, numpy_rand, numpy_randn, numpy_randint, numpy_seed!
+export numpy_gamma, numpy_beta, numpy_uniform, numpy_exponential
 
 # Exports - Causal inference
 export cohens_d, cliffs_delta, glass_delta
