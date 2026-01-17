@@ -86,6 +86,14 @@ mutable struct EmergentAgent
     failure_count::Int
     innovation_count::Int
 
+    # Distress tracking (matches Python _evaluate_failure_conditions)
+    liquidity_streak::Int       # Rounds below liquidity floor
+    equity_streak::Int          # Rounds below equity floor
+    burn_streak::Int            # Rounds with high leverage + negative burn
+    burn_history::Vector{Float64}  # Last N rounds of capital deltas (max BURN_HISTORY_WINDOW)
+    failure_reason::Union{String,Nothing}  # Reason for failure if dead
+    operating_cost_estimate::Float64  # Latest operating cost estimate for liquidity floor calculation
+
     # Decision state
     uncertainty_response::UncertaintyResponseProfile
     action_history::Vector{String}
@@ -164,6 +172,12 @@ function EmergentAgent(
         0,  # success_count
         0,  # failure_count
         0,  # innovation_count
+        0,  # liquidity_streak (distress tracking)
+        0,  # equity_streak (distress tracking)
+        0,  # burn_streak (distress tracking)
+        Float64[],  # burn_history (distress tracking)
+        nothing,  # failure_reason
+        config.BASE_OPERATIONAL_COST,  # operating_cost_estimate
         UncertaintyResponseProfile(rng=rng),
         String[],  # action_history
         "maintain",  # last_action
@@ -197,39 +211,142 @@ function set_capital!(agent::EmergentAgent, value::Float64)
 end
 
 """
+Evaluate failure conditions matching Python _evaluate_failure_conditions exactly.
+
+Four failure modes:
+1. liquidity_failure: capital < liquidity_floor for grace_period rounds
+2. equity_failure: capital_ratio < ratio_floor for grace_period rounds
+3. funding_shock: 5% random failure when severely depressed
+4. burnout_failure: high leverage + negative burn rate for grace_period rounds
+
+Returns failure reason string or nothing if agent survives.
+"""
+function evaluate_failure_conditions!(agent::EmergentAgent, capital_after::Union{Float64,Nothing}=nothing)::Union{String,Nothing}
+    if !agent.alive
+        return agent.failure_reason
+    end
+
+    if isnothing(capital_after)
+        capital_after = Float64(agent.resources.capital)
+    end
+
+    initial_equity = max(agent.resources.performance.initial_equity, 1.0)
+    grace_period = max(1, agent.config.INSOLVENCY_GRACE_ROUNDS)
+
+    reason::Union{String,Nothing} = nothing
+
+    # Get operating cost estimate (default to BASE_OPERATIONAL_COST if not set)
+    operating_cost = agent.operating_cost_estimate
+    if operating_cost <= 0.0
+        operating_cost = agent.config.BASE_OPERATIONAL_COST
+    end
+
+    reserve_months = max(1, agent.config.OPERATING_RESERVE_MONTHS)
+
+    # Liquidity floor: max of survival threshold and operating cost reserve
+    liquidity_floor = max(
+        agent.config.SURVIVAL_THRESHOLD,
+        operating_cost * reserve_months
+    )
+
+    # AI trust relief factor
+    ai_level = get_ai_level(agent)
+    relief_factor = 1.0
+    if ai_level != "none"
+        trust = clamp(get(agent.traits, "ai_trust", 0.5), 0.0, 1.0)
+        discount = clamp(agent.config.AI_TRUST_RESERVE_DISCOUNT, 0.0, 0.9)
+        relief_factor = clamp(1.0 - trust * discount, 0.5, 1.0)
+        liquidity_floor *= relief_factor
+    end
+
+    # Check 1: Liquidity failure
+    if capital_after < liquidity_floor
+        agent.liquidity_streak += 1
+        if agent.liquidity_streak >= grace_period
+            reason = "liquidity_failure"
+        end
+    else
+        agent.liquidity_streak = 0
+    end
+
+    # Check 2: Equity failure (capital ratio)
+    ratio_floor = agent.config.SURVIVAL_CAPITAL_RATIO * relief_factor
+    capital_ratio = capital_after / initial_equity
+
+    if isnothing(reason)
+        if capital_ratio < ratio_floor
+            agent.equity_streak += 1
+            if agent.equity_streak >= grace_period
+                reason = "equity_failure"
+            end
+        else
+            agent.equity_streak = 0
+        end
+    end
+
+    # Check 3: Funding shock (5% random failure when severely depressed)
+    if isnothing(reason) && capital_ratio < ratio_floor * 0.85 && rand(agent.rng) < 0.05
+        reason = "funding_shock"
+    end
+
+    # Check 4: Burnout failure (high leverage + negative burn rate)
+    burn_window = agent.config.BURN_HISTORY_WINDOW
+    leverage_cap = agent.config.BURN_LEVERAGE_CAP
+    burn_threshold = agent.config.BURN_FAILURE_THRESHOLD
+
+    leverage = 0.0
+    if capital_after > 0
+        leverage = agent.locked_capital / max(capital_after, 1e-6)
+    end
+
+    if isnothing(reason) && length(agent.burn_history) == burn_window && leverage >= leverage_cap
+        burn_avg = mean(agent.burn_history)
+        if burn_avg < -burn_threshold * initial_equity
+            agent.burn_streak += 1
+            if agent.burn_streak >= grace_period
+                reason = "burnout_failure"
+            end
+        else
+            agent.burn_streak = 0
+        end
+    elseif length(agent.burn_history) < burn_window || leverage < leverage_cap
+        agent.burn_streak = 0
+    end
+
+    return reason
+end
+
+"""
+Update burn history with capital delta for this round.
+Should be called each round with the change in capital.
+"""
+function update_burn_history!(agent::EmergentAgent, capital_delta::Float64)
+    burn_window = agent.config.BURN_HISTORY_WINDOW
+    push!(agent.burn_history, capital_delta)
+    # Keep only the last burn_window entries
+    while length(agent.burn_history) > burn_window
+        popfirst!(agent.burn_history)
+    end
+end
+
+"""
 Check if agent is alive and above survival threshold.
-Matches Python with BOTH absolute threshold AND capital ratio check.
+Now uses evaluate_failure_conditions! for full Python compatibility.
 """
 function check_survival!(agent::EmergentAgent, round::Int)::Bool
     if !agent.alive
         return false
     end
 
-    capital = agent.resources.capital
-    initial_equity = max(agent.resources.performance.initial_equity, 1.0)
-    capital_ratio = capital / initial_equity
+    reason = evaluate_failure_conditions!(agent)
 
-    # Check 1: Absolute survival threshold
-    survival_threshold = agent.config.SURVIVAL_THRESHOLD
-
-    # Check 2: Capital ratio threshold (matches Python SURVIVAL_CAPITAL_RATIO)
-    # Agent fails if capital drops below this fraction of initial equity
-    ratio_threshold = agent.config.SURVIVAL_CAPITAL_RATIO
-
-    # Agent is in trouble if EITHER threshold is breached
-    below_threshold = capital < survival_threshold || capital_ratio < ratio_threshold
-
-    if below_threshold
-        agent.insolvency_rounds += 1
-        if agent.insolvency_rounds >= agent.config.INSOLVENCY_GRACE_ROUNDS
-            agent.alive = false
-            return false
-        end
-    else
-        agent.insolvency_rounds = 0
-        agent.survival_rounds = round
+    if !isnothing(reason)
+        agent.alive = false
+        agent.failure_reason = reason
+        return false
     end
 
+    agent.survival_rounds = round
     return true
 end
 
@@ -1707,14 +1824,22 @@ end
 
 """
 Estimate operational costs for the agent (matches Python _estimate_operational_costs).
+Now accepts optional market parameter for competition calculation.
 """
-function estimate_operational_costs(agent::EmergentAgent, market::MarketEnvironment)::Float64
+function estimate_operational_costs(agent::EmergentAgent, market::Union{MarketEnvironment,Nothing}=nothing)::Float64
     # Portfolio competition pressure
     portfolio_competition = 0.0
     if !isempty(agent.active_investments)
         competitions = Float64[]
         for inv in agent.active_investments
+            # Try to get opportunity from investment or from market
             opp = get(inv, "opportunity", nothing)
+            if isnothing(opp) && !isnothing(market)
+                opp_id = get(inv, "opportunity_id", nothing)
+                if !isnothing(opp_id)
+                    opp = get(market.opportunity_map, opp_id, nothing)
+                end
+            end
             if !isnothing(opp)
                 push!(competitions, Float64(opp.competition))
             end
@@ -1738,14 +1863,14 @@ function estimate_operational_costs(agent::EmergentAgent, market::MarketEnvironm
     elseif isa(operating_range, Vector) && length(operating_range) >= 2
         sector_mult = 0.5 * (operating_range[1] + operating_range[2])
     else
-        sector_mult = 0.125  # Default
+        sector_mult = 0.125  # Default fallback
     end
 
     monthly_base_cost = base_cost * sector_mult
     competition_cost = portfolio_competition * agent.config.COMPETITION_COST_MULTIPLIER
     total_cost = monthly_base_cost + competition_cost
 
-    # AI tier efficiency modifier
+    # AI tier efficiency modifier (matches Python exactly)
     ai_level = get_ai_level(agent)
     ai_efficiency = Dict("none" => 1.0, "basic" => 1.08, "advanced" => 0.94, "premium" => 0.88)
     eff_mult = get(ai_efficiency, ai_level, 1.0)
@@ -2144,40 +2269,52 @@ end
 
 """
 Evaluate portfolio opportunities and return ranked list.
-Includes hallucination-aware adjustments based on AI tier.
+Uses InformationSystem for proper AI analysis with domain-specific accuracy,
+hallucination modeling, and per-use cost tracking.
+
+Matches Python _evaluate_opportunities flow:
+1. Call get_information() for each opportunity (or get_human_information for none)
+2. Track per-use costs for AI tiers with per_use cost type
+3. Use Information object to guide scoring
+4. Store AI analysis metadata for outcome-based learning
 """
 function evaluate_portfolio_opportunities(
     agent::EmergentAgent,
     opportunities::Vector{Opportunity},
     market_conditions::Dict{String,Any},
     perception::Dict{String,Any};
-    ai_level::String = "none"
+    ai_level::String = "none",
+    info_system::Union{InformationSystem,Nothing} = nothing
 )::Vector{Dict{String,Any}}
     if isempty(opportunities)
         return Dict{String,Any}[]
     end
 
     evaluations = Dict{String,Any}[]
+    total_per_use_cost = 0.0
 
-    # Get AI tier hallucination characteristics (matches Python information.py)
-    # Higher tier AI has lower base hallucination rate but can still hallucinate
+    # Get AI tier configuration
     ai_cfg = get(agent.config.AI_LEVELS, ai_level, agent.config.AI_LEVELS["none"])
     info_quality = Float64(ai_cfg.info_quality)
+    cost_intensity = agent.config.AI_COST_INTENSITY
 
-    # Hallucination risk factor: lower quality = higher risk of inflated scores
-    # This models how AI-generated information may contain optimistic hallucinations
-    hallucination_risk = max(0.0, 0.5 - info_quality * 0.5)  # 0.5 for none, ~0.1 for premium
+    # Per-use cost tracking (matches Python)
+    per_use_cost_per_call = 0.0
+    if ai_level != "none" && ai_cfg.cost_type == "per_use"
+        per_use_cost_per_call = ai_cfg.per_use_cost * cost_intensity
+    end
 
-    # Filter opportunities based on AI level
+    # Fallback hallucination risk when no info_system
+    fallback_hallucination_risk = max(0.0, 0.5 - info_quality * 0.5)
+
+    # Filter opportunities based on AI level (matches Python)
     opp_pool = copy(opportunities)
     if length(opp_pool) > 1
         if ai_level in ["premium", "advanced"]
-            # Sort by quality, take top portion
             sort!(opp_pool, by=o -> o.latent_return_potential, rev=true)
             cutoff = max(1, Int(floor(length(opp_pool) * (ai_level == "premium" ? 0.65 : 0.8))))
             opp_pool = opp_pool[1:cutoff]
         else
-            # Random shuffle, discard some
             shuffle!(agent.rng, opp_pool)
             discard = ai_level == "basic" ? 0.25 : 0.4
             keep = max(1, Int(floor(length(opp_pool) * (1.0 - discard))))
@@ -2186,51 +2323,117 @@ function evaluate_portfolio_opportunities(
     end
 
     for opp in opp_pool
+        # ========================================================================
+        # GET AI INFORMATION (matches Python information.get_information flow)
+        # ========================================================================
+        info::Union{Information,Nothing} = nothing
+        contains_hallucination = false
+        actual_accuracy = 0.5
+        ai_estimated_return = opp.latent_return_potential
+        ai_estimated_uncertainty = opp.latent_failure_potential
+        ai_confidence = 0.5
+        analysis_domain = "uncertainty_evaluation"
+
+        if !isnothing(info_system)
+            # Use proper InformationSystem (matches Python)
+            if ai_level == "none"
+                info = get_human_information(info_system, opp, agent.traits; rng=agent.rng)
+            else
+                info = get_information(info_system, opp, ai_level; agent_id=agent.id, rng=agent.rng)
+                # Track per-use cost for each evaluation
+                total_per_use_cost += per_use_cost_per_call
+            end
+
+            # Extract information fields
+            ai_estimated_return = info.estimated_return
+            ai_estimated_uncertainty = info.estimated_uncertainty
+            ai_confidence = info.confidence
+            contains_hallucination = info.contains_hallucination
+            actual_accuracy = info.actual_accuracy
+            analysis_domain = info.domain
+        end
+
+        # Base score from opportunity characteristics
         base_score = evaluate_opportunity_basic(agent, opp, market_conditions)
         final_score = apply_uncertainty_adjustments(agent, base_score, opp, perception)
 
         # ========================================================================
-        # HALLUCINATION-AWARE ADJUSTMENTS (matches Python information integration)
+        # INFORMATION-BASED ADJUSTMENTS
         # ========================================================================
-        # In Python, hallucinations in AI info can inflate estimated returns.
-        # We model this by applying a stochastic adjustment based on hallucination risk.
-        # Higher hallucination risk = chance of artificially inflated or deflated scores.
+        if !isnothing(info)
+            # Use AI-estimated return to adjust score (matches Python)
+            return_adjustment = (ai_estimated_return - 1.0) * ai_confidence * 0.5
+            final_score += return_adjustment
 
-        if ai_level != "none" && hallucination_risk > 0
-            # Agent's analytical ability affects susceptibility to hallucinations
-            analytical_ability = Float64(get(agent.traits, "analytical_ability", 0.5))
-            susceptibility = 1.0 - analytical_ability * 0.5  # More analytical = less susceptible
+            # Uncertainty penalty (higher AI-estimated uncertainty = lower score)
+            uncertainty_penalty = ai_estimated_uncertainty * (1.0 - ai_confidence) * 0.3
+            final_score -= uncertainty_penalty
 
-            # Stochastic hallucination effect (can inflate or deflate score)
-            if rand(agent.rng) < hallucination_risk * susceptibility
-                # Apply hallucination modifier: could be optimistic (+) or pessimistic (-)
-                # Bias towards optimistic (matches Python where hallucinations often inflate returns)
-                halluc_modifier = if rand(agent.rng) < 0.65  # 65% optimistic hallucinations
-                    1.0 + rand(agent.rng) * 0.25  # Up to 25% inflation
-                else
-                    1.0 - rand(agent.rng) * 0.15  # Up to 15% deflation
+            # Hallucination effect (when present, can inflate or deflate)
+            if contains_hallucination
+                analytical_ability = Float64(get(agent.traits, "analytical_ability", 0.5))
+                susceptibility = 1.0 - analytical_ability * 0.5
+
+                if rand(agent.rng) < susceptibility
+                    # Hallucination modifier (biased optimistic, matches Python)
+                    halluc_modifier = if rand(agent.rng) < 0.65
+                        1.0 + rand(agent.rng) * 0.25
+                    else
+                        1.0 - rand(agent.rng) * 0.15
+                    end
+                    final_score *= halluc_modifier
                 end
-                final_score *= halluc_modifier
             end
+        else
+            # Fallback: use simplified hallucination modeling (no info_system)
+            if ai_level != "none" && fallback_hallucination_risk > 0
+                analytical_ability = Float64(get(agent.traits, "analytical_ability", 0.5))
+                susceptibility = 1.0 - analytical_ability * 0.5
 
-            # Confidence adjustment for hallucination uncertainty
-            # Add hidden uncertainty factor to score based on hallucination risk
-            hidden_uncertainty = hallucination_risk * (1.0 - info_quality) * opp.complexity
-            final_score *= (1.0 - hidden_uncertainty * 0.2)
+                if rand(agent.rng) < fallback_hallucination_risk * susceptibility
+                    halluc_modifier = if rand(agent.rng) < 0.65
+                        1.0 + rand(agent.rng) * 0.25
+                    else
+                        1.0 - rand(agent.rng) * 0.15
+                    end
+                    final_score *= halluc_modifier
+                end
+
+                hidden_uncertainty = fallback_hallucination_risk * (1.0 - info_quality) * opp.complexity
+                final_score *= (1.0 - hidden_uncertainty * 0.2)
+            end
         end
 
         final_score = max(0.01, final_score)
 
-        push!(evaluations, Dict{String,Any}(
+        # Build evaluation record with AI analysis metadata (for outcome tracking)
+        eval_record = Dict{String,Any}(
             "opportunity" => opp,
             "final_score" => final_score,
             "ai_level_used" => ai_level,
-            "hallucination_risk" => hallucination_risk
-        ))
+            "ai_estimated_return" => ai_estimated_return,
+            "ai_estimated_uncertainty" => ai_estimated_uncertainty,
+            "ai_confidence" => ai_confidence,
+            "ai_contains_hallucination" => contains_hallucination,
+            "ai_actual_accuracy" => actual_accuracy,
+            "ai_analysis_domain" => analysis_domain
+        )
+
+        # Store Information object for outcome-based learning (matches Python _source_analysis)
+        if !isnothing(info)
+            eval_record["_source_info"] = info
+        end
+
+        push!(evaluations, eval_record)
     end
 
     # Sort by score descending
     sort!(evaluations, by=e -> e["final_score"], rev=true)
+
+    # Store total per-use cost in first evaluation (to be extracted by caller)
+    if !isempty(evaluations)
+        evaluations[1]["ai_per_use_cost"] = total_per_use_cost
+    end
 
     return evaluations
 end
@@ -2427,7 +2630,8 @@ function make_decision!(
     uncertainty_env::Union{KnightianUncertaintyEnvironment,Nothing} = nothing,
     neighbor_agents::Vector{EmergentAgent} = EmergentAgent[],
     ai_level_override::Union{String,Nothing} = nothing,
-    innovation_engine::Union{InnovationEngine,Nothing} = nothing
+    innovation_engine::Union{InnovationEngine,Nothing} = nothing,
+    info_system::Union{InformationSystem,Nothing} = nothing
 )::Dict{String,Any}
     if !agent.alive
         return Dict{String,Any}(
@@ -2581,10 +2785,17 @@ function make_decision!(
         popfirst!(agent.recent_actions)
     end
 
+    # Track AI per-use cost
+    ai_per_use_cost_tracked = Ref(0.0)
+
     # Execute chosen action
     outcome = if chosen_action == "invest" && !isempty(opportunities)
         # Use full portfolio decision with capital constraints and position sizing
-        evals = evaluate_portfolio_opportunities(agent, opportunities, market_conditions, perception; ai_level=ai_level)
+        evals = evaluate_portfolio_opportunities(agent, opportunities, market_conditions, perception;
+                                                 ai_level=ai_level, info_system=info_system)
+        # Extract per-use cost from evaluations (stored in first eval by evaluate_portfolio_opportunities)
+        ai_per_use_cost_tracked[] = !isempty(evals) ? Float64(get(evals[1], "ai_per_use_cost", 0.0)) : 0.0
+
         if !isempty(evals)
             # Use make_portfolio_decision for hurdle rate and confidence-scaled sizing
             portfolio_decision = make_portfolio_decision(
@@ -2620,6 +2831,13 @@ function make_decision!(
     outcome["ai_level_used"] = ai_level
     outcome["utilities"] = utilities
     outcome["perception"] = perception
+
+    # Add per-use cost tracking if we evaluated with AI (matches Python ai_per_use_cost)
+    if ai_per_use_cost_tracked[] > 0
+        outcome["ai_per_use_cost"] = ai_per_use_cost_tracked[]
+        # Deduct per-use cost from capital (matches Python simulation phase 1)
+        agent.resources.capital = max(0.0, agent.resources.capital - ai_per_use_cost_tracked[])
+    end
 
     return outcome
 end
@@ -2796,54 +3014,6 @@ end
 # ============================================================================
 # OPERATIONAL COSTS
 # ============================================================================
-
-"""
-Estimate operational costs including competition pressure.
-Matches Python _estimate_operational_costs exactly.
-"""
-function estimate_operational_costs(
-    agent::EmergentAgent,
-    market::Union{MarketEnvironment,Nothing}
-)::Float64
-    # Portfolio competition from active investments (matches Python)
-    portfolio_competition = 0.0
-    if !isnothing(market) && !isempty(agent.active_investments)
-        competitions = Float64[]
-        for inv in agent.active_investments
-            opp_id = get(inv, "opportunity_id", nothing)
-            if !isnothing(opp_id)
-                opp = get(market.opportunity_map, opp_id, nothing)
-                if !isnothing(opp)
-                    push!(competitions, opp.competition)
-                end
-            end
-        end
-        if !isempty(competitions)
-            portfolio_competition = mean(competitions)
-        end
-    end
-
-    # Base cost with sector operating range (matches Python)
-    # Python: monthly_base_cost = base_cost * float(fast_mean(operating_range))
-    # Default operating_range is (0.05, 0.20), so avg = 0.125
-    base_cost = agent.config.BASE_OPERATIONAL_COST
-    operating_range_avg = 0.125  # (0.05 + 0.20) / 2
-    monthly_base_cost = base_cost * operating_range_avg
-
-    # Competition cost (matches Python)
-    competition_cost = portfolio_competition * agent.config.COMPETITION_COST_MULTIPLIER
-    total_cost = monthly_base_cost + competition_cost
-
-    # AI tier efficiency modifier (matches Python exactly)
-    # Higher tier AI = more efficient operations (lower costs)
-    tier = get_ai_level(agent)
-    tier_mod = Dict(
-        "none" => 1.0,
-        "basic" => 1.08,      # 8% penalty for basic
-        "advanced" => 0.94,   # 6% savings for advanced
-        "premium" => 0.88     # 12% savings for premium
-    )
-    total_cost *= get(tier_mod, tier, 1.0)
-
-    return total_cost
-end
+# NOTE: estimate_operational_costs is defined earlier (lines ~1711) with
+# sector-aware implementation. That single definition handles both cases
+# (with or without market parameter) via Union type.

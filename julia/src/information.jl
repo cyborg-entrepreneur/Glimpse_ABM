@@ -312,9 +312,9 @@ function get_human_information(
             sys.config.OPPORTUNITY_UNCERTAINTY_RANGE[2]),
         confidence=confidence,
         insights=insights,
-        hidden_factors=Dict{String,Any}(
-            "human_bias" => 0.5 - get(agent_traits, "analytical_ability", 0.5),
-            "unknowns" => 1 - quality
+        hidden_factors=Dict{String,Float64}(
+            "human_bias" => Float64(0.5 - get(agent_traits, "analytical_ability", 0.5)),
+            "unknowns" => Float64(1 - quality)
         ),
         domain=nothing,
         actual_accuracy=quality,

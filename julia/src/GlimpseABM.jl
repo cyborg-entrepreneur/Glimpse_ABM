@@ -105,9 +105,13 @@ export KnightianUncertaintyEnvironment
 # Exports - Functions
 export run!
 export step!
-export initialize_agents
+export initialize_agents, initialize_agents!
 export save_results
 export load_results
+
+# Exports - Agent distress tracking
+export check_survival!, evaluate_failure_conditions!, update_burn_history!
+export get_capital, set_capital!, get_ai_level
 
 # Exports - Utility functions
 export stable_sigmoid, safe_exp, safe_mean, fast_mean

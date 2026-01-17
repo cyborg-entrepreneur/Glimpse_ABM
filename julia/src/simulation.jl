@@ -26,6 +26,7 @@ mutable struct EmergentSimulation
     uncertainty_env::KnightianUncertaintyEnvironment
     knowledge_base::KnowledgeBase
     innovation_engine::InnovationEngine
+    info_system::InformationSystem  # AI information generation system
     current_round::Int
     history::Vector{Dict{String,Any}}
     run_id::String
@@ -47,8 +48,18 @@ function EmergentSimulation(;
     # Initialize configuration
     initialize!(config)
 
-    # Set up RNG
-    actual_seed = isnothing(seed) ? config.RANDOM_SEED : seed
+    # Set up RNG - matches Python's seed derivation with run_id hashing
+    # Python: seed = (base_seed + SHA256(run_id) % 1_000_000) % (2^32 - 1)
+    actual_seed = if !isnothing(seed)
+        seed
+    elseif !isnothing(config.RANDOM_SEED) && config.RANDOM_SEED > 0
+        # Mix in run_id hash like Python does for reproducibility across runs
+        run_hash = mod(hash(run_id), 1_000_000)
+        mod(config.RANDOM_SEED + run_hash, 2^32 - 1)
+    else
+        # Fallback to random seed
+        rand(1:2^31-1)
+    end
     rng = MersenneTwister(actual_seed)
 
     # Create uncertainty environment
@@ -61,6 +72,9 @@ function EmergentSimulation(;
     knowledge_base = KnowledgeBase(config)
     combination_tracker = CombinationTracker()
     innovation_engine = InnovationEngine(config, knowledge_base, combination_tracker)
+
+    # Create information system for AI-assisted analysis
+    info_system = InformationSystem(config)
 
     # Determine initial AI tier distribution
     # Default: 100% none. Can specify e.g. Dict("none"=>0.25, "basic"=>0.25, "advanced"=>0.25, "premium"=>0.25)
@@ -103,6 +117,7 @@ function EmergentSimulation(;
         uncertainty_env,
         knowledge_base,
         innovation_engine,
+        info_system,
         0,
         Dict{String,Any}[],
         run_id,
@@ -186,6 +201,7 @@ function step!(sim::EmergentSimulation, round::Int)
         # - Evaluates opportunities considering AI tier capabilities
         # - Selects and executes action with AI-informed decision making
         # - Uses full InnovationEngine for innovation actions (matches Python)
+        # - Uses InformationSystem for domain-specific AI accuracy and per-use costs
         outcome = make_decision!(
             agent,
             available_opportunities,
@@ -194,7 +210,8 @@ function step!(sim::EmergentSimulation, round::Int)
             round;
             uncertainty_env=sim.uncertainty_env,
             neighbor_agents=neighbor_agents,
-            innovation_engine=sim.innovation_engine
+            innovation_engine=sim.innovation_engine,
+            info_system=sim.info_system
         )
 
         push!(agent_actions, outcome)
@@ -1078,32 +1095,25 @@ end
 
 """
 Enforce survival threshold for an agent.
-Matches Python logic with both absolute threshold AND capital ratio check.
+Uses evaluate_failure_conditions! for full Python compatibility with all 4 failure modes:
+liquidity_failure, equity_failure, funding_shock, burnout_failure.
 """
 function enforce_survival_threshold!(agent::EmergentAgent, config::EmergentConfig)
     if !agent.alive
         return
     end
 
-    capital = get_capital(agent)
-    initial_equity = max(agent.resources.performance.initial_equity, 1.0)
-
-    # Check 1: Absolute survival threshold
-    survival_threshold = config.SURVIVAL_THRESHOLD
-
-    # Check 2: Capital ratio threshold (percentage of initial equity)
-    # This is the key check that Python uses - agents fail if they drop below
-    # SURVIVAL_CAPITAL_RATIO (default 0.38 = 38%) of their initial capital
-    capital_ratio = capital / initial_equity
-
-    # Agent fails if EITHER threshold is breached
-    if capital < survival_threshold || capital_ratio < config.SURVIVAL_CAPITAL_RATIO
+    # Use full failure evaluation logic (matches Python _evaluate_failure_conditions)
+    reason = evaluate_failure_conditions!(agent)
+    if !isnothing(reason)
         agent.alive = false
+        agent.failure_reason = reason
     end
 end
 
 """
 Apply operating costs to agents based on market conditions.
+Also updates burn history tracking for distress detection.
 """
 function apply_operating_costs!(
     agents::Vector{EmergentAgent},
@@ -1125,13 +1135,21 @@ function apply_operating_costs!(
             continue
         end
 
-        # Estimate operational cost
+        # Estimate operational cost and store for distress tracking
         estimated_cost = estimate_operational_costs(agent, market)
+        agent.operating_cost_estimate = estimated_cost
         operating_cost = max(0.0, estimated_cost * severity)
+
+        # Track capital before cost for burn history
+        capital_before = agent.resources.capital
 
         if operating_cost > 0.0
             agent.resources.capital -= operating_cost
         end
+
+        # Update burn history with capital delta
+        capital_delta = agent.resources.capital - capital_before
+        update_burn_history!(agent, capital_delta)
 
         enforce_survival_threshold!(agent, config)
     end
@@ -1287,7 +1305,7 @@ function enhanced_step!(sim::EnhancedSimulation, round::Int)
             agent_opportunities = available_opportunities
         end
 
-        # Make decision with full InnovationEngine integration (matches Python)
+        # Make decision with full InnovationEngine and InformationSystem integration (matches Python)
         decision = make_decision!(
             agent,
             agent_opportunities,
@@ -1296,7 +1314,8 @@ function enhanced_step!(sim::EnhancedSimulation, round::Int)
             round;
             uncertainty_env=sim.uncertainty_env,
             neighbor_agents=neighbor_agents,
-            innovation_engine=sim.innovation_engine
+            innovation_engine=sim.innovation_engine,
+            info_system=sim.info_system
         )
 
         decision["agent_id"] = agent.id
