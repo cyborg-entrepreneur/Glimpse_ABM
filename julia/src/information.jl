@@ -147,6 +147,7 @@ end
 
 """
 Get information about an opportunity for a given AI level.
+Matches Python Enhanced implementation with lognormal variance and 3-step hallucination chain.
 """
 function get_information(
     sys::InformationSystem,
@@ -167,26 +168,51 @@ function get_information(
 
     # Get AI configuration
     ai_config = get(sys.config.AI_LEVELS, ai_level, sys.config.AI_LEVELS["none"])
+    info_quality = Float64(ai_config.info_quality)
+    info_breadth = Float64(ai_config.info_breadth)
     domain = determine_domain(opp)
     domain_cap = get_ai_domain_capability(sys.config, ai_level, domain)
 
-    # Compute accuracy with noise
-    base_accuracy = domain_cap["accuracy"]
-    actual_accuracy = clamp(randn(rng) * 0.1 + base_accuracy, 0.0, 1.0)
+    # Tier noise factor (Python match: higher quality = lower noise)
+    tier_noise = max(0.1, 1.2 - info_quality)
 
-    # Scale hallucination rate by intensity parameter (for robustness testing)
+    # Base accuracy from domain capability (use struct field access)
+    base_accuracy = Float64(domain_cap.accuracy)
+
+    # Quality-dependent accuracy scaling (Python Enhanced match)
+    # Apply accuracy noise with lognormal distribution
+    accuracy_noise_scale = 0.12 + 0.08 * tier_noise
+    accuracy_noise_loc = 1.0 - 0.35 * (1.0 - info_quality)
+    accuracy_noise = exp(randn(rng) * accuracy_noise_scale) * accuracy_noise_loc
+    actual_accuracy = clamp(base_accuracy * accuracy_noise, 0.35, 0.99)
+
+    # 3-step hallucination rate chain (Python Enhanced match)
+    # Step 1: Get base hallucination rate from domain capability
+    base_hallucination = Float64(domain_cap.hallucination_rate)
+
+    # Step 2: Apply stochastic modification
+    stochastic_rate = get_stochastic_hallucination_rate(base_hallucination, domain; rng=rng)
+
+    # Step 3: Apply lognormal variance (Python Enhanced match)
+    lognormal_mu = 0.0
+    lognormal_sigma = 0.25 * tier_noise
+    lognormal_factor = clamp(exp(lognormal_mu + lognormal_sigma * randn(rng)), 0.2, 3.0)
+    hallucination_rate = stochastic_rate * lognormal_factor
+
+    # Step 4: Apply intensity scaling (robustness parameter)
     hallucination_intensity = sys.config.HALLUCINATION_INTENSITY
-    hallucination_rate = domain_cap["hallucination_rate"] * hallucination_intensity
-    bias = domain_cap["bias"]
+    hallucination_rate = clamp(hallucination_rate * hallucination_intensity, 0.0, 1.0)
 
-    # Estimate return with noise
+    bias = Float64(domain_cap.bias)
+
+    # Estimate return with noise (quality-scaled)
     return_noise = randn(rng) * (1 - actual_accuracy) * 0.5
     estimated_return = opp.latent_return_potential + return_noise + bias * 0.3
     estimated_return = clamp(estimated_return,
         sys.config.OPPORTUNITY_RETURN_RANGE[1],
         sys.config.OPPORTUNITY_RETURN_RANGE[2])
 
-    # Estimate uncertainty with noise
+    # Estimate uncertainty with noise (quality-scaled)
     uncertainty_noise = randn(rng) * (1 - actual_accuracy) * 0.3
     estimated_uncertainty = opp.latent_failure_potential + uncertainty_noise - bias * 0.2
     estimated_uncertainty = clamp(estimated_uncertainty,
@@ -205,8 +231,7 @@ function get_information(
         end
     end
 
-    # Compute confidence
-    info_quality = get(ai_config, "info_quality", 0.0)
+    # Compute confidence with quality-dependent scaling
     true_confidence = actual_accuracy * (1 - opp.complexity * (1 - actual_accuracy))
     # Scale overconfidence by intensity parameter (for robustness testing)
     overconfidence_intensity = sys.config.OVERCONFIDENCE_INTENSITY
@@ -215,7 +240,7 @@ function get_information(
     stated_confidence = clamp(true_confidence * overconfidence_factor, 0.1, 0.95)
 
     # Generate insights
-    info_breadth = get(ai_config, "info_breadth", 0.0)
+    info_breadth = ai_config.info_breadth
     insights = generate_insights(opp, info_breadth, domain)
 
     # Add false insights if hallucinating
@@ -229,7 +254,7 @@ function get_information(
         estimated_uncertainty=estimated_uncertainty,
         confidence=stated_confidence,
         insights=insights,
-        hidden_factors=Dict{String,Any}(
+        hidden_factors=Dict{String,Float64}(
             "bias" => bias,
             "unknown_uncertainty" => (1 - info_breadth) * opp.complexity,
             "market_shift_sensitivity" => 1 - actual_accuracy,

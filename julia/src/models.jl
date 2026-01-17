@@ -525,16 +525,34 @@ mutable struct AILearningProfile
     accuracy_estimates::Dict{String,Vector{Float64}}
     hallucination_experiences::Dict{String,Int}
     usage_count::Dict{String,Int}
+    # Bayesian beliefs about AI tier effectiveness (alpha, beta parameters for Beta distribution)
+    tier_beliefs::Dict{String,Dict{String,Float64}}
 end
 
 const DEFAULT_DOMAINS = ["market_analysis", "technical_assessment", "uncertainty_evaluation", "innovation_potential"]
+const AI_TIERS = ["none", "basic", "advanced", "premium"]
+
+# Default priors: slight advantage for "none", skepticism about higher tiers
+const DEFAULT_TIER_PRIORS = Dict(
+    "none" => Dict("alpha" => 2.6, "beta" => 2.4),      # Prior mean ~0.52
+    "basic" => Dict("alpha" => 2.4, "beta" => 2.6),     # Prior mean ~0.48
+    "advanced" => Dict("alpha" => 1.7, "beta" => 3.1),  # Prior mean ~0.35
+    "premium" => Dict("alpha" => 1.2, "beta" => 3.4)    # Prior mean ~0.26
+)
 
 function AILearningProfile()
+    # Initialize tier beliefs with default priors
+    tier_beliefs = Dict{String,Dict{String,Float64}}()
+    for tier in AI_TIERS
+        tier_beliefs[tier] = copy(DEFAULT_TIER_PRIORS[tier])
+    end
+
     AILearningProfile(
         Dict(d => 0.5 for d in DEFAULT_DOMAINS),
         Dict(d => Float64[] for d in DEFAULT_DOMAINS),
         Dict(d => 0 for d in DEFAULT_DOMAINS),
-        Dict(d => 0 for d in DEFAULT_DOMAINS)
+        Dict(d => 0 for d in DEFAULT_DOMAINS),
+        tier_beliefs
     )
 end
 
@@ -547,6 +565,48 @@ function update_trust!(profile::AILearningProfile, domain::String, was_accurate:
     else
         profile.domain_trust[domain] = max(0.0, profile.domain_trust[domain] - magnitude * 1.5)
     end
+end
+
+"""
+Update Bayesian beliefs about AI tier effectiveness based on action outcome.
+
+Uses a Bayesian update: success increases alpha (success count), failure increases beta.
+The posterior mean is alpha / (alpha + beta).
+"""
+function update_tier_belief!(profile::AILearningProfile, tier::String, was_successful::Bool;
+                             magnitude::Float64 = 1.0)
+    if !haskey(profile.tier_beliefs, tier)
+        # Initialize with default prior if tier not found
+        profile.tier_beliefs[tier] = Dict("alpha" => 2.0, "beta" => 2.0)
+    end
+
+    belief = profile.tier_beliefs[tier]
+    if was_successful
+        belief["alpha"] += magnitude
+    else
+        belief["beta"] += magnitude
+    end
+
+    # Cap beliefs to prevent extreme certainty (keep some exploration)
+    max_strength = 50.0
+    total = belief["alpha"] + belief["beta"]
+    if total > max_strength
+        scale = max_strength / total
+        belief["alpha"] *= scale
+        belief["beta"] *= scale
+    end
+end
+
+"""
+Get the posterior mean belief about a tier's effectiveness.
+"""
+function get_tier_belief_mean(profile::AILearningProfile, tier::String)::Float64
+    if !haskey(profile.tier_beliefs, tier)
+        return 0.5  # Neutral prior
+    end
+    belief = profile.tier_beliefs[tier]
+    total = belief["alpha"] + belief["beta"]
+    return total > 0 ? belief["alpha"] / total : 0.5
 end
 
 """

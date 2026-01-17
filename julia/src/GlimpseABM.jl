@@ -34,17 +34,17 @@ using Dates
 include("config.jl")
 include("models.jl")
 
-# Knowledge and information systems (knowledge/information before agents, innovation after)
+# Knowledge and information systems
 include("knowledge.jl")
 include("information.jl")
+
+# Innovation system (before agents.jl - uses Any for agent type to avoid circular dep)
+include("innovation.jl")
 
 # Simulation components
 include("market.jl")
 include("uncertainty.jl")
 include("agents.jl")
-
-# Innovation system (needs EmergentAgent from agents.jl)
-include("innovation.jl")
 include("simulation.jl")
 
 # Utilities
@@ -91,6 +91,9 @@ export CombinationTracker
 export get_accessible_knowledge
 export get_information
 export attempt_innovation!
+export get_component_scarcity_metric
+export learn_from_success!, learn_from_failure!
+export reinforce_agent_resources!
 
 # Exports - Simulation
 export EmergentSimulation
@@ -105,6 +108,11 @@ export step!
 export initialize_agents
 export save_results
 export load_results
+
+# Exports - Utility functions
+export stable_sigmoid, safe_exp, safe_mean, fast_mean
+export normalize_ai_label, compute_hhi, compute_gini
+export perceive_uncertainty, measure_uncertainty_state!
 
 # Exports - Causal inference
 export cohens_d, cliffs_delta, glass_delta

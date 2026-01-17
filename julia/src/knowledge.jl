@@ -60,6 +60,7 @@ mutable struct KnowledgeBase
     knowledge_usage::Dict{String,Int}
     domain_to_sector::Dict{String,String}
     sector_to_domain::Dict{String,String}
+    agent_domain_beliefs::Dict{Int,Dict{String,Dict{String,Float64}}}
 end
 
 """
@@ -105,7 +106,8 @@ function KnowledgeBase(config::Union{EmergentConfig,Nothing}=nothing)
         Knowledge[],
         Dict{String,Int}(),
         domain_to_sector,
-        sector_to_domain
+        sector_to_domain,
+        Dict{Int,Dict{String,Dict{String,Float64}}}()
     )
 
     # Initialize base knowledge
@@ -270,21 +272,58 @@ function get_ai_info_signals(kb::KnowledgeBase, ai_level::String)::Tuple{Float64
     end
 
     profile = get(kb.config.AI_LEVELS, ai_level, kb.config.AI_LEVELS["none"])
-    return (Float64(get(profile, "info_quality", 0.0)), Float64(get(profile, "info_breadth", 0.0)))
+    return (Float64(profile.info_quality), Float64(profile.info_breadth))
+end
+
+"""
+Reinforce agent resources when knowledge is discovered.
+Python match: _reinforce_agent_resources
+"""
+function reinforce_agent_resources!(
+    kb::KnowledgeBase,
+    agent_resources,  # AgentResources - untyped to avoid circular deps
+    knowledge::Knowledge,
+    info_quality::Float64
+)
+    if isnothing(agent_resources) || !hasproperty(agent_resources, :knowledge)
+        return
+    end
+
+    sector = get(kb.domain_to_sector, knowledge.domain, knowledge.domain)
+    knowledge_map = agent_resources.knowledge
+
+    if !haskey(knowledge_map, sector)
+        return
+    end
+
+    # Apply delta based on info quality
+    delta = 0.025 + 0.08 * info_quality
+    knowledge_map[sector] = clamp(knowledge_map[sector] + delta, 0.01, 1.15)
+
+    # Update knowledge_last_used if available
+    if hasproperty(agent_resources, :knowledge_last_used)
+        current_round = hasproperty(agent_resources, :current_round) ? agent_resources.current_round : 0
+        agent_resources.knowledge_last_used[sector] = current_round
+    end
 end
 
 """
 Get accessible knowledge for an agent.
+Python match: get_accessible_knowledge with network_strength and resource reinforcement.
 """
 function get_accessible_knowledge(
     kb::KnowledgeBase,
     agent_id::Int,
     ai_level::String="none";
+    agent_resources=nothing,  # AgentResources - untyped to avoid circular deps
     agent_traits::Union{Dict{String,Float64},Nothing}=nothing,
     rng::AbstractRNG=Random.default_rng()
 )::Vector{Knowledge}
     ensure_starter_knowledge!(kb, agent_id)
     agent_knowledge_ids = kb.agent_knowledge[agent_id]
+
+    # Apply tier decay (Python match)
+    apply_tier_decay!(kb, agent_id, ai_level; rng=rng)
 
     # Get AI bonuses
     info_quality, info_breadth = get_ai_info_signals(kb, ai_level)
@@ -298,6 +337,13 @@ function get_accessible_knowledge(
         bonus += exploration_trait * 0.08
     end
 
+    # Network strength bonus (Python match)
+    network_strength = 0.0
+    if !isnothing(agent_resources) && hasproperty(agent_resources, :network)
+        network_strength = Float64(agent_resources.network)
+        bonus += network_strength * 0.25
+    end
+
     # Get accessible pieces
     accessible = [kb.knowledge_pieces[kid] for kid in agent_knowledge_ids if haskey(kb.knowledge_pieces, kid)]
 
@@ -305,7 +351,8 @@ function get_accessible_knowledge(
     other_knowledge = [k for k in kb.knowledge_registry if !(k.id in agent_knowledge_ids)]
 
     if !isempty(other_knowledge) && bonus > 0
-        attempt_multiplier = 1.0 + info_breadth * 5.0 + exploration_trait * 0.4
+        # Python match: include network_strength * 0.6 in attempt multiplier
+        attempt_multiplier = 1.0 + info_breadth * 5.0 + network_strength * 0.6 + exploration_trait * 0.4
         attempts = max(1, round(Int, attempt_multiplier))
 
         for _ in 1:attempts
@@ -318,6 +365,8 @@ function get_accessible_knowledge(
                 if rand(rng) < threshold
                     push!(agent_knowledge_ids, knowledge_piece.id)
                     push!(accessible, knowledge_piece)
+                    # Python match: reinforce agent resources on discovery
+                    reinforce_agent_resources!(kb, agent_resources, knowledge_piece, info_quality)
                 end
             end
         end
@@ -353,6 +402,44 @@ function get_combination_scarcity(kb::KnowledgeBase, knowledge_ids::Vector{Strin
 end
 
 """
+Get component scarcity metric for uncertainty calculation.
+Python match: get_component_scarcity_metric
+"""
+function get_component_scarcity_metric(kb::KnowledgeBase)::Float64
+    total_pieces = length(kb.knowledge_pieces)
+    if total_pieces <= 0
+        return 0.5
+    end
+
+    # Calculate rarity component from usage values
+    usage_values = collect(values(kb.knowledge_usage))
+    if !isempty(usage_values)
+        usage_array = Float64.(usage_values)
+        # 90th percentile as effective peak
+        sorted_usage = sort(usage_array)
+        p90_idx = max(1, Int(ceil(0.9 * length(sorted_usage))))
+        effective_peak = max(sorted_usage[p90_idx], 1.0)
+        # Normalize and compute rarity
+        normalised = clamp.(usage_array ./ effective_peak, 0.0, 1.0)
+        rarity_component = clamp(1.0 - mean(normalised), 0.0, 1.0)
+    else
+        rarity_component = 0.85
+    end
+
+    # Calculate unused share (coverage)
+    used_pieces = Set{String}()
+    for knowledge_ids in values(kb.agent_knowledge)
+        union!(used_pieces, knowledge_ids)
+    end
+    coverage = length(used_pieces) / total_pieces
+    unused_share = clamp(1.0 - coverage, 0.0, 1.0)
+
+    # Combine components
+    scarcity = 0.6 * rarity_component + 0.4 * unused_share
+    return clamp(scarcity, 0.0, 1.0)
+end
+
+"""
 Get average knowledge per agent.
 """
 function get_average_agent_knowledge(kb::KnowledgeBase)::Float64
@@ -366,11 +453,13 @@ end
 
 """
 Learn from successful innovation.
+Python match: includes sector knowledge boost (+0.1).
 """
 function learn_from_success!(
     kb::KnowledgeBase,
     agent_id::Int,
-    innovation::Innovation
+    innovation::Innovation;
+    agent_resources=nothing  # AgentResources - untyped to avoid circular deps
 )
     # Add knowledge components to agent
     for kid in innovation.knowledge_components
@@ -378,6 +467,33 @@ function learn_from_success!(
             kb.agent_knowledge[agent_id] = Set{String}()
         end
         push!(kb.agent_knowledge[agent_id], kid)
+    end
+
+    # Python match: Apply sector knowledge boost from innovation components
+    if !isnothing(agent_resources) && hasproperty(agent_resources, :knowledge)
+        # Count domains from knowledge components
+        domain_counts = Dict{String,Int}()
+        for kid in innovation.knowledge_components
+            if haskey(kb.knowledge_pieces, kid)
+                domain = kb.knowledge_pieces[kid].domain
+                domain_counts[domain] = get(domain_counts, domain, 0) + 1
+            end
+        end
+
+        if !isempty(domain_counts)
+            # Find dominant domain
+            dominant_domain = first(sort(collect(domain_counts), by=x->x[2], rev=true))[1]
+            sector = get(kb.domain_to_sector, dominant_domain, "tech")
+
+            knowledge_map = agent_resources.knowledge
+            if haskey(knowledge_map, sector)
+                # Python match: +0.1 sector knowledge boost on success
+                knowledge_map[sector] = min(1.0, knowledge_map[sector] + 0.1)
+                if hasproperty(agent_resources, :knowledge_last_used)
+                    agent_resources.knowledge_last_used[sector] = innovation.round_created
+                end
+            end
+        end
     end
 
     # Create derived knowledge for high-quality innovations
@@ -392,11 +508,13 @@ end
 
 """
 Learn from failed innovation.
+Python match: includes uncertainty_management boost (+0.02).
 """
 function learn_from_failure!(
     kb::KnowledgeBase,
     agent_id::Int,
     innovation::Innovation;
+    agent_resources=nothing,  # AgentResources - untyped to avoid circular deps
     rng::AbstractRNG=Random.default_rng()
 )
     if !haskey(kb.agent_knowledge, agent_id)
@@ -407,6 +525,14 @@ function learn_from_failure!(
     for kid in innovation.knowledge_components
         if rand(rng) < 0.3
             push!(kb.agent_knowledge[agent_id], kid)
+        end
+    end
+
+    # Python match: Boost uncertainty management capability on failure (+0.02)
+    if !isnothing(agent_resources) && hasproperty(agent_resources, :capabilities)
+        caps = agent_resources.capabilities
+        if haskey(caps, "uncertainty_management")
+            caps["uncertainty_management"] = min(1.0, caps["uncertainty_management"] + 0.02)
         end
     end
 
@@ -422,6 +548,12 @@ function learn_from_failure!(
         )
         add_knowledge!(kb, failure_knowledge)
         push!(kb.agent_knowledge[agent_id], failure_knowledge.id)
+
+        # Python match: Update knowledge_last_used for process sector
+        if !isnothing(agent_resources) && hasproperty(agent_resources, :knowledge_last_used)
+            sector = get(kb.domain_to_sector, "process", "service")
+            agent_resources.knowledge_last_used[sector] = innovation.round_created
+        end
     end
 end
 
@@ -602,9 +734,15 @@ function forget_sector_knowledge!(
         return
     end
 
-    # Get AI info quality to modulate severity
-    ai_config = get(kb.config.AI_LEVELS, ai_level, kb.config.AI_LEVELS["none"])
-    info_quality = Float64(get(ai_config, "info_quality", 0.0))
+    # Get AI info quality to modulate severity (handle null config)
+    info_quality = 0.0
+    if !isnothing(kb.config)
+        ai_config = get(kb.config.AI_LEVELS, ai_level, kb.config.AI_LEVELS["none"])
+        info_quality = ai_config.info_quality
+    else
+        info_quality_map = Dict("none" => 0.0, "basic" => 0.35, "advanced" => 0.65, "premium" => 0.9)
+        info_quality = get(info_quality_map, ai_level, 0.0)
+    end
     severity = clamp(severity * (1.0 - 0.25 * info_quality), 0.05, 1.0)
 
     # Find pieces in this sector
@@ -741,9 +879,15 @@ function apply_tier_decay!(
 )
     tier = normalize_ai_label(ai_level)
 
-    # Get AI info signals
-    ai_config = get(kb.config.AI_LEVELS, ai_level, kb.config.AI_LEVELS["none"])
-    info_quality = Float64(get(ai_config, "info_quality", 0.0))
+    # Get AI info signals (handle null config)
+    info_quality = 0.0
+    if !isnothing(kb.config)
+        ai_config = get(kb.config.AI_LEVELS, ai_level, kb.config.AI_LEVELS["none"])
+        info_quality = ai_config.info_quality
+    else
+        info_quality_map = Dict("none" => 0.0, "basic" => 0.35, "advanced" => 0.65, "premium" => 0.9)
+        info_quality = get(info_quality_map, tier, 0.0)
+    end
 
     # Decay probabilities by tier
     decay_map = Dict("none" => 0.08, "basic" => 0.05, "advanced" => 0.025, "premium" => 0.0)

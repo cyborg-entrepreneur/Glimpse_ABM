@@ -94,6 +94,21 @@ mutable struct EmergentAgent
 
     # Portfolio
     active_investments::Vector{Dict{String,Any}}
+    locked_capital::Float64
+
+    # Action selection state (matches Python)
+    action_bias::Dict{String,Float64}
+    paradox_signal::Float64
+    recent_actions::Vector{String}  # Rolling window of recent actions
+
+    # Subscription tracking (matches Python)
+    subscription_accounts::Dict{String,Int}  # tier => remaining rounds
+    subscription_rates::Dict{String,Float64}  # tier => per-round rate
+    subscription_deferral_remaining::Dict{String,Int}  # tier => deferral rounds left
+    last_subscription_charge::Float64
+
+    # Last perception for action execution (matches Python _last_perception)
+    last_perception::Dict{String,Any}
 
     # RNG
     rng::AbstractRNG
@@ -104,6 +119,7 @@ function EmergentAgent(
     config::EmergentConfig;
     initial_capital::Union{Float64,Nothing} = nothing,
     fixed_ai_level::Union{String,Nothing} = nothing,
+    initial_ai_level::String = "none",
     rng::AbstractRNG = Random.default_rng()
 )
     # Sample initial capital
@@ -116,6 +132,15 @@ function EmergentAgent(
     # Sample traits
     traits = sample_all_traits(config; rng=rng)
 
+    # Sample action biases (matches Python implementation)
+    bias_sigma = max(0.0, config.ACTION_BIAS_SIGMA)
+    action_bias = Dict{String,Float64}(
+        "invest" => randn(rng) * bias_sigma,
+        "innovate" => randn(rng) * bias_sigma,
+        "explore" => randn(rng) * bias_sigma,
+        "maintain" => randn(rng) * bias_sigma
+    )
+
     return EmergentAgent(
         id,
         AgentResources(capital),
@@ -126,7 +151,7 @@ function EmergentAgent(
         get(traits, "competence", 0.5),
         get(traits, "ai_trust", 0.5),
         get(traits, "trait_momentum", 0.7),
-        "none",  # current_ai_level
+        initial_ai_level,  # current_ai_level (can be set to distribute across tiers)
         fixed_ai_level,
         AILearningProfile(),
         0,  # ai_usage_count
@@ -144,6 +169,15 @@ function EmergentAgent(
         "maintain",  # last_action
         Dict{String,Any}(),  # last_outcome
         Dict{String,Any}[],  # active_investments
+        0.0,  # locked_capital
+        action_bias,  # action_bias
+        0.0,  # paradox_signal
+        String[],  # recent_actions
+        Dict{String,Int}(),  # subscription_accounts
+        Dict{String,Float64}(),  # subscription_rates
+        Dict{String,Int}(),  # subscription_deferral_remaining
+        0.0,  # last_subscription_charge
+        Dict{String,Any}(),  # last_perception
         rng
     )
 end
@@ -164,16 +198,28 @@ end
 
 """
 Check if agent is alive and above survival threshold.
+Matches Python with BOTH absolute threshold AND capital ratio check.
 """
 function check_survival!(agent::EmergentAgent, round::Int)::Bool
     if !agent.alive
         return false
     end
 
-    # Use explicit SURVIVAL_THRESHOLD (matches Python behavior)
+    capital = agent.resources.capital
+    initial_equity = max(agent.resources.performance.initial_equity, 1.0)
+    capital_ratio = capital / initial_equity
+
+    # Check 1: Absolute survival threshold
     survival_threshold = agent.config.SURVIVAL_THRESHOLD
 
-    if agent.resources.capital < survival_threshold
+    # Check 2: Capital ratio threshold (matches Python SURVIVAL_CAPITAL_RATIO)
+    # Agent fails if capital drops below this fraction of initial equity
+    ratio_threshold = agent.config.SURVIVAL_CAPITAL_RATIO
+
+    # Agent is in trouble if EITHER threshold is breached
+    below_threshold = capital < survival_threshold || capital_ratio < ratio_threshold
+
+    if below_threshold
         agent.insolvency_rounds += 1
         if agent.insolvency_rounds >= agent.config.INSOLVENCY_GRACE_ROUNDS
             agent.alive = false
@@ -300,7 +346,10 @@ function execute_action!(
     action::String,
     market::MarketEnvironment,
     round::Int;
-    opportunity::Union{Opportunity,Nothing} = nothing
+    opportunity::Union{Opportunity,Nothing} = nothing,
+    investment_amount::Union{Float64,Nothing} = nothing,  # Pre-computed position size
+    innovation_engine::Union{InnovationEngine,Nothing} = nothing,
+    market_conditions::Union{Dict{String,Any},Nothing} = nothing
 )::Dict{String,Any}
     outcome = Dict{String,Any}(
         "action" => action,
@@ -311,9 +360,12 @@ function execute_action!(
     )
 
     if action == "invest" && !isnothing(opportunity)
-        outcome = _execute_invest!(agent, opportunity, market, round, outcome)
+        outcome = _execute_invest!(agent, opportunity, market, round, outcome;
+                                   sized_amount=investment_amount)
     elseif action == "innovate"
-        outcome = _execute_innovate!(agent, market, round, outcome)
+        outcome = _execute_innovate!(agent, market, round, outcome;
+                                     innovation_engine=innovation_engine,
+                                     market_conditions=market_conditions)
     elseif action == "explore"
         outcome = _execute_explore!(agent, market, round, outcome)
     else  # maintain
@@ -329,16 +381,31 @@ function execute_action!(
     return outcome
 end
 
+"""
+Execute investment action with optional pre-computed position size.
+If sized_amount is provided, use it (from make_portfolio_decision).
+Otherwise, fall back to simple fraction-based sizing.
+"""
 function _execute_invest!(
     agent::EmergentAgent,
     opportunity::Opportunity,
     market::MarketEnvironment,
     round::Int,
-    outcome::Dict{String,Any}
+    outcome::Dict{String,Any};
+    sized_amount::Union{Float64,Nothing} = nothing
 )::Dict{String,Any}
     capital = get_capital(agent)
-    max_invest = capital * agent.config.MAX_INVESTMENT_FRACTION
-    invest_amount = min(max_invest, opportunity.capital_requirements)
+
+    # Use pre-computed sized_amount if available (from make_portfolio_decision)
+    # Otherwise fall back to simple fraction-based sizing
+    invest_amount = if !isnothing(sized_amount) && sized_amount > 0
+        # Use the confidence-scaled position size from portfolio decision
+        min(sized_amount, capital, opportunity.capital_requirements)
+    else
+        # Legacy fallback: simple fraction-based sizing
+        max_invest = capital * agent.config.MAX_INVESTMENT_FRACTION
+        min(max_invest, opportunity.capital_requirements)
+    end
 
     if invest_amount <= 0 || invest_amount > capital
         outcome["success"] = false
@@ -346,9 +413,10 @@ function _execute_invest!(
         return outcome
     end
 
-    # Deduct capital
+    # Deduct capital and track locked capital
     set_capital!(agent, capital - invest_amount)
     agent.total_invested += invest_amount
+    agent.locked_capital += invest_amount
 
     # Record investment
     investment = Dict{String,Any}(
@@ -378,11 +446,14 @@ function _execute_innovate!(
     agent::EmergentAgent,
     market::MarketEnvironment,
     round::Int,
-    outcome::Dict{String,Any}
+    outcome::Dict{String,Any};
+    innovation_engine::Union{InnovationEngine,Nothing} = nothing,
+    market_conditions::Union{Dict{String,Any},Nothing} = nothing
 )::Dict{String,Any}
     capital = get_capital(agent)
+    ai_level = get_ai_level(agent)
 
-    # Innovation cost
+    # Innovation cost (R&D spend)
     rd_spend = min(
         capital * agent.config.INNOVATION_BASE_SPEND_RATIO,
         agent.config.INNOVATION_MAX_SPEND
@@ -394,19 +465,230 @@ function _execute_innovate!(
 
     set_capital!(agent, capital - rd_spend)
 
-    # Innovation success probability
-    base_prob = agent.config.INNOVATION_PROBABILITY
-    competence_factor = agent.competence
-    innovativeness_factor = agent.innovativeness
+    # Get perception for clarity signal
+    perception = agent.last_perception
+    mkt_conds = isnothing(market_conditions) ? Dict{String,Any}() : market_conditions
 
-    success_prob = base_prob * (0.5 + 0.5 * competence_factor) * (0.7 + 0.3 * innovativeness_factor)
+    # ========================================================================
+    # USE FULL INNOVATIONENGINE IF AVAILABLE (matches Python exactly)
+    # ========================================================================
+    if !isnothing(innovation_engine)
+        # Attempt innovation using the full InnovationEngine
+        innovation = attempt_innovation!(
+            innovation_engine,
+            agent,
+            mkt_conds,
+            round;
+            ai_level=ai_level,
+            uncertainty_perception=perception,
+            decision_perception=perception,
+            rng=agent.rng
+        )
+
+        if isnothing(innovation)
+            # Innovation attempt failed (not enough knowledge, etc.)
+            # Return partial R&D cost
+            recovery = rd_spend * agent.config.INNOVATION_FAIL_RECOVERY_RATIO
+            set_capital!(agent, get_capital(agent) + recovery)
+
+            outcome["success"] = false
+            outcome["rd_spend"] = rd_spend
+            outcome["recovery"] = recovery
+            outcome["reason"] = "insufficient_knowledge"
+            outcome["ai_bonus_applied"] = 0.0
+
+            record_deployment!(agent.resources.performance, "innovate", rd_spend;
+                               ai_level=ai_level, round_num=round)
+            return outcome
+        end
+
+        # Record R&D investment in engine
+        invest_in_rd!(innovation_engine, agent.id, rd_spend)
+
+        # Get all recent innovations for competition evaluation
+        market_innovations = collect(values(innovation_engine.innovations))
+
+        # Evaluate innovation success using full engine logic
+        success, impact, cash_multiple = evaluate_innovation_success!(
+            innovation_engine,
+            innovation,
+            mkt_conds,
+            market_innovations;
+            rng=agent.rng
+        )
+
+        if success
+            innovation_return = rd_spend * cash_multiple
+            set_capital!(agent, get_capital(agent) + innovation_return)
+            agent.innovation_count += 1
+            agent.success_count += 1
+
+            outcome["success"] = true
+            outcome["rd_spend"] = rd_spend
+            outcome["innovation_return"] = innovation_return
+            outcome["cash_multiple"] = cash_multiple
+            outcome["novelty"] = innovation.novelty
+            outcome["scarcity"] = something(innovation.scarcity, 0.5)
+            outcome["quality"] = innovation.quality
+            outcome["innovation_type"] = innovation.type
+            outcome["is_new_combination"] = innovation.is_new_combination
+            outcome["market_impact"] = impact
+            outcome["innovation_id"] = innovation.id
+            outcome["knowledge_components"] = innovation.knowledge_components
+            outcome["ai_assisted"] = innovation.ai_assisted
+            outcome["ai_domains_used"] = innovation.ai_domains_used
+            outcome["combination_signature"] = something(innovation.combination_signature, "")
+        else
+            # Failure: apply recovery based on innovation properties
+            novelty = innovation.novelty
+            scarcity = something(innovation.scarcity, 0.5)
+            # Higher novelty = lower recovery (riskier bets fail harder)
+            novelty_clamped = clamp(novelty, 0.05, 0.95)
+            recovery_floor = 0.78 - (novelty_clamped - 0.05) / (0.95 - 0.05) * (0.78 - 0.42)
+            salvage = max(agent.config.INNOVATION_FAIL_RECOVERY_RATIO, recovery_floor - 0.12 * (scarcity - 0.5))
+            recovery = rd_spend * clamp(salvage, 0.25, 0.65)
+
+            set_capital!(agent, get_capital(agent) + recovery)
+
+            outcome["success"] = false
+            outcome["rd_spend"] = rd_spend
+            outcome["recovery"] = recovery
+            outcome["novelty"] = novelty
+            outcome["scarcity"] = scarcity
+            outcome["quality"] = innovation.quality
+            outcome["innovation_type"] = innovation.type
+            outcome["is_new_combination"] = innovation.is_new_combination
+            outcome["innovation_id"] = innovation.id
+            outcome["knowledge_components"] = innovation.knowledge_components
+        end
+
+        record_deployment!(agent.resources.performance, "innovate", rd_spend;
+                           ai_level=ai_level, round_num=round)
+        return outcome
+    end
+
+    # ========================================================================
+    # FALLBACK: INLINE IMPLEMENTATION (when no InnovationEngine provided)
+    # This matches Python InnovationEngine logic for use without full wiring
+    # ========================================================================
+
+    # Calculate accessible knowledge level
+    knowledge_values = collect(values(agent.resources.knowledge))
+    avg_knowledge = isempty(knowledge_values) ? 0.1 : mean(knowledge_values)
+    knowledge_breadth = length(filter(v -> v > 0.2, knowledge_values))
+    knowledge_factor = clamp(avg_knowledge * 0.4 + knowledge_breadth * 0.05, 0.0, 0.3)
+
+    # Base probability with competence
+    base_prob = agent.config.INNOVATION_PROBABILITY
+    competence_score = (
+        get(agent.traits, "innovativeness", 0.5) * 0.6 +
+        get(agent.resources.capabilities, "innovation", 0.1) * 0.4
+    )
+
+    ai_bonus_map = Dict(
+        "none" => 0.0,
+        "basic" => 0.12,
+        "advanced" => 0.25,
+        "premium" => 0.35
+    )
+
+    # Compute clarity signal from perception
+    clarity_signal = 0.0
+    if !isempty(perception)
+        ignorance = get(get(perception, "actor_ignorance", Dict()), "level", 0.5)
+        indeterminism = get(get(perception, "practical_indeterminism", Dict()), "level", 0.5)
+        clarity_signal = ((stable_sigmoid(1.0 - ignorance) + stable_sigmoid(1.0 - indeterminism)) / 2.0) - 0.5
+    end
+
+    # AI learning profile adjustments
+    avg_trust = 0.5
+    dynamic_bonus = 0.0
+    if ai_level != "none"
+        learning_profile = agent.ai_learning
+        trust_values = [
+            get(learning_profile.domain_trust, dom, 0.5)
+            for dom in ["technical_assessment", "innovation_potential"]
+        ]
+        avg_trust = isempty(trust_values) ? 0.5 : mean(trust_values)
+
+        reliability_signals = Float64[]
+        for dom in ["technical_assessment", "innovation_potential"]
+            scores = get(learning_profile.accuracy_estimates, dom, Float64[])
+            if !isempty(scores)
+                push!(reliability_signals, mean(scores[max(1, length(scores)-4):end]) - 0.5)
+            end
+        end
+        reliability = isempty(reliability_signals) ? 0.0 : mean(reliability_signals)
+        dynamic_bonus = (avg_trust - 0.5) * 0.2 + reliability * 0.25 + clarity_signal * 0.15
+    end
+
+    structural_bonus = get(ai_bonus_map, ai_level, 0.0) * max(0.0, clarity_signal + 0.5)
+    ai_bonus = clamp(structural_bonus + dynamic_bonus, -0.2, 0.3)
+
+    human_bonus = (
+        get(agent.traits, "exploration_tendency", 0.5) * 0.15 +
+        get(agent.traits, "market_awareness", 0.5) * 0.15 +
+        get(agent.traits, "innovativeness", 0.5) * 0.15
+    )
+
+    success_prob = clamp(base_prob * 0.35 + competence_score * 0.45 + ai_bonus + human_bonus + knowledge_factor, 0.05, 0.95)
+
+    # Reuse probability by tier
+    tier_reuse_shift = Dict(
+        "none" => 0.05, "basic" => 0.07, "advanced" => -0.03, "premium" => -0.08
+    )
+    reuse_prob = clamp(0.3 + get(tier_reuse_shift, ai_level, 0.0), 0.02, 0.75)
+    is_reused_combination = rand(agent.rng) < reuse_prob
+
+    # Innovation type determination
+    experience_units = agent.resources.experience_units
+    type_probs = Dict{String,Float64}(
+        "incremental" => 0.4 + max(experience_units, 0) * 0.001,
+        "architectural" => 0.3 + get(agent.traits, "trait_momentum", 0.1) * 0.35,
+        "radical" => 0.2 + get(agent.traits, "innovativeness", 0.5) * 0.25,
+        "disruptive" => 0.1 + get(agent.traits, "exploration_tendency", 0.5) * 0.2
+    )
+    if ai_level != "none"
+        type_probs["architectural"] += 0.08
+        type_probs["radical"] += 0.05
+    end
+
+    total_type_prob = sum(values(type_probs))
+    r = rand(agent.rng) * total_type_prob
+    cumsum_type = 0.0
+    innovation_type = "incremental"
+    for (itype, prob) in type_probs
+        cumsum_type += prob
+        if r <= cumsum_type
+            innovation_type = itype
+            break
+        end
+    end
+
     success = rand(agent.rng) < success_prob
 
+    # Novelty and scarcity
+    base_novelty = rand(agent.rng, Uniform(0.3, 0.9))
+    if innovation_type == "disruptive"
+        base_novelty = clamp(base_novelty + 0.2, 0.0, 1.0)
+    elseif innovation_type == "radical"
+        base_novelty = clamp(base_novelty + 0.1, 0.0, 1.0)
+    end
+    novelty = is_reused_combination ? base_novelty * 0.6 : base_novelty
+    scarcity = clamp(1.0 - avg_knowledge * 0.5 - knowledge_breadth * 0.02, 0.1, 0.9)
+    quality = clamp(avg_knowledge * 0.5 + get(agent.resources.capabilities, "innovation", 0.1) * 0.3 + rand(agent.rng) * 0.2, 0.1, 1.0)
+
     if success
-        # Create innovation value
         base_return = rd_spend * agent.config.INNOVATION_SUCCESS_BASE_RETURN
-        multiplier = rand(agent.rng, Uniform(agent.config.INNOVATION_SUCCESS_RETURN_MULTIPLIER...))
-        innovation_return = base_return * multiplier
+        mult_range = agent.config.INNOVATION_SUCCESS_RETURN_MULTIPLIER
+        base_multiplier = rand(agent.rng, Uniform(mult_range[1], mult_range[2]))
+
+        scarcity_bonus = 1.0 + (scarcity - 0.5) * 0.8
+        novelty_bonus = 1.0 + (novelty - 0.5) * 0.55
+        type_bonus = Dict("incremental" => 1.0, "architectural" => 1.15, "radical" => 1.35, "disruptive" => 1.6)
+
+        cash_multiple = clamp(base_multiplier * scarcity_bonus * novelty_bonus * get(type_bonus, innovation_type, 1.0), 1.1, 8.5)
+        innovation_return = base_return * cash_multiple
 
         set_capital!(agent, get_capital(agent) + innovation_return)
         agent.innovation_count += 1
@@ -415,19 +697,35 @@ function _execute_innovate!(
         outcome["success"] = true
         outcome["rd_spend"] = rd_spend
         outcome["innovation_return"] = innovation_return
-        outcome["is_new_combination"] = rand(agent.rng) < 0.3
+        outcome["cash_multiple"] = cash_multiple
+        outcome["novelty"] = novelty
+        outcome["scarcity"] = scarcity
+        outcome["quality"] = quality
+        outcome["innovation_type"] = innovation_type
+        outcome["is_new_combination"] = !is_reused_combination
+        outcome["ai_bonus_applied"] = ai_bonus
+        outcome["clarity_signal"] = clarity_signal
     else
-        # Partial recovery on failure
-        recovery = rd_spend * agent.config.INNOVATION_FAIL_RECOVERY_RATIO
+        novelty_clamped = clamp(novelty, 0.05, 0.95)
+        recovery_floor = 0.78 - (novelty_clamped - 0.05) / (0.95 - 0.05) * (0.78 - 0.42)
+        salvage = max(agent.config.INNOVATION_FAIL_RECOVERY_RATIO, recovery_floor - 0.12 * (scarcity - 0.5))
+        recovery = rd_spend * clamp(salvage, 0.25, 0.65)
+
         set_capital!(agent, get_capital(agent) + recovery)
 
         outcome["success"] = false
         outcome["rd_spend"] = rd_spend
         outcome["recovery"] = recovery
+        outcome["novelty"] = novelty
+        outcome["scarcity"] = scarcity
+        outcome["innovation_type"] = innovation_type
+        outcome["is_new_combination"] = !is_reused_combination
+        outcome["ai_bonus_applied"] = ai_bonus
+        outcome["clarity_signal"] = clarity_signal
     end
 
     record_deployment!(agent.resources.performance, "innovate", rd_spend;
-                       ai_level=get_ai_level(agent), round_num=round)
+                       ai_level=ai_level, round_num=round)
 
     return outcome
 end
@@ -438,32 +736,146 @@ function _execute_explore!(
     round::Int,
     outcome::Dict{String,Any}
 )::Dict{String,Any}
-    # Exploration cost (minimal)
-    explore_cost = get_capital(agent) * 0.01
+    ai_level = get_ai_level(agent)
+
+    # AI tier multiplier for exploration effectiveness (matches Python logic)
+    tier_multiplier = Dict(
+        "none" => 0.85,
+        "basic" => 1.0,
+        "advanced" => 1.15,
+        "premium" => 1.35
+    )
+    ai_mult = get(tier_multiplier, ai_level, 1.0)
+
+    # Exploration cost scales with traits and AI tier
+    exploration_tendency = get(agent.traits, "exploration_tendency", 0.3)
+    uncertainty_tolerance = get(agent.traits, "uncertainty_tolerance", 0.5)
+
+    trait_factor = (0.02 + exploration_tendency * 0.07) * ai_mult
+    uncertainty_cushion = max(0.02, 0.12 - uncertainty_tolerance * 0.08)
+
+    # Get uncertainty values from perception (matches Python uncertainty hooks)
+    perception = agent.last_perception
+    actor_unc = get(get(perception, "actor_ignorance", Dict()), "level", 0.5)
+    recursion_unc = get(get(perception, "competitive_recursion", Dict()), "level", 0.5)
+    agentic_unc = get(get(perception, "agentic_novelty", Dict()), "level", 0.5)
+    practical_unc = get(get(perception, "practical_indeterminism", Dict()), "level", 0.5)
+
+    # First uncertainty adjustment (matches Python)
+    trait_factor *= clamp(1.0 + 0.2 * actor_unc + 0.15 * recursion_unc, 0.6, 1.8)
+
+    # Second uncertainty adjustment (matches Python)
+    trait_factor *= clamp(1.0 + 0.15 * agentic_unc - 0.1 * recursion_unc, 0.5, 1.5)
+    uncertainty_cushion *= clamp(1.0 + 0.1 * actor_unc + 0.05 * practical_unc, 0.5, 1.6)
+
+    desired_cost = get_capital(agent) * (trait_factor + uncertainty_cushion)
+    # Add some randomness to cost
+    cost_noise = clamp(randn(agent.rng) * 0.25 + 1.0, 0.4, 1.8)
+    explore_cost = min(desired_cost * cost_noise, 5000.0, get_capital(agent) * 0.1)
+
     set_capital!(agent, get_capital(agent) - explore_cost)
 
-    # Knowledge gain
-    discovery_prob = agent.config.DISCOVERY_PROBABILITY
+    # Discovery probability with AI tier bonus
+    base_discovery_prob = agent.config.DISCOVERY_PROBABILITY
+
+    # AI-enhanced discovery probability
+    discovery_bonus = Dict(
+        "none" => 0.0,
+        "basic" => 0.05,
+        "advanced" => 0.12,
+        "premium" => 0.18
+    )
+    ai_discovery_bonus = get(discovery_bonus, ai_level, 0.0)
+
+    discovery_prob = clamp(base_discovery_prob + ai_discovery_bonus, 0.1, 0.9)
     discovered = rand(agent.rng) < discovery_prob
 
-    if discovered
-        # Increase knowledge in a random sector
-        sector = rand(agent.rng, agent.config.SECTORS)
-        current_knowledge = get(agent.resources.knowledge, sector, 0.1)
-        knowledge_gain = rand(agent.rng, Uniform(0.05, 0.15))
-        agent.resources.knowledge[sector] = min(1.0, current_knowledge + knowledge_gain)
-        agent.resources.knowledge_last_used[sector] = round
+    # Determine exploration type based on innovation saturation (matches Python)
+    # Calculate innovation saturation from market innovations
+    recent_innovations = length(market.innovations)
+    innovation_saturation = clamp(recent_innovations / max(1, market.n_agents * 0.5), 0.1, 0.7)
+    is_niche_discovery = rand(agent.rng) < innovation_saturation
 
-        outcome["success"] = true
-        outcome["discovered_sector"] = sector
-        outcome["knowledge_gain"] = knowledge_gain
+    if discovered
+        if is_niche_discovery
+            # Niche discovery with modifiers (matches Python)
+            outcome["exploration_type"] = "niche_discovery"
+            existing_sectors = collect(agent.config.SECTORS)
+            base_sector = rand(agent.rng, existing_sectors)
+
+            niche_modifiers = ["premium", "budget", "sustainable", "digital", "local", "specialized"]
+            niche_modifier = rand(agent.rng, niche_modifiers)
+            niche_id = "$(base_sector)_$(niche_modifier)"
+
+            # Add knowledge about this new niche
+            if !haskey(agent.resources.knowledge, niche_id)
+                agent.resources.knowledge[niche_id] = rand(agent.rng, Uniform(0.2, 0.4))
+            else
+                agent.resources.knowledge[niche_id] = min(1.0, agent.resources.knowledge[niche_id] + 0.2)
+            end
+
+            # Apply amplification based on exploration tendency and AI tier
+            trait_amp = (0.7 + 0.6 * exploration_tendency) * ai_mult
+            agent.resources.knowledge[niche_id] = min(
+                1.0, agent.resources.knowledge[niche_id] * (0.9 + 0.2 * trait_amp)
+            )
+            agent.resources.knowledge_last_used[niche_id] = round
+
+            outcome["success"] = true
+            outcome["discovered_sector"] = niche_id
+            outcome["knowledge_gain"] = agent.resources.knowledge[niche_id]
+            outcome["niche_modifier"] = niche_modifier
+
+            # Serendipity rewards for niche discovery (higher multiplier)
+            serendipity_chance = clamp(
+                (0.18 + 0.4 * (exploration_tendency - 0.3)) * ai_mult,
+                0.05,
+                0.7
+            )
+            if rand(agent.rng) < serendipity_chance
+                serendipity_reward = explore_cost * rand(agent.rng, Uniform(2.0, 6.0))
+                set_capital!(agent, get_capital(agent) + serendipity_reward)
+                record_return!(agent.resources.performance, "explore", serendipity_reward; ai_level="none", round_num=round)
+                outcome["serendipity_reward"] = serendipity_reward
+            end
+        else
+            # Standard sector exploration
+            outcome["exploration_type"] = "sector_knowledge"
+            sector = rand(agent.rng, agent.config.SECTORS)
+            current_knowledge = get(agent.resources.knowledge, sector, 0.1)
+
+            # Knowledge gain also scales with AI tier
+            base_gain = rand(agent.rng, Uniform(0.05, 0.15))
+            knowledge_gain = base_gain * ai_mult
+            agent.resources.knowledge[sector] = min(1.0, current_knowledge + knowledge_gain)
+            agent.resources.knowledge_last_used[sector] = round
+
+            outcome["success"] = true
+            outcome["discovered_sector"] = sector
+            outcome["knowledge_gain"] = knowledge_gain
+
+            # Serendipity rewards for sector exploration (lower multiplier)
+            serendipity_chance = clamp(
+                (0.12 + 0.25 * (exploration_tendency - 0.4)) * ai_mult,
+                0.04,
+                0.55
+            )
+            if rand(agent.rng) < serendipity_chance
+                serendipity_reward = explore_cost * rand(agent.rng, Uniform(1.5, 4.0))
+                set_capital!(agent, get_capital(agent) + serendipity_reward)
+                record_return!(agent.resources.performance, "explore", serendipity_reward; ai_level="none", round_num=round)
+                outcome["serendipity_reward"] = serendipity_reward
+            end
+        end
     else
         outcome["success"] = false
+        outcome["exploration_type"] = "failed"
     end
 
     outcome["explore_cost"] = explore_cost
+    outcome["ai_multiplier_applied"] = ai_mult
     record_deployment!(agent.resources.performance, "explore", explore_cost;
-                       ai_level=get_ai_level(agent), round_num=round)
+                       ai_level=ai_level, round_num=round)
 
     return outcome
 end
@@ -481,6 +893,7 @@ end
 
 """
 Process matured investments and return outcomes.
+Matches Python check_matured_investments with binary success/failure and severe loss on failure.
 """
 function process_matured_investments!(
     agent::EmergentAgent,
@@ -501,16 +914,127 @@ function process_matured_investments!(
             # Investment matures
             opp = investment["opportunity"]
             invested_amount = Float64(investment["amount"])
+            ai_tier = get(investment, "ai_level", "none")
+            ai_info = get(investment, "ai_info", nothing)
 
-            # Calculate realized return
-            ret_multiple = realized_return(opp, market_conditions, get_ai_level(agent); rng=agent.rng)
+            # ================================================================
+            # STEP 1: Calculate failure chance (matches Python exactly)
+            # ================================================================
+            raw_risk = coalesce(opp.latent_failure_potential, 0.5)
+            risk = clamp(raw_risk, 0.05, 0.95)
+
+            # AI accuracy reduces failure chance
+            accuracy = 0.0
+            hallucination = 0.0
+            if !isnothing(ai_info) && isa(ai_info, Dict)
+                accuracy = Float64(get(ai_info, "actual_accuracy", 0.0))
+                hallucination = get(ai_info, "contains_hallucination", false) ? 0.1 : 0.0
+            end
+            failure_adjustment = -0.15 * accuracy + hallucination
+
+            # Sector failure multiplier
+            sector_key = coalesce(opp.sector, "unknown")
+            sector_adjustments = get(market_conditions, "sector_demand_adjustments", Dict{String,Any}())
+            sector_adjust = get(sector_adjustments, sector_key, nothing)
+            sector_failure = 1.0
+            if isa(sector_adjust, Dict)
+                sector_failure = Float64(get(sector_adjust, "failure", 1.0))
+            end
+
+            # Regime failure multiplier
+            regime_failure = Float64(get(market_conditions, "regime_failure_multiplier", 1.0))
+
+            # Base failure probability
+            base_failure = 0.05 + 0.5 * risk * sector_failure * regime_failure + failure_adjustment
+
+            # Crowding increases failure
+            crowding_metrics = get(market_conditions, "crowding_metrics", Dict{String,Any}())
+            crowd_idx = Float64(get(crowding_metrics, "crowding_index", 0.25))
+            crowd_threshold = agent.config.RETURN_DEMAND_CROWDING_THRESHOLD
+            crowd_multiplier = 1.0
+            if crowd_idx > crowd_threshold
+                crowd_multiplier += 0.25 * (crowd_idx - crowd_threshold)
+            end
+
+            failure_chance = clamp(base_failure * crowd_multiplier, 0.05, 0.9)
+
+            # ================================================================
+            # STEP 2: Binary success/failure determination
+            # ================================================================
+            success = rand(agent.rng) >= failure_chance
+
+            # ================================================================
+            # STEP 3: Calculate return based on success/failure
+            # ================================================================
+            ret_multiple = 0.0
+            defaulted = false
+
+            if success
+                # SUCCESS: Use realized_return for positive multiplier
+                ret_multiple = realized_return(opp, market_conditions, ai_tier; rng=agent.rng)
+                # Ensure success returns are >= 1.0
+                ret_multiple = max(ret_multiple, 1.0)
+            else
+                # FAILURE: Calculate recovery_ratio (0.0 to 0.4 typically)
+                # Severity and recovery floor based on risk
+                severity = 0.25 + (risk - 0.05) / (0.95 - 0.05) * (0.9 - 0.25)
+                recovery_floor = 0.3 - (risk - 0.05) / (0.95 - 0.05) * (0.3 - 0.02)
+                loss_noise = randn(agent.rng) * 0.1
+                recovery_ratio = clamp(recovery_floor + loss_noise, 0.0, 0.4)
+
+                # HHI adjustment
+                combo_hhi = Float64(get(market_conditions, "combo_hhi", 0.0))
+                recovery_ratio *= clamp(1.0 - combo_hhi * 0.8, 0.05, 1.0)
+
+                # Scarcity and reuse adjustments
+                unc_state = get(market_conditions, "uncertainty_state", Dict{String,Any}())
+                agentic_state = isa(unc_state, Dict) ? get(unc_state, "agentic_novelty", unc_state) : Dict{String,Any}()
+                scarcity_signal = if isa(agentic_state, Dict)
+                    Float64(get(agentic_state, "component_scarcity", coalesce(opp.component_scarcity, 0.5)))
+                else
+                    coalesce(opp.component_scarcity, 0.5)
+                end
+                reuse_pressure = isa(agentic_state, Dict) ? Float64(get(agentic_state, "reuse_pressure", 0.0)) : 0.0
+
+                recovery_ratio *= clamp(1.0 - reuse_pressure * 0.3, 0.35, 1.0)
+                recovery_ratio += 0.04 * max(0.0, scarcity_signal - 0.5)
+
+                # AI tier effects on recovery
+                tier_shares = get(market_conditions, "tier_invest_share", Dict{String,Float64}())
+                tier_share = Float64(get(tier_shares, ai_tier, 0.0))
+
+                if ai_tier != "none"
+                    accuracy_cushion = max(0.0, accuracy - 0.7) * (0.1 + 0.05 * scarcity_signal)
+                    recovery_ratio = clamp(recovery_ratio + accuracy_cushion, 0.0, 0.6)
+                    if !isnothing(ai_info) && isa(ai_info, Dict) && get(ai_info, "contains_hallucination", false)
+                        recovery_ratio = clamp(recovery_ratio - 0.07, 0.0, 0.6)
+                    end
+                else
+                    recovery_ratio = clamp(recovery_ratio - 0.05, 0.0, 0.4)
+                end
+
+                # Tier share penalty
+                recovery_ratio *= clamp(1.0 - tier_share * (1.0 + 0.3 * (1.0 - scarcity_signal)), 0.05, 1.0)
+
+                # Default trigger: can cause total loss
+                default_trigger = rand(agent.rng) < (0.2 * severity * rand(agent.rng))
+                if default_trigger
+                    recovery_ratio = 0.0
+                    defaulted = true
+                end
+
+                ret_multiple = recovery_ratio
+            end
+
+            # ================================================================
+            # STEP 4: Apply to agent
+            # ================================================================
             capital_returned = invested_amount * ret_multiple
 
-            # Apply to agent capital
             set_capital!(agent, get_capital(agent) + capital_returned)
             agent.total_returned += capital_returned
+            agent.locked_capital = max(0.0, agent.locked_capital - invested_amount)
 
-            success = ret_multiple >= 1.0
             if success
                 agent.success_count += 1
             else
@@ -527,6 +1051,7 @@ function process_matured_investments!(
                 "capital_returned" => capital_returned,
                 "return_multiple" => ret_multiple,
                 "success" => success,
+                "defaulted" => defaulted,
                 "round_matured" => round
             ))
         else
@@ -540,13 +1065,15 @@ end
 
 """
 Apply operational costs for the round.
+Matches Python _estimate_operational_costs + apply_operational_costs logic.
 """
-function apply_operational_costs!(agent::EmergentAgent, round::Int)
+function apply_operational_costs!(agent::EmergentAgent, round::Int; market::Union{MarketEnvironment,Nothing}=nothing)
     if !agent.alive
         return
     end
 
-    cost = agent.config.BASE_OPERATIONAL_COST
+    # Calculate operational costs matching Python implementation
+    cost = estimate_operational_costs(agent, market)
     current = get_capital(agent)
     set_capital!(agent, current - cost)
 end
@@ -642,24 +1169,6 @@ end
 
 # Note: stable_sigmoid is defined in innovation.jl
 
-"""
-Fast mean for collections, returns 0.0 for empty.
-"""
-function fast_mean(vals)::Float64
-    if isempty(vals)
-        return 0.0
-    end
-    s = 0.0
-    n = 0
-    for v in vals
-        if !ismissing(v) && isfinite(v)
-            s += v
-            n += 1
-        end
-    end
-    return n > 0 ? s / n : 0.0
-end
-
 # ============================================================================
 # AI PERFORMANCE METRICS
 # ============================================================================
@@ -673,37 +1182,123 @@ function compute_ai_performance_metrics(agent::EmergentAgent)::Dict{String,Any}
 
     # Basic ROI metrics
     overall_roic = compute_roic(perf)
-    invest_roic = compute_roic(perf; action="invest")
-    innovate_roic = compute_roic(perf; action="innovate")
-    explore_roic = compute_roic(perf; action="explore")
+    invest_roic = compute_roic(perf, "invest")
+    innovate_roic = compute_roic(perf, "innovate")
+    explore_roic = compute_roic(perf, "explore")
 
     metrics["overall_roic"] = overall_roic
     metrics["invest_roic"] = invest_roic
     metrics["innovate_roic"] = innovate_roic
     metrics["explore_roic"] = explore_roic
 
+    # Separate AI-assisted vs baseline (non-AI) performance (matches Python)
+    overall_by_ai = get(perf.deployments_by_ai, "overall", Dict{String,Float64}())
+    returns_by_ai = get(perf.returns_by_ai, "overall", Dict{String,Float64}())
+
+    # AI-assisted totals (basic, advanced, premium)
+    ai_deployed = 0.0
+    ai_returned = 0.0
+    for tier in ["basic", "advanced", "premium"]
+        ai_deployed += get(overall_by_ai, tier, 0.0)
+        ai_returned += get(returns_by_ai, tier, 0.0)
+    end
+
+    # Baseline (none) totals
+    baseline_deployed = get(overall_by_ai, "none", 0.0)
+    baseline_returned = get(returns_by_ai, "none", 0.0)
+
+    # Compute AI ROI
+    ai_avg_roi = if ai_deployed > 0
+        ai_returned / ai_deployed
+    else
+        1.0
+    end
+
+    # Compute baseline ROI
+    baseline_avg_roi = if baseline_deployed > 0
+        baseline_returned / baseline_deployed
+    else
+        1.0  # Default to 1.0 (break-even) if no baseline data
+    end
+
     # Cash flow metrics
     deployed_total = get(perf.deployed_by_action, "overall", 0.0)
     returned_total = get(perf.returned_by_action, "overall", 0.0)
     metrics["overall_cash_flow_total"] = returned_total - deployed_total
 
-    # Recent activity (approximate)
-    n_actions = length(agent.action_history)
-    recent_window = min(20, n_actions)
-    metrics["recent_ai_activity"] = max(1.0, Float64(recent_window) / 5.0)
+    # Compute recent metrics from roi_events (matches Python recent_window)
+    recent_window = max(1, agent.config.AI_TIER_RECENT_WINDOW)
+    recent_events = perf.roi_events
+    n_events = length(recent_events)
 
-    # ROI gain ratio
-    if deployed_total > 0
-        metrics["roi_gain"] = (returned_total - deployed_total) / deployed_total
-        metrics["roi_gain_ratio"] = metrics["roi_gain"]
-    else
-        metrics["roi_gain"] = 0.0
-        metrics["roi_gain_ratio"] = 0.0
+    # Recent AI and baseline tracking
+    recent_ai_deployed = 0.0
+    recent_ai_returned = 0.0
+    recent_baseline_deployed = 0.0
+    recent_baseline_returned = 0.0
+    recent_total_deployed = 0.0
+    recent_total_returned = 0.0
+
+    # Process recent events (last N events, matching deployments with returns)
+    recent_start = max(1, n_events - recent_window * 2 + 1)  # Approximate window
+    for i in recent_start:n_events
+        event = recent_events[i]
+        ai_level = get(event, "ai_level", "none")
+        amount = get(event, "amount", 0.0)
+        event_type = get(event, "type", "")
+
+        is_ai = ai_level in ("basic", "advanced", "premium")
+
+        if event_type == "deployment"
+            recent_total_deployed += amount
+            if is_ai
+                recent_ai_deployed += amount
+            else
+                recent_baseline_deployed += amount
+            end
+        elseif event_type == "return"
+            recent_total_returned += amount
+            if is_ai
+                recent_ai_returned += amount
+            else
+                recent_baseline_returned += amount
+            end
+        end
     end
 
-    metrics["recent_roi_gain"] = metrics["roi_gain"]
-    metrics["recent_roi_gain_ratio"] = metrics["roi_gain_ratio"]
-    metrics["recent_cash_flow_total"] = metrics["overall_cash_flow_total"]
+    # Recent ROI calculations
+    recent_ai_avg_roi = if recent_ai_deployed > 0
+        recent_ai_returned / recent_ai_deployed
+    else
+        ai_avg_roi  # Fall back to overall
+    end
+
+    recent_baseline_avg_roi = if recent_baseline_deployed > 0
+        recent_baseline_returned / recent_baseline_deployed
+    else
+        baseline_avg_roi  # Fall back to overall
+    end
+
+    # ROI gain metrics (AI performance vs baseline) - matches Python exactly
+    metrics["roi_gain"] = ai_avg_roi - baseline_avg_roi
+    metrics["recent_roi_gain"] = recent_ai_avg_roi - recent_baseline_avg_roi
+
+    # ROI gain ratio (relative improvement)
+    metrics["roi_gain_ratio"] = baseline_avg_roi > 1e-3 ? (ai_avg_roi / baseline_avg_roi) - 1.0 : 0.0
+    metrics["recent_roi_gain_ratio"] = recent_baseline_avg_roi > 1e-3 ? (recent_ai_avg_roi / recent_baseline_avg_roi) - 1.0 : 0.0
+
+    # Recent cash flow
+    metrics["recent_cash_flow_total"] = recent_total_returned - recent_total_deployed
+
+    # Activity metrics
+    n_actions = length(agent.action_history)
+    metrics["recent_ai_activity"] = max(1.0, Float64(min(recent_window, n_actions)) / 5.0)
+
+    # Additional metrics for compatibility
+    metrics["avg_roi"] = ai_deployed > 0 ? ai_avg_roi : baseline_avg_roi
+    metrics["baseline_avg_roi"] = baseline_avg_roi
+    metrics["recent_avg_roi"] = recent_ai_deployed > 0 ? recent_ai_avg_roi : recent_baseline_avg_roi
+    metrics["baseline_recent_avg_roi"] = recent_baseline_avg_roi
 
     return metrics
 end
@@ -725,22 +1320,138 @@ function estimate_ai_cost(
     end
 
     ai_config = get(agent.config.AI_LEVELS, ai_level, agent.config.AI_LEVELS["none"])
-    cost_type = get(ai_config, "cost_type", "none")
+    cost_type = ai_config.cost_type
 
     # Scale costs by AI_COST_INTENSITY (for robustness testing)
     cost_intensity = agent.config.AI_COST_INTENSITY
 
     if cost_type == "subscription"
-        base_cost = Float64(get(ai_config, "cost", 0.0)) * cost_intensity
-        per_use = Float64(get(ai_config, "per_use_cost", 0.0)) * cost_intensity
+        base_cost = ai_config.cost * cost_intensity
+        per_use = ai_config.per_use_cost * cost_intensity
         # Amortize subscription over rounds
-        amort_rounds = max(1, get(agent.config.AI_SUBSCRIPTION_AMORTIZATION_ROUNDS, 20))
+        amort_rounds = max(1, agent.config.AI_SUBSCRIPTION_AMORTIZATION_ROUNDS)
         return base_cost / amort_rounds + per_use * max(expected_calls, 0.0)
     elseif cost_type == "per_use"
-        return Float64(get(ai_config, "cost", 0.0)) * cost_intensity * max(expected_calls, 0.0)
+        return ai_config.cost * cost_intensity * max(expected_calls, 0.0)
     end
 
     return 0.0
+end
+
+"""
+Start a subscription schedule for an AI tier (matches Python _start_subscription_schedule).
+"""
+function start_subscription_schedule!(agent::EmergentAgent, ai_level::String)
+    if ai_level == "none"
+        return
+    end
+
+    ai_config = get(agent.config.AI_LEVELS, ai_level, nothing)
+    if isnothing(ai_config)
+        return
+    end
+
+    cycle = max(1, agent.config.AI_SUBSCRIPTION_AMORTIZATION_ROUNDS)
+    base_cost = ai_config.cost * agent.config.AI_COST_INTENSITY
+    if base_cost <= 0
+        return
+    end
+
+    agent.subscription_accounts[ai_level] = cycle
+    agent.subscription_rates[ai_level] = base_cost / cycle
+end
+
+"""
+Compute subscription deferral rounds based on entrepreneurial drive (matches Python).
+"""
+function compute_subscription_deferral_rounds(agent::EmergentAgent, ai_level::String)::Int
+    base_grace = agent.config.AI_SUBSCRIPTION_FLOAT_BASE_ROUNDS
+    max_extra = max(0, agent.config.AI_SUBSCRIPTION_FLOAT_MAX_ROUNDS)
+    drive = get(agent.traits, "entrepreneurial_drive", 0.5)
+    extra = round(Int, max_extra * max(0.0, drive))
+    return base_grace + extra
+end
+
+"""
+Charge one subscription installment (matches Python _charge_subscription_installment).
+Returns the amount charged.
+"""
+function charge_subscription_installment!(agent::EmergentAgent, ai_level::String)::Float64
+    remaining = get(agent.subscription_accounts, ai_level, 0)
+    rate = get(agent.subscription_rates, ai_level, 0.0)
+
+    if remaining <= 0 || rate <= 0
+        return 0.0
+    end
+
+    # Check deferral
+    deferral = get(agent.subscription_deferral_remaining, ai_level, 0)
+    if deferral > 0
+        next_deferral = deferral - 1
+        if next_deferral > 0
+            agent.subscription_deferral_remaining[ai_level] = next_deferral
+        else
+            delete!(agent.subscription_deferral_remaining, ai_level)
+        end
+        return 0.0
+    end
+
+    # Charge the subscription
+    set_capital!(agent, get_capital(agent) - rate)
+    remaining -= 1
+
+    if remaining <= 0
+        delete!(agent.subscription_accounts, ai_level)
+        delete!(agent.subscription_rates, ai_level)
+    else
+        agent.subscription_accounts[ai_level] = remaining
+    end
+
+    return rate
+end
+
+"""
+Apply all active subscription charges (matches Python _apply_subscription_carry).
+Returns total amount charged.
+"""
+function apply_subscription_carry!(agent::EmergentAgent, current_round::Int)::Float64
+    total = 0.0
+    credit_line = agent.config.AI_CREDIT_LINE_ROUNDS
+
+    for level in collect(keys(agent.subscription_accounts))
+        # Skip advanced/premium during credit line period
+        if credit_line > 0 && current_round < credit_line && level in ("advanced", "premium")
+            continue
+        end
+        total += charge_subscription_installment!(agent, level)
+    end
+
+    agent.last_subscription_charge = total
+    return total
+end
+
+"""
+Ensure a subscription schedule exists for the given AI level (matches Python _ensure_subscription_schedule).
+Called when AI is actually used, not just selected.
+"""
+function ensure_subscription_schedule!(agent::EmergentAgent, ai_level::String)
+    if ai_level == "none"
+        return
+    end
+
+    ai_config = get(agent.config.AI_LEVELS, ai_level, nothing)
+    if isnothing(ai_config) || ai_config.cost <= 0
+        return
+    end
+
+    # Only start if no active subscription exists
+    if get(agent.subscription_accounts, ai_level, 0) <= 0
+        start_subscription_schedule!(agent, ai_level)
+        grace_rounds = compute_subscription_deferral_rounds(agent, ai_level)
+        if grace_rounds > 0
+            agent.subscription_deferral_remaining[ai_level] = grace_rounds
+        end
+    end
 end
 
 """
@@ -829,7 +1540,7 @@ function choose_ai_level(
     cash_buffer = max(get_capital(agent), agent.resources.performance.initial_equity, 1.0)
     operating_cost = agent.config.BASE_OPERATIONAL_COST
     recent_activity = max(1.0, Float64(get(metrics, "recent_ai_activity", 1.0)))
-    amort_horizon = max(1, get(agent.config.AI_SUBSCRIPTION_AMORTIZATION_ROUNDS, 20))
+    amort_horizon = max(1, agent.config.AI_SUBSCRIPTION_AMORTIZATION_ROUNDS)
     ref_scale = max(operating_cost * 4.0, cash_buffer * 0.12, 1.0)
 
     # Scale costs by AI_COST_INTENSITY (for robustness testing)
@@ -841,10 +1552,14 @@ function choose_ai_level(
             cost_ratios[tier] = 0.0
             continue
         end
-        cfg = get(agent.config.AI_LEVELS, tier, Dict())
-        cost_type = get(cfg, "cost_type", "none")
-        base_cost = Float64(get(cfg, "cost", 0.0)) * cost_intensity
-        per_use_cost = Float64(get(cfg, "per_use_cost", 0.0)) * cost_intensity
+        cfg = get(agent.config.AI_LEVELS, tier, nothing)
+        if isnothing(cfg)
+            cost_ratios[tier] = 0.0
+            continue
+        end
+        cost_type = cfg.cost_type
+        base_cost = cfg.cost * cost_intensity
+        per_use_cost = cfg.per_use_cost * cost_intensity
 
         total_cost = if cost_type == "subscription"
             per_round = base_cost / amort_horizon
@@ -864,10 +1579,13 @@ function choose_ai_level(
         current_level = "none"
     end
 
-    # Extract performance signals
-    roi_gain = Float64(get(metrics, "roi_gain", 0.0))
+    # Extract performance signals (matches Python _choose_ai_level)
+    base_roi_gain = Float64(get(metrics, "recent_roi_gain", 0.0))
+    long_roi_gain = Float64(get(metrics, "roi_gain", 0.0))
+    recent_roi_ratio = Float64(get(metrics, "recent_roi_gain_ratio", 0.0))
     roi_gain_ratio = Float64(get(metrics, "roi_gain_ratio", 0.0))
     net_cash_total = Float64(get(metrics, "overall_cash_flow_total", 0.0))
+    net_cash_recent = Float64(get(metrics, "recent_cash_flow_total", 0.0))
     initial_equity = max(agent.resources.performance.initial_equity, 1.0)
     capital_health = (get_capital(agent) / initial_equity) - 1.0
 
@@ -884,10 +1602,20 @@ function choose_ai_level(
         posterior = posterior_means[tier]
         trust_term = posterior * base_trust
 
-        roi_signal = 0.3 * roi_gain + 0.45 * roi_gain_ratio
+        # ROI signal (matches Python exactly)
+        roi_signal = (
+            0.3 * base_roi_gain +
+            0.4 * long_roi_gain +
+            0.45 * recent_roi_ratio +
+            0.25 * roi_gain_ratio
+        )
         roi_term = posterior * roi_signal
 
-        cash_term = 0.2 * clamp(net_cash_total / initial_equity, -1.5, 1.5)
+        # Cash term includes both total and recent (matches Python)
+        cash_term = (
+            0.2 * clamp(net_cash_total / initial_equity, -1.5, 1.5) +
+            0.1 * clamp(net_cash_recent / initial_equity, -1.5, 1.5)
+        )
 
         peer_term = 0.08 * peer_roi_signal + 0.12 * adoption_pressure +
                    0.05 * Float64(get(peer_distribution, tier, 0.0))
@@ -904,6 +1632,17 @@ function choose_ai_level(
         switch_penalty = max(0.0, compute_ai_switch_penalty(agent, current_level, tier) - learning_relief)
         reserve_penalty = get(reserve_haircut, tier, 0.0) * max(0.0, 1.0 - capital_health)
 
+        # Paradox signal effect (matches Python implementation)
+        paradox_term = 0.0
+        paradox_signal = agent.paradox_signal
+        if paradox_signal != 0.0
+            if tier in ("premium", "advanced")
+                paradox_term -= 0.15 * paradox_signal
+            elseif tier == "none"
+                paradox_term += 0.1 * paradox_signal
+            end
+        end
+
         # Gumbel noise for stochastic selection
         noise = -log(-log(rand(agent.rng))) * 0.02  # Gumbel(0,1) * 0.02
 
@@ -917,6 +1656,7 @@ function choose_ai_level(
             reserve_penalty -
             switch_penalty -
             0.05 * avoidance +
+            paradox_term +
             noise
         )
 
@@ -940,6 +1680,78 @@ function choose_ai_level(
     agent.current_ai_level = best_tier
 
     return best_tier
+end
+
+# ============================================================================
+# HURDLE RATE AND COST OF CAPITAL (matches Python _calculate_agent_cost_of_capital)
+# ============================================================================
+
+"""
+Estimate a hurdle rate tailored to the agent and current market stress.
+Matches Python _calculate_agent_cost_of_capital exactly.
+"""
+function calculate_agent_cost_of_capital(
+    agent::EmergentAgent,
+    capital_utilization::Float64,
+    market_conditions::Dict{String,Any}
+)::Float64
+    base_rate = agent.config.COST_OF_CAPITAL
+    uncertainty_penalty = (0.5 - get(agent.traits, "uncertainty_tolerance", 0.5)) * 0.05
+    competence_bonus = (get(agent.traits, "competence", 0.5) - 0.5) * 0.03
+    market_volatility = Float64(get(market_conditions, "volatility", agent.config.MARKET_VOLATILITY))
+    volatility_penalty = max(0.0, market_volatility - agent.config.MARKET_VOLATILITY) * 0.1
+    liquidity_penalty = capital_utilization * 0.05
+    cost = base_rate + uncertainty_penalty + volatility_penalty + liquidity_penalty - competence_bonus
+    return Float64(max(0.02, cost))
+end
+
+"""
+Estimate operational costs for the agent (matches Python _estimate_operational_costs).
+"""
+function estimate_operational_costs(agent::EmergentAgent, market::MarketEnvironment)::Float64
+    # Portfolio competition pressure
+    portfolio_competition = 0.0
+    if !isempty(agent.active_investments)
+        competitions = Float64[]
+        for inv in agent.active_investments
+            opp = get(inv, "opportunity", nothing)
+            if !isnothing(opp)
+                push!(competitions, Float64(opp.competition))
+            end
+        end
+        if !isempty(competitions)
+            portfolio_competition = mean(competitions)
+        end
+    end
+
+    base_cost = agent.config.BASE_OPERATIONAL_COST
+
+    # Get sector operating cost range from SECTOR_PROFILES (matches Python)
+    agent_sector = get(agent.traits, "sector", nothing)
+    sector_profiles = agent.config.SECTOR_PROFILES
+    sector_profile = get(sector_profiles, agent_sector, Dict{String,Any}())
+    operating_range = get(sector_profile, "operating_cost_range", (0.05, 0.20))
+
+    # Handle tuple/vector for operating range
+    if isa(operating_range, Tuple) && length(operating_range) >= 2
+        sector_mult = 0.5 * (operating_range[1] + operating_range[2])
+    elseif isa(operating_range, Vector) && length(operating_range) >= 2
+        sector_mult = 0.5 * (operating_range[1] + operating_range[2])
+    else
+        sector_mult = 0.125  # Default
+    end
+
+    monthly_base_cost = base_cost * sector_mult
+    competition_cost = portfolio_competition * agent.config.COMPETITION_COST_MULTIPLIER
+    total_cost = monthly_base_cost + competition_cost
+
+    # AI tier efficiency modifier
+    ai_level = get_ai_level(agent)
+    ai_efficiency = Dict("none" => 1.0, "basic" => 1.08, "advanced" => 0.94, "premium" => 0.88)
+    eff_mult = get(ai_efficiency, ai_level, 1.0)
+
+    total_cost *= eff_mult
+    return Float64(total_cost)
 end
 
 # ============================================================================
@@ -988,7 +1800,7 @@ function calculate_investment_utility(
 
     # Performance adjustments
     perf = agent.resources.performance
-    invest_roic = compute_roic(perf; action="invest")
+    invest_roic = compute_roic(perf, "invest")
 
     # Locked capital
     locked = sum(inv["amount"] for inv in agent.active_investments; init=0.0)
@@ -1021,6 +1833,18 @@ function calculate_investment_utility(
     recent_invests = count(==("invest"), agent.action_history[max(1, end-9):end])
     value -= 0.1 * recent_invests / 10.0
 
+    # Paradox signal effect (matches Python implementation)
+    paradox_signal = agent.paradox_signal
+    if paradox_signal != 0.0
+        trust = Float64(get(agent.traits, "ai_trust", 0.5))
+        tolerance = Float64(get(agent.traits, "uncertainty_tolerance", 0.5))
+        if trust >= 0.6 || tolerance >= 0.6
+            value += 0.25 * paradox_signal
+        else
+            value -= 0.35 * paradox_signal
+        end
+    end
+
     return clamp(value, 0.0, 1.0)
 end
 
@@ -1049,7 +1873,7 @@ function calculate_innovation_utility(
     rd_deployed = get(agent.resources.performance.deployed_by_action, "innovate", 0.0)
     rd_burden = clamp(rd_deployed / max(agent.resources.performance.initial_equity, 1.0), 0.0, 2.0)
 
-    innovate_roic = compute_roic(agent.resources.performance; action="innovate")
+    innovate_roic = compute_roic(agent.resources.performance, "innovate")
     loss_ratio = max(0.0, -innovate_roic)
 
     risk_tolerance = Float64(get(agent.traits, "uncertainty_tolerance", 0.5))
@@ -1065,6 +1889,15 @@ function calculate_innovation_utility(
         0.2 * (risk_tolerance - 0.5) -
         0.15 * avoidance
     )
+
+    # Paradox signal effect (matches Python implementation)
+    paradox_signal = agent.paradox_signal
+    if paradox_signal != 0.0
+        pivot_weight = max(0.0, 0.6 - risk_tolerance)
+        surge_weight = max(0.0, risk_tolerance - 0.4)
+        raw_score += 0.2 * pivot_weight * paradox_signal
+        raw_score -= 0.15 * surge_weight * paradox_signal
+    end
 
     return clamp(stable_sigmoid(raw_score - 0.6), 0.02, 0.98)
 end
@@ -1106,15 +1939,37 @@ function calculate_exploration_utility(
         recursion_penalty += 0.12 * max(0.0, recursive_unc - 0.5)
     end
 
-    explore_roic = compute_roic(agent.resources.performance; action="explore")
+    explore_roic = compute_roic(agent.resources.performance, "explore")
     momentum_bonus = clamp(explore_roic, -0.5, 0.5) * 0.2
 
     risk_tolerance = Float64(get(agent.traits, "uncertainty_tolerance", 0.5))
     avoidance = 1.0 - risk_tolerance
 
-    # Recent explore penalty
-    recent_explores = count(==("explore"), agent.action_history[max(1, end-4):end])
-    recent_explore_penalty = recent_explores > 2 ? 0.25 : 0.0
+    # Recent explore penalty and invest streak (matches Python logic)
+    recent_explore_penalty = 0.0
+    invest_streak = 0
+    invest_bias = 0.0
+    history = agent.recent_actions
+    if !isempty(history)
+        if history[end] == "explore"
+            recent_explore_penalty += 0.15
+        end
+        if length(history) >= 3
+            streak = count(==("explore"), history)
+            if streak >= length(history) - 1
+                recent_explore_penalty += 0.25
+            end
+        end
+        # Count consecutive invests from the end (Python logic)
+        for act in reverse(history)
+            if act == "invest"
+                invest_streak += 1
+            else
+                break
+            end
+        end
+        invest_bias = count(==("invest"), history) / length(history)
+    end
 
     raw_score = (
         base_tendency * 0.35 +
@@ -1129,8 +1984,17 @@ function calculate_exploration_utility(
         0.18 * avoidance -
         0.08 * risk_tolerance +
         0.18 * recursive_unc -
-        recent_explore_penalty
+        recent_explore_penalty +
+        0.15 * invest_streak +  # Python adds this bonus
+        0.08 * invest_bias       # Python adds this bonus
     )
+
+    # Paradox signal effect (matches Python implementation)
+    paradox_signal = agent.paradox_signal
+    if paradox_signal != 0.0
+        pivot_weight = max(0.0, 0.6 - risk_tolerance)
+        raw_score += 0.2 * pivot_weight * paradox_signal
+    end
 
     return clamp(stable_sigmoid(raw_score - 0.45), 0.05, 0.95)
 end
@@ -1149,7 +2013,14 @@ function calculate_maintain_utility(
     buffer_pressure = stable_sigmoid(2.0 - capital_buffer_in_rounds)
 
     # Diversification (use active investments as proxy)
-    n_sectors = length(unique(get(inv, "opportunity", Opportunity()).sector for inv in agent.active_investments))
+    sectors = String[]
+    for inv in agent.active_investments
+        opp = get(inv, "opportunity", nothing)
+        if !isnothing(opp) && !isnothing(opp.sector)
+            push!(sectors, opp.sector)
+        end
+    end
+    n_sectors = length(unique(sectors))
     diversification = min(1.0, n_sectors / 4.0)
 
     practical_unc = Float64(get(get(perception, "practical_indeterminism", Dict()), "level", 0.5))
@@ -1168,6 +2039,13 @@ function calculate_maintain_utility(
     avoidance = 1.0 - risk_tolerance
     maintain_utility += 0.2 * avoidance - 0.1 * risk_tolerance
 
+    # Paradox signal effect (matches Python implementation)
+    paradox_signal = agent.paradox_signal
+    if paradox_signal != 0.0
+        maintain_utility += 0.15 * max(0.0, avoidance) * paradox_signal
+        maintain_utility -= 0.1 * max(0.0, -paradox_signal)
+    end
+
     return clamp(maintain_utility, 0.05, 0.95)
 end
 
@@ -1183,9 +2061,13 @@ function evaluate_opportunity_basic(
     opportunity::Opportunity,
     market_conditions::Dict{String,Any}
 )::Float64
-    # Expected profit margin
-    expected_margin = opportunity.expected_return - 1.0
-    uncertainty_adjusted = expected_margin * (1.0 - opportunity.uncertainty * 0.5)
+    # Use latent_return_potential instead of expected_return
+    expected_return = coalesce(opportunity.latent_return_potential, 1.0)
+    expected_margin = expected_return - 1.0
+
+    # Use complexity as proxy for uncertainty
+    opportunity_uncertainty = coalesce(opportunity.complexity, 0.5)
+    uncertainty_adjusted = expected_margin * (1.0 - opportunity_uncertainty * 0.5)
 
     score = uncertainty_adjusted * (1.0 + get(agent.traits, "uncertainty_tolerance", 0.5))
 
@@ -1195,7 +2077,8 @@ function evaluate_opportunity_basic(
     score *= get(regime_mult, regime, 1.0)
 
     # Sector knowledge
-    sector_knowledge = get(agent.resources.knowledge, opportunity.sector, 0.1)
+    sector = coalesce(opportunity.sector, "unknown")
+    sector_knowledge = get(agent.resources.knowledge, sector, 0.1)
     score *= 1.0 + sector_knowledge * 0.5
 
     return max(0.1, score)
@@ -1203,6 +2086,7 @@ end
 
 """
 Apply uncertainty adjustments to opportunity score.
+Matches Python _apply_uncertainty_adjustments with knowledge gaps and timing pressure.
 """
 function apply_uncertainty_adjustments(
     agent::EmergentAgent,
@@ -1212,24 +2096,47 @@ function apply_uncertainty_adjustments(
 )::Float64
     adjusted = base_score
 
-    # Competition adjustment
+    # Extract perception signals (matches Python perception structure)
+    knowledge_signal = get(perception, "knowledge_signal", get(perception, "actor_ignorance", Dict{String,Any}()))
+    execution_signal = get(perception, "execution_risk", get(perception, "practical_indeterminism", Dict{String,Any}()))
+
+    # Knowledge gaps adjustment (Python: if opportunity.id in knowledge_gaps)
+    knowledge_gaps = get(knowledge_signal, "knowledge_gaps", Dict{String,Any}())
+    if isa(knowledge_gaps, Dict)
+        opp_id = opportunity.id
+        if haskey(knowledge_gaps, opp_id)
+            gap_value = Float64(get(knowledge_gaps, opp_id, 0.0))
+            adjusted *= (1.0 - gap_value * 0.5)
+        end
+    end
+
+    # Timing pressure adjustment (Python: if opportunity.id in timing_pressure)
+    timing_pressure = get(execution_signal, "timing_pressure", Dict{String,Any}())
+    if isa(timing_pressure, Dict)
+        opp_id = opportunity.id
+        if haskey(timing_pressure, opp_id)
+            adjusted *= 0.8
+        end
+    end
+
+    # Creator bonus (use created_by field) - matches Python exactly
+    created_by = coalesce(opportunity.created_by, -1)
+    if created_by != -1
+        adjusted *= 1.1
+        if created_by == agent.id
+            adjusted *= 1.2
+        end
+    end
+
+    # Social proof sensitivity - matches Python
+    social_proof_sensitivity = 1.0 - get(agent.traits, "analytical_ability", 0.5)
+    social_proof_bonus = 1.0 + (opportunity.competition * social_proof_sensitivity * 0.25)
+    adjusted *= social_proof_bonus
+
+    # Competition adjustment (Python: if competition > 0.5)
     if opportunity.competition > 0.5
         tolerance = get(agent.traits, "uncertainty_tolerance", 0.5)
         adjusted *= 1.0 - (tolerance * opportunity.competition * 0.5)
-    end
-
-    # Social proof (herding tendency)
-    analytical = get(agent.traits, "analytical_ability", 0.5)
-    social_sensitivity = 1.0 - analytical
-    social_bonus = 1.0 + opportunity.competition * social_sensitivity * 0.25
-    adjusted *= social_bonus
-
-    # Creator bonus
-    if opportunity.creator_id != -1
-        adjusted *= 1.1
-        if opportunity.creator_id == agent.id
-            adjusted *= 1.2
-        end
     end
 
     return max(0.01, adjusted)
@@ -1237,6 +2144,7 @@ end
 
 """
 Evaluate portfolio opportunities and return ranked list.
+Includes hallucination-aware adjustments based on AI tier.
 """
 function evaluate_portfolio_opportunities(
     agent::EmergentAgent,
@@ -1250,6 +2158,15 @@ function evaluate_portfolio_opportunities(
     end
 
     evaluations = Dict{String,Any}[]
+
+    # Get AI tier hallucination characteristics (matches Python information.py)
+    # Higher tier AI has lower base hallucination rate but can still hallucinate
+    ai_cfg = get(agent.config.AI_LEVELS, ai_level, agent.config.AI_LEVELS["none"])
+    info_quality = Float64(ai_cfg.info_quality)
+
+    # Hallucination risk factor: lower quality = higher risk of inflated scores
+    # This models how AI-generated information may contain optimistic hallucinations
+    hallucination_risk = max(0.0, 0.5 - info_quality * 0.5)  # 0.5 for none, ~0.1 for premium
 
     # Filter opportunities based on AI level
     opp_pool = copy(opportunities)
@@ -1272,10 +2189,43 @@ function evaluate_portfolio_opportunities(
         base_score = evaluate_opportunity_basic(agent, opp, market_conditions)
         final_score = apply_uncertainty_adjustments(agent, base_score, opp, perception)
 
+        # ========================================================================
+        # HALLUCINATION-AWARE ADJUSTMENTS (matches Python information integration)
+        # ========================================================================
+        # In Python, hallucinations in AI info can inflate estimated returns.
+        # We model this by applying a stochastic adjustment based on hallucination risk.
+        # Higher hallucination risk = chance of artificially inflated or deflated scores.
+
+        if ai_level != "none" && hallucination_risk > 0
+            # Agent's analytical ability affects susceptibility to hallucinations
+            analytical_ability = Float64(get(agent.traits, "analytical_ability", 0.5))
+            susceptibility = 1.0 - analytical_ability * 0.5  # More analytical = less susceptible
+
+            # Stochastic hallucination effect (can inflate or deflate score)
+            if rand(agent.rng) < hallucination_risk * susceptibility
+                # Apply hallucination modifier: could be optimistic (+) or pessimistic (-)
+                # Bias towards optimistic (matches Python where hallucinations often inflate returns)
+                halluc_modifier = if rand(agent.rng) < 0.65  # 65% optimistic hallucinations
+                    1.0 + rand(agent.rng) * 0.25  # Up to 25% inflation
+                else
+                    1.0 - rand(agent.rng) * 0.15  # Up to 15% deflation
+                end
+                final_score *= halluc_modifier
+            end
+
+            # Confidence adjustment for hallucination uncertainty
+            # Add hidden uncertainty factor to score based on hallucination risk
+            hidden_uncertainty = hallucination_risk * (1.0 - info_quality) * opp.complexity
+            final_score *= (1.0 - hidden_uncertainty * 0.2)
+        end
+
+        final_score = max(0.01, final_score)
+
         push!(evaluations, Dict{String,Any}(
             "opportunity" => opp,
             "final_score" => final_score,
-            "ai_level_used" => ai_level
+            "ai_level_used" => ai_level,
+            "hallucination_risk" => hallucination_risk
         ))
     end
 
@@ -1283,6 +2233,182 @@ function evaluate_portfolio_opportunities(
     sort!(evaluations, by=e -> e["final_score"], rev=true)
 
     return evaluations
+end
+
+"""
+Make portfolio investment decision with capital constraints and position sizing.
+Matches Python _make_portfolio_decision with:
+- Operating reserve and liquidity buffer calculations
+- Hurdle rate based on agent cost of capital
+- Stress-based thresholds
+- Confidence-scaled position sizing
+
+Returns either an investment decision or a maintain decision.
+"""
+function make_portfolio_decision(
+    agent::EmergentAgent,
+    evaluated_opportunities::Vector{Dict{String,Any}},
+    market::MarketEnvironment,
+    round_num::Int,
+    ai_level::String,
+    perception::Dict{String,Any},
+    market_conditions::Dict{String,Any}
+)::Dict{String,Any}
+    current_capital = max(0.0, get_capital(agent))
+    locked_capital = max(0.0, agent.locked_capital)
+
+    # Estimate operational costs
+    operating_estimate = estimate_operational_costs(agent, market)
+
+    # Operating reserve (matches Python OPERATING_RESERVE_MONTHS)
+    reserve_months = Float64(getfield_default(agent.config, :OPERATING_RESERVE_MONTHS, 3.0))
+    operating_reserve = operating_estimate * max(1.0, reserve_months)
+
+    # AI reserve (subscription or per-use cost)
+    ai_reserve = 0.0
+    ai_cfg = get(agent.config.AI_LEVELS, ai_level, agent.config.AI_LEVELS["none"])
+    cost_type = ai_cfg.cost_type
+    if cost_type == "subscription"
+        ai_reserve = Float64(ai_cfg.cost)
+    elseif cost_type == "per_use"
+        ai_reserve = Float64(ai_cfg.cost)
+    end
+
+    # Liquidity buffer calculation (matches Python)
+    reserve_fraction = Float64(getfield_default(agent.config, :LIQUIDITY_RESERVE_FRACTION, 0.3))
+    buffer_target = max(
+        operating_reserve + ai_reserve + agent.config.SURVIVAL_THRESHOLD,
+        current_capital * reserve_fraction
+    )
+    liquidity_buffer = min(current_capital, buffer_target) + locked_capital * 0.2
+
+    # Check if locked capital exceeds free capital
+    free_capital = current_capital - liquidity_buffer
+    if free_capital <= locked_capital
+        return _make_maintain_decision(agent, round_num, ai_level)
+    end
+
+    available_capital = max(0.0, free_capital - locked_capital)
+
+    # Deduct per-use AI cost from available capital
+    if cost_type == "per_use"
+        available_capital = max(0.0, available_capital - Float64(ai_cfg.cost))
+    end
+
+    # Calculate stress and dynamic threshold (matches Python)
+    total_commitments = current_capital + agent.locked_capital
+    capital_utilization = agent.locked_capital / max(1.0, total_commitments)
+
+    # Get volatility and regime failure multiplier
+    volatility = Float64(get(market_conditions, "volatility", agent.config.MARKET_VOLATILITY))
+    regime_failure = Float64(get(market_conditions, "regime_failure_multiplier", 1.0))
+
+    # Risk aversion from traits
+    risk_aversion = max(0.0, 1.0 - Float64(get(agent.traits, "uncertainty_tolerance", 0.5)))
+
+    # Gap pressure from perception
+    knowledge_signal = get(perception, "knowledge_signal", Dict{String,Any}())
+    gap_pressure = Float64(get(knowledge_signal, "gap_pressure", 0.0))
+
+    # Stress calculation (matches Python exactly)
+    stress = clamp(
+        0.4 * capital_utilization + 0.6 * volatility + 0.3 * (regime_failure - 1.0) + 0.4 * gap_pressure,
+        0.0, 1.8
+    )
+
+    # Calculate decision threshold
+    scores = [Float64(get(e, "final_score", 0.0)) for e in evaluated_opportunities]
+    if !isempty(scores)
+        base_q = 0.60
+        q = clamp(base_q + 0.25 * stress + 0.1 * risk_aversion, 0.6, 0.98)
+        baseline = quantile(scores, q)
+    else
+        baseline = 0.0
+    end
+
+    noise = baseline > 0 ? randn(agent.rng) * baseline * 0.18 : 0.0
+    agent_cost_of_capital = calculate_agent_cost_of_capital(agent, capital_utilization, market_conditions)
+    dynamic_threshold = (baseline * (0.85 + 0.4 * capital_utilization + 0.35 * stress)) + noise
+    hurdle = agent_cost_of_capital * (1.0 + 0.6 * stress + 0.4 * risk_aversion)
+    decision_threshold = max(hurdle, dynamic_threshold, 0.02)
+
+    # Find best opportunity
+    if isempty(evaluated_opportunities)
+        return _make_maintain_decision(agent, round_num, ai_level)
+    end
+
+    best_eval = evaluated_opportunities[1]  # Already sorted
+    best_score = Float64(get(best_eval, "final_score", 0.0))
+
+    # Check against threshold
+    if best_score < decision_threshold
+        return _make_maintain_decision(agent, round_num, ai_level)
+    end
+
+    # Get opportunity
+    opp = get(best_eval, "opportunity", nothing)
+    if isnothing(opp)
+        return _make_maintain_decision(agent, round_num, ai_level)
+    end
+
+    # Calculate investment amount with confidence scaling (matches Python exactly)
+    confidence = Float64(get(perception, "decision_confidence", 0.5))
+    confidence = clamp(confidence, 0.15, 0.95)
+
+    signal_score = max(0.0, best_score)
+    hurdle_rate = agent_cost_of_capital
+    if signal_score < hurdle_rate
+        return _make_maintain_decision(agent, round_num, ai_level)
+    end
+
+    # Position sizing (matches Python)
+    max_fraction = Float64(getfield_default(agent.config, :MAX_INVESTMENT_FRACTION, 0.1))
+    target_fraction = Float64(getfield_default(agent.config, :TARGET_INVESTMENT_FRACTION, 0.07))
+    max_investment = available_capital * max_fraction
+
+    # KEY: Confidence-scaled position sizing (Python: desired_investment = available_capital * target_fraction * confidence * signal_score)
+    desired_investment = available_capital * target_fraction * confidence * signal_score
+    amount = min(desired_investment, max_investment)
+
+    # Check minimum funding fraction
+    required_capital = Float64(coalesce(opp.capital_requirements, 0.0))
+    min_fraction = Float64(getfield_default(agent.config, :MIN_FUNDING_FRACTION, 0.25))
+    min_required = required_capital > 0 ? required_capital * min_fraction : 0.0
+
+    if amount < min_required && min_required > 0
+        # Can't meet minimum funding requirement
+        return _make_maintain_decision(agent, round_num, ai_level)
+    end
+
+    # Ensure we don't exceed capital requirements
+    amount = min(amount, required_capital > 0 ? required_capital : amount)
+
+    # Return investment decision
+    return Dict{String,Any}(
+        "action" => "invest",
+        "opportunity" => opp,
+        "amount" => amount,
+        "ai_level_used" => ai_level,
+        "decision_confidence" => confidence,
+        "signal_score" => signal_score,
+        "hurdle_rate" => hurdle_rate,
+        "decision_threshold" => decision_threshold,
+        "stress" => stress,
+        "capital_utilization" => capital_utilization
+    )
+end
+
+"""
+Helper to create a maintain decision.
+"""
+function _make_maintain_decision(agent::EmergentAgent, round_num::Int, ai_level::String)::Dict{String,Any}
+    return Dict{String,Any}(
+        "action" => "maintain",
+        "agent_id" => agent.id,
+        "round" => round_num,
+        "ai_level_used" => ai_level,
+        "reason" => "threshold_or_capital_constraint"
+    )
 end
 
 # ============================================================================
@@ -1300,7 +2426,8 @@ function make_decision!(
     round_num::Int;
     uncertainty_env::Union{KnightianUncertaintyEnvironment,Nothing} = nothing,
     neighbor_agents::Vector{EmergentAgent} = EmergentAgent[],
-    ai_level_override::Union{String,Nothing} = nothing
+    ai_level_override::Union{String,Nothing} = nothing,
+    innovation_engine::Union{InnovationEngine,Nothing} = nothing
 )::Dict{String,Any}
     if !agent.alive
         return Dict{String,Any}(
@@ -1312,6 +2439,9 @@ function make_decision!(
         )
     end
 
+    # Apply subscription charges at start of decision (matches Python make_decision)
+    apply_subscription_carry!(agent, round_num)
+
     # Choose AI level
     ai_level = if !isnothing(ai_level_override)
         ai_level_override
@@ -1320,6 +2450,11 @@ function make_decision!(
     else
         neighbor_signals = collect_neighbor_signals(agent, neighbor_agents)
         choose_ai_level(agent; neighbor_signals=neighbor_signals)
+    end
+
+    # Start subscription if using a paid AI tier (matches Python register_ai_usage)
+    if ai_level != "none"
+        ensure_subscription_schedule!(agent, ai_level)
     end
 
     # Build perception
@@ -1347,6 +2482,9 @@ function make_decision!(
         )
     end
 
+    # Store perception for action execution (matches Python _last_perception)
+    agent.last_perception = perception
+
     # Calculate utilities for each action
     estimated_cost = agent.config.BASE_OPERATIONAL_COST
 
@@ -1368,45 +2506,115 @@ function make_decision!(
         utilities["invest"] = 0.0
     end
 
-    # Add noise and select
-    noisy_utilities = Dict{String,Float64}()
-    for (action, util) in utilities
-        noise = agent.config.ACTION_SELECTION_NOISE * randn(agent.rng)
-        noisy_utilities[action] = max(0.0, util + noise)
-    end
+    # Apply locked capital penalty to invest utility (matches Python)
+    locked_capital = max(0.0, agent.locked_capital)
+    locked_ratio = locked_capital / max(1.0, get_capital(agent) + locked_capital)
+    utilities["invest"] -= locked_ratio * 0.25
 
-    # Softmax selection
-    temperature = agent.config.ACTION_SELECTION_TEMPERATURE
-    total = sum(exp(u / temperature) for u in values(noisy_utilities))
-    if total > 0
-        probs = Dict(a => exp(u / temperature) / total for (a, u) in noisy_utilities)
-    else
+    # Get AI profile for temperature annealing (matches Python)
+    ai_config = get(agent.config.AI_LEVELS, ai_level, agent.config.AI_LEVELS["none"])
+    info_quality = ai_config.info_quality
+    info_breadth = ai_config.info_breadth
+    trait_trust = clamp(get(agent.traits, "ai_trust", 0.5), 0.0, 1.0)
+    trait_explore = clamp(get(agent.traits, "exploration_tendency", 0.5), 0.0, 1.0)
+
+    # Temperature annealing (matches Python softmax with temperature scaling)
+    actions = ["invest", "innovate", "explore", "maintain"]
+    utils = [utilities[a] for a in actions]
+    util_variance = length(utils) > 0 ? std(utils) : 0.0
+
+    base_temperature = max(1e-3, agent.config.ACTION_SELECTION_TEMPERATURE)
+    temperature = max(5e-4, base_temperature * (1.0 + 0.6 * clamp(util_variance, 0.0, 1.0)))
+    temp_scale = max(0.3, 1.0 - 0.6 * info_quality)
+    temp_scale /= max(0.5, 0.9 + 0.2 * info_breadth)
+    temperature *= temp_scale
+    temperature *= clamp(0.8 + 0.5 * (1.0 - trait_trust), 0.6, 1.4)
+
+    # Noise scaling by AI quality (matches Python Gumbel noise approach)
+    noise_base = max(0.0, agent.config.ACTION_SELECTION_NOISE)
+    noise_scale = noise_base * (1.15 - 0.8 * info_quality) * (1.0 + 0.25 * (1.0 - info_breadth))
+    noise_scale = max(0.0, noise_scale)
+    noise_scale *= clamp(0.85 + 0.4 * trait_explore, 0.7, 1.6)
+
+    # Get action bias and add Gumbel noise
+    bias_vec = [get(agent.action_bias, a, 0.0) for a in actions]
+    noise_vec = noise_scale > 0 ? [rand(agent.rng, Gumbel(0.0, noise_scale)) for _ in actions] : zeros(4)
+
+    # Compute logits with bias and noise
+    logits = [(utils[i] + bias_vec[i] + noise_vec[i]) / temperature for i in 1:4]
+    logits = [isfinite(l) ? l : -Inf for l in logits]
+    max_logit = maximum(logits)
+    logits = [l - max_logit for l in logits]
+    exp_logits = [exp(l) for l in logits]
+    sum_exp = sum(exp_logits)
+
+    if !isfinite(sum_exp) || sum_exp <= 0
         probs = Dict("maintain" => 1.0, "invest" => 0.0, "innovate" => 0.0, "explore" => 0.0)
+    else
+        probs = Dict(actions[i] => exp_logits[i] / sum_exp for i in 1:4)
     end
 
     # Sample action
     r = rand(agent.rng)
-    cumsum = 0.0
+    cumsum_prob = 0.0
     chosen_action = "maintain"
-    for action in ["invest", "innovate", "explore", "maintain"]
-        cumsum += get(probs, action, 0.0)
-        if r <= cumsum
+    for action in actions
+        cumsum_prob += get(probs, action, 0.0)
+        if r <= cumsum_prob
             chosen_action = action
             break
         end
     end
 
+    # Update action bias to keep heterogeneity dynamic (matches Python)
+    mean_util = mean(utils)
+    chosen_idx = findfirst(==(chosen_action), actions)
+    if !isnothing(chosen_idx)
+        old_bias = get(agent.action_bias, chosen_action, 0.0)
+        new_bias = 0.95 * old_bias + 0.05 * (utils[chosen_idx] - mean_util)
+        agent.action_bias[chosen_action] = clamp(new_bias, -0.5, 0.5)
+    end
+
+    # Update recent actions (rolling window of 20)
+    push!(agent.recent_actions, chosen_action)
+    while length(agent.recent_actions) > 20
+        popfirst!(agent.recent_actions)
+    end
+
     # Execute chosen action
     outcome = if chosen_action == "invest" && !isempty(opportunities)
+        # Use full portfolio decision with capital constraints and position sizing
         evals = evaluate_portfolio_opportunities(agent, opportunities, market_conditions, perception; ai_level=ai_level)
         if !isempty(evals)
-            best_opp = evals[1]["opportunity"]
-            execute_action!(agent, "invest", market, round_num; opportunity=best_opp)
+            # Use make_portfolio_decision for hurdle rate and confidence-scaled sizing
+            portfolio_decision = make_portfolio_decision(
+                agent, evals, market, round_num, ai_level, perception, market_conditions
+            )
+
+            if get(portfolio_decision, "action", "maintain") == "invest"
+                # Execute with the computed investment amount
+                opp = portfolio_decision["opportunity"]
+                sized_amount = Float64(get(portfolio_decision, "amount", 0.0))
+                execute_action!(agent, "invest", market, round_num;
+                               opportunity=opp,
+                               investment_amount=sized_amount,
+                               innovation_engine=innovation_engine,
+                               market_conditions=market_conditions)
+            else
+                # Portfolio decision returned maintain (threshold/capital constraint)
+                execute_action!(agent, "maintain", market, round_num;
+                               innovation_engine=innovation_engine,
+                               market_conditions=market_conditions)
+            end
         else
-            execute_action!(agent, "maintain", market, round_num)
+            execute_action!(agent, "maintain", market, round_num;
+                           innovation_engine=innovation_engine,
+                           market_conditions=market_conditions)
         end
     else
-        execute_action!(agent, chosen_action, market, round_num)
+        execute_action!(agent, chosen_action, market, round_num;
+                       innovation_engine=innovation_engine,
+                       market_conditions=market_conditions)
     end
 
     outcome["ai_level_used"] = ai_level
@@ -1578,14 +2786,11 @@ function record_paradox_observation!(
     # Weight by AI usage
     weight = ai_used ? 1.2 : 0.8
 
-    # Update paradox signal with inertia
+    # Update paradox signal with inertia (matches Python implementation)
     inertia = 0.85
-    if !haskey(agent.last_outcome, "paradox_signal")
-        agent.last_outcome["paradox_signal"] = 0.0
-    end
-    old_signal = Float64(get(agent.last_outcome, "paradox_signal", 0.0))
+    old_signal = agent.paradox_signal
     new_signal = inertia * old_signal + (1.0 - inertia) * gap * weight
-    agent.last_outcome["paradox_signal"] = clamp(new_signal, -1.0, 1.0)
+    agent.paradox_signal = clamp(new_signal, -1.0, 1.0)
 end
 
 # ============================================================================
@@ -1594,27 +2799,51 @@ end
 
 """
 Estimate operational costs including competition pressure.
+Matches Python _estimate_operational_costs exactly.
 """
 function estimate_operational_costs(
     agent::EmergentAgent,
-    market::MarketEnvironment
+    market::Union{MarketEnvironment,Nothing}
 )::Float64
-    base_cost = agent.config.BASE_OPERATIONAL_COST
-
-    # Competition pressure from active investments
-    if !isempty(agent.active_investments)
+    # Portfolio competition from active investments (matches Python)
+    portfolio_competition = 0.0
+    if !isnothing(market) && !isempty(agent.active_investments)
         competitions = Float64[]
         for inv in agent.active_investments
-            opp = get(inv, "opportunity", nothing)
-            if !isnothing(opp) && opp isa Opportunity
-                push!(competitions, opp.competition)
+            opp_id = get(inv, "opportunity_id", nothing)
+            if !isnothing(opp_id)
+                opp = get(market.opportunity_map, opp_id, nothing)
+                if !isnothing(opp)
+                    push!(competitions, opp.competition)
+                end
             end
         end
         if !isempty(competitions)
-            avg_competition = mean(competitions)
-            base_cost *= 1.0 + avg_competition * 0.2
+            portfolio_competition = mean(competitions)
         end
     end
 
-    return base_cost
+    # Base cost with sector operating range (matches Python)
+    # Python: monthly_base_cost = base_cost * float(fast_mean(operating_range))
+    # Default operating_range is (0.05, 0.20), so avg = 0.125
+    base_cost = agent.config.BASE_OPERATIONAL_COST
+    operating_range_avg = 0.125  # (0.05 + 0.20) / 2
+    monthly_base_cost = base_cost * operating_range_avg
+
+    # Competition cost (matches Python)
+    competition_cost = portfolio_competition * agent.config.COMPETITION_COST_MULTIPLIER
+    total_cost = monthly_base_cost + competition_cost
+
+    # AI tier efficiency modifier (matches Python exactly)
+    # Higher tier AI = more efficient operations (lower costs)
+    tier = get_ai_level(agent)
+    tier_mod = Dict(
+        "none" => 1.0,
+        "basic" => 1.08,      # 8% penalty for basic
+        "advanced" => 0.94,   # 6% savings for advanced
+        "premium" => 0.88     # 12% savings for premium
+    )
+    total_cost *= get(tier_mod, tier, 1.0)
+
+    return total_cost
 end

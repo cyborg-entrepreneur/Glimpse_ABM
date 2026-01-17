@@ -26,6 +26,9 @@ The four dimensions are:
 mutable struct KnightianUncertaintyEnvironment
     config::EmergentConfig
 
+    # Optional knowledge base reference
+    knowledge_base::Union{Nothing,Any}
+
     # Actor Ignorance State
     actor_ignorance_state::Dict{String,Any}
 
@@ -39,29 +42,72 @@ mutable struct KnightianUncertaintyEnvironment
     competitive_recursion_state::Dict{String,Any}
 
     # Uncertainty evolution history
-    uncertainty_evolution::Vector{Dict{String,Any}}
+    uncertainty_evolution::Vector{Any}
 
     # AI-specific signals
     ai_uncertainty_signals::Dict{String,Any}
 
-    # Innovation tracking
+    # Innovation tracking (circular buffer)
     innovation_success_tracker::Vector{Dict{String,Any}}
 
-    # Short-term buffers for volatility calculation
-    short_term_buffers::Dict{String,Vector{Float64}}
+    # Exploration outcomes tracking
+    exploration_outcomes::Vector{Dict{String,Any}}
+
+    # Market regime history
+    market_regime_history::Vector{String}
+
+    # Opportunity discovery rate
+    opportunity_discovery_rate::Float64
+
+    # Global short-term buffers for volatility calculation
+    _global_short_term_buffers::Dict{String,Vector{Float64}}
+
+    # Per-agent short-term buffers
+    _agent_short_term_buffers::Dict{Int,Dict{String,Vector{Float64}}}
+
+    # Short-term window size
+    short_term_window::Int
+
+    # Short-term decay factor
+    short_term_decay_factor::Float64
 
     # Volatility state
-    volatility_state::Dict{String,Any}
+    _volatility_state::Dict{String,Any}
+
+    # AI signal history limit
+    _ai_signal_history::Int
+
+    # Action history for tracking behavioral patterns
+    _action_history::Vector{Dict{String,Any}}
+
+    # Novelty diagnostics
+    _novelty_diagnostics::Dict{String,Any}
+
+    # Tier smoothing factors
+    _tier_smoothing::Dict{String,Float64}
+
+    # Last environment state for caching
+    _last_environment_state::Dict{String,Any}
+
+    # Last alive agents count
+    _last_alive_agents::Int
 
     rng::AbstractRNG
 end
 
 function KnightianUncertaintyEnvironment(
     config::EmergentConfig;
+    knowledge_base::Union{Nothing,Any} = nothing,
     rng::AbstractRNG = Random.default_rng()
 )
+    history_window = max(5, Int(getfield_default(config, :NOVELTY_HISTORY_WINDOW, 15)))
+    short_term_window = Int(getfield_default(config, :UNCERTAINTY_SHORT_WINDOW, 5))
+    short_term_decay = Float64(getfield_default(config, :UNCERTAINTY_SHORT_DECAY, 0.85))
+    ai_signal_history = max(10, Int(getfield_default(config, :AI_SIGNAL_HISTORY, 200)))
+
     return KnightianUncertaintyEnvironment(
         config,
+        knowledge_base,
         Dict{String,Any}(
             "unknown_opportunities" => Dict{String,Float64}(),
             "knowledge_gaps" => Dict{String,Float64}(),
@@ -72,7 +118,11 @@ function KnightianUncertaintyEnvironment(
             "path_volatility" => 0.0,
             "timing_criticality" => Dict{String,Float64}(),
             "regime_instability" => 0.0,
-            "level" => 0.0
+            "level" => 0.0,
+            "crowding_pressure" => 0.0,
+            "ai_pressure" => 0.0,
+            "ai_herding_intensity" => 0.0,
+            "timing_variability" => 0.0
         ),
         Dict{String,Any}(
             "creative_momentum" => 0.0,
@@ -80,7 +130,13 @@ function KnightianUncertaintyEnvironment(
             "novelty_level" => 0.0,
             "level" => 0.0,
             "component_scarcity" => 0.5,
-            "reuse_pressure" => 0.0
+            "scarcity_signal" => 0.5,
+            "reuse_pressure" => 0.0,
+            "new_possibilities" => 0,
+            "new_possibility_rate" => 0.0,
+            "innovation_births" => 0,
+            "tier_drivers" => Dict{String,Any}(),
+            "drivers" => Dict{String,Any}()
         ),
         Dict{String,Any}(
             "strategic_opacity" => 0.0,
@@ -88,27 +144,176 @@ function KnightianUncertaintyEnvironment(
             "game_complexity" => 0.0,
             "level" => 0.0
         ),
-        Dict{String,Any}[],
+        Any[],  # uncertainty_evolution (stores tuples)
         Dict{String,Any}(
             "hallucination_events" => Dict{String,Any}[],
             "confidence_miscalibration" => Float64[],
             "ai_herding_patterns" => Dict{String,Float64}()
         ),
-        Dict{String,Any}[],
+        Dict{String,Any}[],  # innovation_success_tracker
+        Dict{String,Any}[],  # exploration_outcomes
+        String[],  # market_regime_history
+        0.5,  # opportunity_discovery_rate
         Dict{String,Vector{Float64}}(
             "actor_ignorance" => Float64[],
             "practical_indeterminism" => Float64[],
             "agentic_novelty" => Float64[],
             "competitive_recursion" => Float64[]
         ),
+        Dict{Int,Dict{String,Vector{Float64}}}(),  # _agent_short_term_buffers
+        short_term_window,
+        short_term_decay,
         Dict{String,Any}(
             "action_prev" => zeros(4),
             "ai_prev" => zeros(4),
             "market_prev" => 0.0,
-            "volatility_metric" => 0.0
+            "volatility_metric" => 0.0,
+            "history" => Float64[],
+            "last_action_shares" => zeros(4),
+            "last_ai_shares" => zeros(4)
         ),
+        ai_signal_history,
+        Dict{String,Any}[],  # _action_history
+        Dict{String,Any}(),  # _novelty_diagnostics
+        Dict{String,Float64}(
+            "none" => 1.0,
+            "basic" => 1.0,
+            "advanced" => 1.0,
+            "premium" => 1.0
+        ),
+        Dict{String,Any}(),  # _last_environment_state
+        Int(getfield_default(config, :N_AGENTS, 100)),  # _last_alive_agents
         rng
     )
+end
+
+"""
+Get short-term buffer for a metric (global or per-agent).
+"""
+function _short_buffer(env::KnightianUncertaintyEnvironment, metric::String, agent_id::Union{Int,Nothing})::Vector{Float64}
+    if isnothing(agent_id)
+        return env._global_short_term_buffers[metric]
+    end
+    if !haskey(env._agent_short_term_buffers, agent_id)
+        env._agent_short_term_buffers[agent_id] = Dict{String,Vector{Float64}}(
+            "actor_ignorance" => Float64[],
+            "practical_indeterminism" => Float64[],
+            "agentic_novelty" => Float64[],
+            "competitive_recursion" => Float64[]
+        )
+    end
+    return env._agent_short_term_buffers[agent_id][metric]
+end
+
+"""
+Update short-term buffer for a metric.
+"""
+function _update_short_term!(env::KnightianUncertaintyEnvironment, metric::String, value::Float64; agent_id::Union{Int,Nothing} = nothing)
+    if isnothing(value) || !isfinite(value)
+        return
+    end
+    buffer = _short_buffer(env, metric, agent_id)
+    push!(buffer, Float64(value))
+    # Keep buffer size limited
+    max_size = env.short_term_window
+    while length(buffer) > max_size
+        popfirst!(buffer)
+    end
+end
+
+"""
+Decay short-term buffer for a metric.
+"""
+function _decay_short_term!(env::KnightianUncertaintyEnvironment, metric::String, fallback::Float64; agent_id::Union{Int,Nothing} = nothing)
+    buffer = _short_buffer(env, metric, agent_id)
+    if !isempty(buffer)
+        baseline = buffer[end]
+    else
+        baseline = isfinite(fallback) ? fallback : 0.0
+    end
+    if !isfinite(baseline)
+        baseline = 0.0
+    end
+    # No decay: retain last signal strength when no new data arrives
+    push!(buffer, baseline)
+    max_size = env.short_term_window
+    while length(buffer) > max_size
+        popfirst!(buffer)
+    end
+end
+
+"""
+Normalize metric value (floor at zero).
+"""
+function _normalize_metric(env::KnightianUncertaintyEnvironment, metric::String, value::Float64)::Float64
+    if !isfinite(value)
+        return 0.0
+    end
+    return max(0.0, value)
+end
+
+"""
+Get short-term average for a metric.
+"""
+function _get_short_term_average(env::KnightianUncertaintyEnvironment, metric::String; fallback::Float64 = 0.0, agent_id::Union{Int,Nothing} = nothing)::Float64
+    # First try agent-specific buffer
+    buffer = nothing
+    if !isnothing(agent_id) && haskey(env._agent_short_term_buffers, agent_id)
+        buffer = get(env._agent_short_term_buffers[agent_id], metric, nothing)
+    end
+    # Fall back to global buffer
+    if isnothing(buffer)
+        buffer = get(env._global_short_term_buffers, metric, Float64[])
+    end
+    if !isempty(buffer)
+        avg = mean(buffer)
+    else
+        avg = isfinite(fallback) ? fallback : 0.0
+    end
+    return _normalize_metric(env, metric, avg)
+end
+
+"""
+Update volatility state based on action and AI share changes.
+"""
+function _update_volatility_state!(env::KnightianUncertaintyEnvironment, action_shares::Vector{Float64}, ai_shares::Vector{Float64}, market)::Float64
+    cfg = env.config
+
+    action_prev = get(env._volatility_state, "action_prev", nothing)
+    if isnothing(action_prev) || length(action_prev) != length(action_shares)
+        action_prev = zeros(length(action_shares))
+    end
+    ai_prev = get(env._volatility_state, "ai_prev", nothing)
+    if isnothing(ai_prev) || length(ai_prev) != length(ai_shares)
+        ai_prev = zeros(length(ai_shares))
+    end
+
+    action_delta = mean(abs.(action_shares .- action_prev))
+    ai_delta = mean(abs.(ai_shares .- ai_prev))
+
+    market_momentum = hasfield(typeof(market), :market_momentum) ? Float64(market.market_momentum) : 0.0
+    market_volatility = hasfield(typeof(market), :volatility) ? Float64(market.volatility) : 0.0
+    market_signal = abs(market_momentum) + abs(market_volatility)
+    market_prev = Float64(get(env._volatility_state, "market_prev", 0.0))
+    market_delta = abs(market_signal - market_prev)
+
+    action_weight = Float64(getfield_default(cfg, :UNCERTAINTY_ACTION_VARIANCE_WEIGHT, 0.10))
+    ai_weight = Float64(getfield_default(cfg, :UNCERTAINTY_AI_SWITCH_WEIGHT, 0.07))
+    market_weight = Float64(getfield_default(cfg, :UNCERTAINTY_MARKET_RETURN_WEIGHT, 0.12))
+
+    raw = action_weight * action_delta + ai_weight * ai_delta + market_weight * market_delta
+    decay = Float64(getfield_default(cfg, :UNCERTAINTY_VOLATILITY_DECAY, 0.85))
+    prev_vol = Float64(get(env._volatility_state, "volatility_metric", 0.0))
+    smoothed = prev_vol * decay + (1.0 - decay) * raw
+    scaling = Float64(getfield_default(cfg, :UNCERTAINTY_VOLATILITY_SCALING, 0.18))
+    volatility = smoothed * scaling
+
+    env._volatility_state["action_prev"] = copy(action_shares)
+    env._volatility_state["ai_prev"] = copy(ai_shares)
+    env._volatility_state["market_prev"] = market_signal
+    env._volatility_state["volatility_metric"] = volatility
+
+    return volatility
 end
 
 """
@@ -131,29 +336,36 @@ function record_ai_signals!(
     hallucinations_this_round = 0
 
     for action in agent_actions
-        ai_level = lowercase(string(get(action, "ai_level_used", "none")))
+        ai_level = normalize_ai_label(get(action, "ai_level_used", "none"))
         if ai_level == "none"
             continue
         end
+        agent_id = get(action, "agent_id", nothing)
+        domain = get(action, "ai_analysis_domain", nothing)
 
         # Track hallucinations
         if get(action, "ai_contains_hallucination", false)
             hallucinations_this_round += 1
             push!(hallucinations, Dict(
                 "round" => round_num,
-                "agent_id" => get(action, "agent_id", 0),
-                "ai_level" => ai_level
+                "agent_id" => agent_id,
+                "ai_level" => ai_level,
+                "domain" => domain
             ))
         end
 
         # Track confidence miscalibration
         confidence = get(action, "ai_confidence", nothing)
         accuracy = get(action, "ai_actual_accuracy", nothing)
-        if !isnothing(confidence) && !isnothing(accuracy)
-            miscal = Float64(confidence) - Float64(accuracy)
-            if isfinite(miscal)
-                push!(confidence_vals, miscal)
+        try
+            if !isnothing(confidence) && !isnothing(accuracy)
+                miscal = Float64(confidence) - Float64(accuracy)
+                if isfinite(miscal)
+                    push!(confidence_vals, miscal)
+                end
             end
+        catch
+            # Ignore type conversion errors
         end
 
         # Track herding
@@ -167,13 +379,22 @@ function record_ai_signals!(
     end
 
     # Update herding patterns with decay
-    decay = env.config.AI_HERDING_DECAY
-    for key in keys(herding_patterns)
+    decay = Float64(getfield_default(env.config, :AI_HERDING_DECAY, 1.0))
+    for key in collect(keys(herding_patterns))
         herding_patterns[key] *= decay
     end
     for (opp_id, count) in herding_counts
         prior = get(herding_patterns, opp_id, 0.0) * decay
         herding_patterns[opp_id] = prior + count
+    end
+
+    # Limit history size
+    max_history = env._ai_signal_history
+    while length(hallucinations) > max_history
+        popfirst!(hallucinations)
+    end
+    while length(confidence_vals) > max_history
+        popfirst!(confidence_vals)
     end
 
     # Update short-term buffers if hallucinations occurred
@@ -185,28 +406,138 @@ function record_ai_signals!(
 end
 
 """
-Update short-term buffer for a metric.
+Summarize agent actions for uncertainty calculation.
+Matches Python's _summarize_actions method.
 """
-function _update_short_term!(env::KnightianUncertaintyEnvironment, metric::String, value::Float64)
-    if !isnan(value)
-        push!(env.short_term_buffers[metric], value)
-        # Keep buffer size limited
-        max_size = env.config.UNCERTAINTY_SHORT_WINDOW
-        if length(env.short_term_buffers[metric]) > max_size
-            deleteat!(env.short_term_buffers[metric], 1)
+function _summarize_actions(env::KnightianUncertaintyEnvironment, agent_actions::Vector{Dict{String,Any}}, market)::Dict{String,Any}
+    summary = Dict{String,Any}(
+        "new_combos" => 0,
+        "innovate" => 0,
+        "new_niches" => 0,
+        "explore" => 0,
+        "derivative_adoption" => 0,
+        "invest" => 0,
+        "combo_hhi" => 0.0,
+        "sector_hhi" => 0.0,
+        "invest_hhi" => 0.0,
+        "herding_counts" => Dict{String,Int}(),
+        "invest_by_ai" => Dict{String,Int}(),
+        "tier_stats" => Dict{String,Any}()
+    )
+
+    invest_counts = Dict{String,Int}()
+    invest_by_ai = Dict{String,Int}()
+    tiers = ["none", "basic", "advanced", "premium"]
+
+    tier_template() = Dict{String,Int}(
+        "total_actions" => 0,
+        "innovate" => 0,
+        "new_combos" => 0,
+        "reuse_hits" => 0,
+        "explore" => 0,
+        "new_niches" => 0,
+        "invest" => 0,
+        "derivative_adoption" => 0
+    )
+
+    tier_stats = Dict{String,Dict{String,Int}}(tier => tier_template() for tier in tiers)
+
+    for action in agent_actions
+        act_type = get(action, "action", nothing)
+        tier = normalize_ai_label(get(action, "ai_level_used", "none"))
+
+        if !haskey(tier_stats, tier)
+            tier_stats[tier] = tier_template()
+        end
+        tier_stats[tier]["total_actions"] += 1
+
+        if act_type == "innovate"
+            summary["innovate"] += 1
+            if get(action, "is_new_combination", false)
+                summary["new_combos"] += 1
+                tier_stats[tier]["new_combos"] += 1
+            elseif !isnothing(get(action, "combination_signature", nothing))
+                tier_stats[tier]["reuse_hits"] += 1
+            end
+            tier_stats[tier]["innovate"] += 1
+        elseif act_type == "explore"
+            summary["explore"] += 1
+            if get(action, "created_niche", false) || get(action, "discovered_niche", false)
+                summary["new_niches"] += 1
+                tier_stats[tier]["new_niches"] += 1
+            end
+            tier_stats[tier]["explore"] += 1
+        elseif act_type == "invest"
+            summary["invest"] += 1
+            tier_stats[tier]["invest"] += 1
+            if get(action, "invested_derivative", false)
+                summary["derivative_adoption"] += 1
+                tier_stats[tier]["derivative_adoption"] += 1
+            end
+            details = get(action, "chosen_opportunity_details", Dict())
+            opp_id = get(details, "id", get(action, "opportunity_id", nothing))
+            if !isnothing(opp_id)
+                invest_counts[string(opp_id)] = get(invest_counts, string(opp_id), 0) + 1
+            end
+            invest_by_ai[tier] = get(invest_by_ai, tier, 0) + 1
         end
     end
+
+    # Compute investment HHI
+    invest_total = summary["invest"]
+    if invest_total > 0 && !isempty(invest_counts)
+        summary["invest_hhi"] = sum((count / invest_total)^2 for count in values(invest_counts))
+    end
+    summary["herding_counts"] = invest_counts
+    summary["invest_by_ai"] = invest_by_ai
+
+    # Compute tier-specific rates
+    tier_combo_rate = Dict{String,Float64}()
+    tier_reuse_pressure = Dict{String,Float64}()
+    tier_new_poss_rate = Dict{String,Float64}()
+    tier_adoption_rate = Dict{String,Float64}()
+
+    for (tier, stats) in tier_stats
+        innov = max(1, stats["innovate"])
+        invest_count = max(1, stats["invest"])
+        action_total = max(1, stats["total_actions"])
+        tier_combo_rate[tier] = clamp(stats["new_combos"] / innov, 0.0, 1.0)
+        tier_reuse_pressure[tier] = clamp(stats["reuse_hits"] / innov, 0.0, 1.0)
+        tier_new_poss_rate[tier] = clamp((stats["new_combos"] + stats["new_niches"]) / action_total, 0.0, 1.0)
+        tier_adoption_rate[tier] = clamp(stats["derivative_adoption"] / invest_count, 0.0, 1.0)
+    end
+
+    summary["tier_stats"] = tier_stats
+    summary["tier_combo_rate"] = tier_combo_rate
+    summary["tier_reuse_pressure"] = tier_reuse_pressure
+    summary["tier_new_possibility_rate"] = tier_new_poss_rate
+    summary["tier_adoption_rate"] = tier_adoption_rate
+
+    # Get combination diversity metrics from market if available
+    if !isnothing(market) && hasfield(typeof(market), :get_combination_diversity_metrics)
+        combo_hhi, sector_hhi = market.get_combination_diversity_metrics()
+        summary["combo_hhi"] = combo_hhi
+        summary["sector_hhi"] = sector_hhi
+    end
+
+    return summary
 end
 
 """
-Get short-term average for a metric.
+Compute component scarcity from knowledge base.
 """
-function _get_short_term_average(env::KnightianUncertaintyEnvironment, metric::String; fallback::Float64 = 0.0)::Float64
-    buffer = get(env.short_term_buffers, metric, Float64[])
-    if isempty(buffer)
-        return fallback
+function _compute_component_scarcity(env::KnightianUncertaintyEnvironment)::Float64
+    if !isnothing(env.knowledge_base) && hasfield(typeof(env.knowledge_base), :get_component_scarcity_metric)
+        raw_scarcity = Float64(env.knowledge_base.get_component_scarcity_metric())
+    else
+        raw_scarcity = Float64(get(env.agentic_novelty_state, "scarcity_signal", 0.5))
     end
-    return mean(buffer)
+    prev = get(env.agentic_novelty_state, "scarcity_signal", nothing)
+    if isnothing(prev)
+        return raw_scarcity
+    end
+    blend = clamp(0.65 * prev + 0.35 * raw_scarcity, 0.0, 1.0)
+    return blend
 end
 
 """
@@ -259,6 +590,7 @@ end
 
 """
 Measure environment-level uncertainty across the four Knightian dimensions.
+Matches Python implementation exactly.
 """
 function measure_uncertainty_state!(
     env::KnightianUncertaintyEnvironment,
@@ -267,198 +599,503 @@ function measure_uncertainty_state!(
     innovations::Vector{Innovation},
     round_num::Int
 )::Dict{String,Dict{String,Any}}
+    state = Dict{String,Dict{String,Any}}()
+    ai_effects = Dict{String,Float64}()
     total_actions = length(agent_actions)
 
     # Count actions by type
-    action_counts = Dict{String,Int}()
+    action_counter = Dict{String,Int}()
     for action in agent_actions
         act_type = get(action, "action", "maintain")
-        action_counts[act_type] = get(action_counts, act_type, 0) + 1
-    end
-
-    # Count AI tier usage
-    ai_counts = Dict{String,Int}("none" => 0, "basic" => 0, "advanced" => 0, "premium" => 0)
-    for action in agent_actions
-        tier = lowercase(string(get(action, "ai_level_used", "none")))
-        if haskey(ai_counts, tier)
-            ai_counts[tier] += 1
-        end
+        action_counter[act_type] = get(action_counter, act_type, 0) + 1
     end
 
     if total_actions > 0
-        action_shares = [
-            get(action_counts, "invest", 0) / total_actions,
-            get(action_counts, "innovate", 0) / total_actions,
-            get(action_counts, "explore", 0) / total_actions,
-            get(action_counts, "maintain", 0) / total_actions
-        ]
-        ai_shares = [
-            ai_counts["none"] / total_actions,
-            ai_counts["basic"] / total_actions,
-            ai_counts["advanced"] / total_actions,
-            ai_counts["premium"] / total_actions
+        action_shares = Float64[
+            get(action_counter, "invest", 0) / total_actions,
+            get(action_counter, "innovate", 0) / total_actions,
+            get(action_counter, "explore", 0) / total_actions,
+            get(action_counter, "maintain", 0) / total_actions
         ]
     else
-        action_shares = [0.0, 0.0, 0.0, 1.0]
-        ai_shares = [1.0, 0.0, 0.0, 0.0]
+        action_shares = Float64[0.0, 0.0, 0.0, 1.0]
+    end
+
+    # Count AI tier usage
+    ai_counter = Dict{String,Int}()
+    for action in agent_actions
+        tier = normalize_ai_label(get(action, "ai_level_used", "none"))
+        ai_counter[tier] = get(ai_counter, tier, 0) + 1
+    end
+
+    if total_actions > 0
+        ai_shares = Float64[
+            get(ai_counter, "none", 0) / total_actions,
+            get(ai_counter, "basic", 0) / total_actions,
+            get(ai_counter, "advanced", 0) / total_actions,
+            get(ai_counter, "premium", 0) / total_actions
+        ]
+    else
+        ai_shares = Float64[1.0, 0.0, 0.0, 0.0]
     end
 
     ai_share_none = ai_shares[1]
-    ai_usage_rate = 1.0 - ai_share_none
+
+    # Summarize actions (tier-specific tracking)
+    action_summary = _summarize_actions(env, agent_actions, market)
+
+    # Update tier invest shares on market
+    tier_invest_share = Dict{String,Float64}()
+    invest_total = get(action_summary, "invest", 0)
+    if invest_total > 0
+        for (tier, count) in get(action_summary, "invest_by_ai", Dict())
+            tier_invest_share[tier] = clamp(count / invest_total, 0.0, 1.0)
+        end
+    end
+    if hasfield(typeof(market), :_tier_invest_share) && !isempty(tier_invest_share)
+        market._tier_invest_share = tier_invest_share
+    end
+    if isempty(tier_invest_share)
+        tier_invest_share = Dict{String,Float64}(
+            "none" => ai_shares[1],
+            "basic" => ai_shares[2],
+            "advanced" => ai_shares[3],
+            "premium" => ai_shares[4]
+        )
+    end
+
+    # Record action history
+    push!(env._action_history, action_summary)
+    history_window = max(5, Int(getfield_default(env.config, :NOVELTY_HISTORY_WINDOW, 15)))
+    while length(env._action_history) > history_window
+        popfirst!(env._action_history)
+    end
+
+    # AI herding patterns
+    ai_herding_patterns = get(env.ai_uncertainty_signals, "ai_herding_patterns", Dict())
+    if !isempty(ai_herding_patterns)
+        herding_total = sum(values(ai_herding_patterns))
+        ai_herding_intensity = clamp(herding_total / max(1.0, total_actions), 0.0, 1.0)
+    else
+        ai_herding_intensity = 0.0
+    end
+
+    # Count new possibilities
+    new_possibilities = 0
+    for action in agent_actions
+        if get(action, "discovered_niche", false) || get(action, "created_opportunity", false) || !isnothing(get(action, "new_opportunity_id", nothing))
+            new_possibilities += 1
+        end
+    end
+    innovation_births = count(inn -> !isnothing(inn), innovations)
+    new_possibility_rate = new_possibilities / max(1, total_actions)
+
+    # Update volatility state
+    volatility = _update_volatility_state!(env, action_shares, ai_shares, market)
+    env._volatility_state["last_action_shares"] = copy(action_shares)
+    env._volatility_state["last_ai_shares"] = copy(ai_shares)
+
+    share_invest, share_innovate, share_explore, share_maintain = action_shares
 
     # ========================================================================
     # ACTOR IGNORANCE
     # ========================================================================
-    # Base ignorance from opportunities not yet discovered
-    n_opportunities = length(market.opportunities)
-    discovered = count(opp -> opp.discovered, market.opportunities)
-    discovery_ratio = n_opportunities > 0 ? discovered / n_opportunities : 1.0
-
-    # AI reduces ignorance
-    ai_reduction = 0.0
-    if ai_usage_rate > 0
-        ai_reduction = ai_usage_rate * 0.3 * (1.0 + ai_shares[4] * 0.5)  # Premium more effective
+    # Gather knowledge gaps from agent perceptions
+    knowledge_gaps = Dict{String,Float64}()
+    for action in agent_actions
+        perception = get(action, "perception_at_decision", Dict())
+        ignorance = get(perception, "actor_ignorance", Dict())
+        gap_map = get(ignorance, "knowledge_gaps", Dict())
+        if !isempty(gap_map)
+            merge!(knowledge_gaps, gap_map)
+        end
     end
 
-    base_ignorance = (1.0 - discovery_ratio) * 0.5
-    actor_ignorance_level = max(0.0, base_ignorance - ai_reduction)
+    # Calculate knowledge-based metrics
+    avg_knowledge = if !isnothing(env.knowledge_base) && hasfield(typeof(env.knowledge_base), :get_average_agent_knowledge)
+        Float64(env.knowledge_base.get_average_agent_knowledge())
+    else
+        0.0
+    end
+    total_opportunities = length(market.opportunities)
+    n_agents = Int(getfield_default(env.config, :N_AGENTS, 1))
+    knowledge_norm = avg_knowledge / max(1.0, total_opportunities / max(1, n_agents / 4))
 
-    # Add short-term volatility
-    st_avg = _get_short_term_average(env, "actor_ignorance"; fallback=actor_ignorance_level)
-    actor_ignorance_level = 0.7 * actor_ignorance_level + 0.3 * st_avg
+    gap_values = collect(values(knowledge_gaps))
+    gap_pressure = !isempty(gap_values) ? clamp(safe_mean(gap_values), 0.0, 1.0) : 0.0
+    gap_coverage = total_opportunities > 0 ? length(knowledge_gaps) / total_opportunities : 0.0
+    hallucination_rate = length(env.ai_uncertainty_signals["hallucination_events"]) / max(1, env._ai_signal_history)
+    knowledge_gap_term = 1.0 - clamp(knowledge_norm, 0.0, 1.0)
 
-    env.actor_ignorance_state["level"] = actor_ignorance_level
+    # Calculate weighted average AI info_quality based on tier usage
+    # Access AILevelConfig struct fields directly
+    basic_config = get(env.config.AI_LEVELS, "basic", nothing)
+    advanced_config = get(env.config.AI_LEVELS, "advanced", nothing)
+    premium_config = get(env.config.AI_LEVELS, "premium", nothing)
+    ai_tier_qualities = Dict{String,Float64}(
+        "none" => 0.0,
+        "basic" => isnothing(basic_config) ? 0.35 : Float64(basic_config.info_quality),
+        "advanced" => isnothing(advanced_config) ? 0.65 : Float64(advanced_config.info_quality),
+        "premium" => isnothing(premium_config) ? 0.90 : Float64(premium_config.info_quality)
+    )
+    avg_ai_info_quality = (
+        ai_shares[2] * ai_tier_qualities["basic"] +
+        ai_shares[3] * ai_tier_qualities["advanced"] +
+        ai_shares[4] * ai_tier_qualities["premium"]
+    )
+    ai_ignorance_reduction = avg_ai_info_quality * 0.25
+
+    # Raw actor ignorance with AI reduction
+    raw_actor = (
+        0.7 * knowledge_gap_term +
+        0.45 * gap_pressure +
+        0.35 * gap_coverage +
+        0.35 * hallucination_rate -
+        ai_ignorance_reduction -
+        0.18 * share_explore +
+        0.05 * share_maintain
+    )
+    actor_level = clamp(stable_sigmoid(raw_actor - 0.35), 0.01, 0.99)
+
+    # Baseline (no AI) actor ignorance
+    raw_actor_no_ai = (
+        0.7 * knowledge_gap_term +
+        0.45 * gap_pressure +
+        0.35 * gap_coverage -
+        0.18 * share_explore +
+        0.05 * share_maintain
+    )
+    actor_level_no_ai = clamp(stable_sigmoid(raw_actor_no_ai - 0.35), 0.01, 0.99)
+    ai_effects["ai_ignorance_delta"] = actor_level - actor_level_no_ai
+
+    _update_short_term!(env, "actor_ignorance", actor_level)
+    env.actor_ignorance_state["level"] = actor_level
+
+    state["actor_ignorance"] = Dict{String,Any}(
+        "level" => actor_level,
+        "knowledge_gaps" => knowledge_gaps,
+        "gap_pressure" => gap_pressure,
+        "volatility" => volatility,
+        "ai_delta" => get(ai_effects, "ai_ignorance_delta", 0.0)
+    )
 
     # ========================================================================
     # PRACTICAL INDETERMINISM
     # ========================================================================
-    # Base from market volatility and regime instability
-    regime_instability = market.volatility + abs(market.trend) * 0.3
-
-    # AI herding increases indeterminism
-    herding_patterns = env.ai_uncertainty_signals["ai_herding_patterns"]
-    ai_herding_intensity = if !isempty(herding_patterns)
-        clamp(sum(values(herding_patterns)) / max(1.0, total_actions), 0.0, 1.0)
-    else
-        0.0
+    timing_levels = Float64[]
+    timing_pressure = Dict{String,Float64}()
+    if !isempty(market.opportunities)
+        for opp in market.opportunities
+            acceleration = Float64(opp.market_share) * Float64(opp.competition)
+            timing_pressure[opp.id] = acceleration
+            push!(timing_levels, acceleration)
+        end
     end
+    base_practical = !isempty(timing_levels) ? safe_mean(timing_levels) : 0.3
+    timing_variability = !isempty(timing_levels) ? std(timing_levels) : 0.0
 
-    # Crowding increases indeterminism (scaled by competition intensity)
-    crowding = get(market.crowding_metrics, "crowding_index", 0.25)
-    competition_intensity = env.config.COMPETITION_INTENSITY
+    market_volatility = Float64(market.volatility)
+    regime = hasfield(typeof(market), :market_regime) ? market.market_regime : "normal"
+    regime_uncertainty = get(Dict(
+        "boom" => 0.35, "growth" => 0.22, "normal" => 0.18,
+        "volatile" => 0.32, "recession" => 0.45, "crisis" => 0.65
+    ), regime, 0.2)
+    path_component = clamp(timing_variability * 1.5, 0.0, 1.0)
 
-    # Scale the herding and crowding components by competition intensity
-    practical_indet_level = (
-        0.3 * regime_instability +
-        0.3 * ai_herding_intensity * competition_intensity +  # Herding effect scaled
-        0.2 * crowding * competition_intensity +              # Crowding effect scaled
-        0.2 * (1.0 - ai_share_none) * 0.5  # AI increases execution uncertainty (not competitive)
+    # Get crowding metrics
+    crowding_metrics = hasfield(typeof(market), :_last_crowding_metrics) ? market._last_crowding_metrics : Dict()
+    crowding_index = Float64(get(crowding_metrics, "crowding_index", 0.0))
+    ai_usage_pressure = Float64(get(crowding_metrics, "ai_usage_share", 0.0))
+    crowding_baseline = 0.25
+    crowding_pressure = max(0.0, crowding_index - crowding_baseline)
+    ai_pressure_term = max(0.0, ai_usage_pressure - 0.30)
+
+    crowd_weight = Float64(getfield_default(env.config, :UNCERTAINTY_CROWDING_WEIGHT, 0.12))
+    competitive_weight = Float64(getfield_default(env.config, :UNCERTAINTY_COMPETITIVE_WEIGHT, 0.08))
+    herding_weight = Float64(getfield_default(env.config, :UNCERTAINTY_AI_HERDING_WEIGHT, 0.1))
+
+    practical_level = clamp(
+        0.25 +
+        0.30 * market_volatility +
+        0.25 * regime_uncertainty +
+        0.25 * clamp(base_practical, 0.0, 1.0) +
+        0.20 * path_component +
+        0.15 * share_invest +
+        crowd_weight * crowding_pressure +
+        competitive_weight * ai_pressure_term +
+        herding_weight * ai_herding_intensity,
+        0.0, 1.0
     )
-    practical_indet_level = clamp(practical_indet_level, 0.0, 1.0)
 
-    env.practical_indeterminism_state["level"] = practical_indet_level
-    env.practical_indeterminism_state["regime_instability"] = regime_instability
+    practical_level_no_ai = clamp(
+        0.25 +
+        0.30 * market_volatility +
+        0.25 * regime_uncertainty +
+        0.25 * clamp(base_practical, 0.0, 1.0) +
+        0.20 * path_component +
+        0.15 * share_invest,
+        0.0, 1.0
+    )
+    ai_effects["ai_indeterminism_delta"] = practical_level - practical_level_no_ai
+
+    _update_short_term!(env, "practical_indeterminism", practical_level)
+    env.practical_indeterminism_state["path_volatility"] = path_component
+    env.practical_indeterminism_state["timing_variability"] = timing_variability
+    env.practical_indeterminism_state["regime_instability"] = regime_uncertainty
+    env.practical_indeterminism_state["crowding_pressure"] = crowding_pressure
+    env.practical_indeterminism_state["ai_pressure"] = ai_usage_pressure
+    env.practical_indeterminism_state["ai_herding_intensity"] = ai_herding_intensity
+    env.practical_indeterminism_state["level"] = practical_level
+
+    state["practical_indeterminism"] = Dict{String,Any}(
+        "level" => practical_level,
+        "timing_pressure" => timing_pressure,
+        "volatility" => volatility,
+        "crowding_pressure" => crowding_pressure,
+        "ai_herding_intensity" => ai_herding_intensity,
+        "ai_delta" => get(ai_effects, "ai_indeterminism_delta", 0.0)
+    )
 
     # ========================================================================
     # AGENTIC NOVELTY
     # ========================================================================
-    # Count new combinations
-    new_combos = 0
-    for action in agent_actions
-        if get(action, "is_new_combination", false) ||
-           get(action, "discovered_niche", false) ||
-           get(action, "created_opportunity", false)
-            new_combos += 1
+    history = env._action_history
+    window_size = min(5, length(history))
+    recent_history = window_size > 0 ? history[end-window_size+1:end] : []
+
+    total_innov = sum(get(item, "innovate", 0) for item in recent_history)
+    total_explore = sum(get(item, "explore", 0) for item in recent_history)
+    total_invest = sum(get(item, "invest", 0) for item in recent_history)
+
+    combo_rate = total_innov > 0 ? sum(get(item, "new_combos", 0) for item in recent_history) / total_innov : 0.0
+    niche_rate = total_explore > 0 ? sum(get(item, "new_niches", 0) for item in recent_history) / total_explore : 0.0
+    adoption_rate = total_invest > 0 ? sum(get(item, "derivative_adoption", 0) for item in recent_history) / total_invest : 0.0
+
+    combo_hhi_avg = safe_mean([get(item, "combo_hhi", 0.0) for item in recent_history])
+    sector_hhi_avg = safe_mean([get(item, "sector_hhi", 0.0) for item in recent_history])
+    diversity_term = clamp(1.0 - combo_hhi_avg, 0.0, 1.0)
+    sector_diversity = clamp(1.0 - sector_hhi_avg, 0.0, 1.0)
+
+    scarcity_signal = _compute_component_scarcity(env)
+    innovation_intensity = innovation_births / max(1, total_actions)
+
+    # Disruption state with decay
+    disruption_state = get(env.agentic_novelty_state, "disruption_potential", Dict{String,Float64}())
+    if isempty(disruption_state) && hasfield(typeof(env.config), :SECTORS)
+        for sector in env.config.SECTORS
+            disruption_state[sector] = 0.3
         end
     end
-    innovation_rate = total_actions > 0 ? new_combos / total_actions : 0.0
 
-    # Innovation births
-    innovation_births = length(innovations)
+    disruption_decay = Float64(getfield_default(env.config, :DISRUPTION_STATE_DECAY, 0.92))
+    for sector in collect(keys(disruption_state))
+        disruption_state[sector] = clamp(disruption_state[sector] * disruption_decay, 0.05, 0.95)
+    end
 
-    # AI can both enable and constrain novelty
-    # Premium AI may anchor on historical patterns
-    # Scale the constraint effect by AI_NOVELTY_CONSTRAINT_INTENSITY (for robustness testing)
-    novelty_constraint_intensity = env.config.AI_NOVELTY_CONSTRAINT_INTENSITY
+    # Update disruption from innovations
+    for innovation in innovations
+        if isnothing(innovation)
+            continue
+        end
+        sector = innovation.sector
+        if isnothing(sector)
+            continue
+        end
+        success_flag = innovation.success ? 1.0 : 0.0
+        novelty_score = Float64(isnothing(innovation.novelty) ? 0.0 : innovation.novelty)
+        impact_signal = Float64(hasfield(typeof(innovation), :market_impact) ? (isnothing(innovation.market_impact) ? 0.0 : innovation.market_impact) : 0.0)
+        bump = 0.03 + 0.04 * novelty_score + 0.02 * max(impact_signal, 0.0) + 0.04 * success_flag
+        disruption_state[sector] = clamp(get(disruption_state, sector, 0.3) + bump, 0.05, 0.95)
+    end
+
+    # Update from explore actions
+    for action in agent_actions
+        if get(action, "action", "") != "explore"
+            continue
+        end
+        sector = get(action, "base_sector", get(action, "domain", nothing))
+        if isnothing(sector)
+            continue
+        end
+        bump = (get(action, "created_niche", false) || get(action, "discovered_niche", false)) ? 0.02 : 0.01
+        disruption_state[sector] = clamp(get(disruption_state, sector, 0.3) + bump, 0.05, 0.95)
+    end
+
+    disruption_avg = !isempty(disruption_state) ? clamp(fast_mean(values(disruption_state)), 0.0, 1.0) : 0.3
+    innovation_momentum = clamp(innovation_intensity + new_possibility_rate, 0.0, 1.0)
+    reuse_pressure = 0.6 * combo_hhi_avg + 0.4 * sector_hhi_avg
+
+    novelty_pressure = (
+        0.32 * combo_rate +
+        0.24 * new_possibility_rate +
+        0.20 * niche_rate +
+        0.18 * adoption_rate +
+        0.15 * innovation_intensity +
+        0.12 * disruption_avg +
+        0.12 * scarcity_signal +
+        0.10 * sector_diversity
+    )
+
+    reuse_drag = (
+        0.40 * reuse_pressure +
+        0.12 * max(0.35 - new_possibility_rate, 0.0) +
+        0.10 * max(0.45 - scarcity_signal, 0.0) +
+        0.08 * max(0.4 - combo_rate, 0.0)
+    )
+
+    raw_novelty = novelty_pressure - reuse_drag
+    novelty_level = clamp(stable_sigmoid(2.1 * (raw_novelty - 0.05)), 0.05, 0.95)
+
+    novelty_diagnostics = Dict{String,Any}(
+        "combo_rate" => combo_rate,
+        "niche_rate" => niche_rate,
+        "adoption_rate" => adoption_rate,
+        "diversity_term" => diversity_term,
+        "sector_diversity" => sector_diversity,
+        "scarcity" => scarcity_signal,
+        "innovation_intensity" => innovation_intensity,
+        "new_possibility_rate" => new_possibility_rate,
+        "reuse_pressure" => reuse_pressure,
+        "disruption_avg" => disruption_avg
+    )
+
+    # AI novelty effect (matching Python exactly)
+    ai_quality = clamp(ai_usage_pressure, 0.0, 1.0)
+    novelty_constraint_intensity = Float64(getfield_default(env.config, :AI_NOVELTY_CONSTRAINT_INTENSITY, 1.0))
     ai_novelty_effect = (
         0.3 * ai_shares[2] +  # Basic enables some novelty
         0.4 * ai_shares[3] -  # Advanced enables more
         0.1 * ai_shares[4] * novelty_constraint_intensity  # Premium constraint scaled
     )
 
-    agentic_novelty_level = (
-        0.4 * innovation_rate +
-        0.3 * (innovation_births > 0 ? min(1.0, innovation_births / 10) : 0.0) +
-        0.3 * max(0.0, ai_novelty_effect)
+    ai_novelty_uplift = Float64(getfield_default(env.config, :AI_NOVELTY_UPLIFT, 0.08))
+    agentic_level = clamp(
+        0.25 + 0.38 * novelty_level + 0.25 * (combo_rate + reuse_pressure * 0.4) + 0.25 * scarcity_signal + 0.1 * disruption_avg + ai_novelty_uplift * ai_quality + ai_novelty_effect,
+        0.0, 1.0
     )
-    agentic_novelty_level = clamp(agentic_novelty_level, 0.0, 1.0)
 
-    env.agentic_novelty_state["level"] = agentic_novelty_level
-    env.agentic_novelty_state["novelty_potential"] = innovation_rate
+    agentic_level_no_ai = clamp(
+        0.25 + 0.35 * novelty_level + 0.25 * (combo_rate + reuse_pressure * 0.4) + 0.25 * scarcity_signal + 0.1 * disruption_avg,
+        0.0, 1.0
+    )
+
+    _update_short_term!(env, "agentic_novelty", agentic_level)
+
+    # Update agentic novelty state
+    env.agentic_novelty_state["creative_momentum"] = agentic_level
+    env.agentic_novelty_state["new_possibilities"] = new_possibilities
+    env.agentic_novelty_state["new_possibility_rate"] = new_possibility_rate
+    env.agentic_novelty_state["innovation_births"] = innovation_births
+    env.agentic_novelty_state["scarcity_signal"] = scarcity_signal
+    env.agentic_novelty_state["recent_scarcity_signal"] = scarcity_signal
+    env.agentic_novelty_state["novelty_level"] = agentic_level
+    env.agentic_novelty_state["drivers"] = novelty_diagnostics
+    env.agentic_novelty_state["disruption_potential"] = disruption_state
+    env.agentic_novelty_state["level"] = agentic_level
+    env._novelty_diagnostics = novelty_diagnostics
+
+    # Get tier-specific rates from action summary
+    tier_combo_rate = get(action_summary, "tier_combo_rate", Dict{String,Float64}())
+    tier_reuse_pressure = get(action_summary, "tier_reuse_pressure", Dict{String,Float64}())
+    tier_new_poss_rate = get(action_summary, "tier_new_possibility_rate", Dict{String,Float64}())
+    tier_adoption_rate = get(action_summary, "tier_adoption_rate", Dict{String,Float64}())
+
+    tier_drivers = Dict{String,Any}(
+        "combo_rate" => tier_combo_rate,
+        "reuse_pressure" => tier_reuse_pressure,
+        "new_possibility_rate" => tier_new_poss_rate,
+        "adoption_rate" => tier_adoption_rate
+    )
+    env.agentic_novelty_state["tier_drivers"] = tier_drivers
+
+    state["agentic_novelty"] = Dict{String,Any}(
+        "level" => agentic_level,
+        "novelty_potential" => agentic_level,
+        "new_possibilities" => new_possibilities,
+        "new_possibility_rate" => new_possibility_rate,
+        "innovation_births" => innovation_births,
+        "volatility" => volatility,
+        "scarcity_signal" => scarcity_signal,
+        "component_scarcity" => scarcity_signal,
+        "disruption_potential" => disruption_state,
+        "combo_rate" => combo_rate,
+        "reuse_pressure" => reuse_pressure,
+        "adoption_rate" => adoption_rate,
+        "drivers" => novelty_diagnostics,
+        "ai_delta" => agentic_level - agentic_level_no_ai,
+        "tier_combo_rate" => tier_combo_rate,
+        "tier_reuse_pressure" => tier_reuse_pressure,
+        "tier_new_possibility_rate" => tier_new_poss_rate,
+        "tier_adoption_rate" => tier_adoption_rate
+    )
 
     # ========================================================================
     # COMPETITIVE RECURSION
     # ========================================================================
-    # Strategic interdependence from AI convergence
-    invest_concentration = get(action_counts, "invest", 0) / max(1, total_actions)
-
-    # AI tier concentration creates recursion
+    invest_hhi = get(action_summary, "invest_hhi", 0.0)
     premium_share = ai_shares[4]
-    advanced_share = ai_shares[3]
+    tier_reuse_map = get(action_summary, "tier_reuse_pressure", Dict())
+    premium_reuse = Float64(get(tier_reuse_map, "premium", 0.0))
+    knowledge_overlap = Float64(get(action_summary, "sector_hhi", 0.0))
 
-    # Herding pressure (scaled by competition intensity)
-    herding_pressure = ai_herding_intensity * competition_intensity
+    agent_count = max(1, Int(getfield_default(env.config, :N_AGENTS, 1)))
+    alive_agents = env._last_alive_agents
+    population_factor = clamp(alive_agents / agent_count, 0.15, 1.0)
 
-    # Competitive recursion - scale the crowding and herding components
-    competitive_recursion_level = (
-        0.3 * invest_concentration^2 * competition_intensity +  # Investment crowding scaled
-        0.3 * herding_pressure +                                # Already scaled above
-        0.2 * premium_share * 2.0 +  # Premium creates more recursion (not purely competitive)
-        0.2 * advanced_share
-    )
-    competitive_recursion_level = clamp(competitive_recursion_level, 0.0, 1.0)
+    # Recursion weights from config
+    rw = getfield_default(env.config, :RECURSION_WEIGHTS, Dict())
+    crowd_w = Float64(get(rw, "crowd_weight", 0.35))
+    vol_w = Float64(get(rw, "volatility_weight", 0.30))
+    herd_w = Float64(get(rw, "ai_herd_weight", 0.40))
+    premium_reuse_w = Float64(get(rw, "premium_reuse_weight", 0.20))
 
-    env.competitive_recursion_state["level"] = competitive_recursion_level
-    env.competitive_recursion_state["herding_pressure"] = herding_patterns
-
-    # ========================================================================
-    # COMPILE STATE
-    # ========================================================================
-    state = Dict{String,Dict{String,Any}}(
-        "actor_ignorance" => Dict{String,Any}(
-            "level" => actor_ignorance_level,
-            "knowledge_gaps" => env.actor_ignorance_state["knowledge_gaps"],
-            "ai_delta" => -ai_reduction
-        ),
-        "practical_indeterminism" => Dict{String,Any}(
-            "level" => practical_indet_level,
-            "regime_instability" => regime_instability,
-            "ai_herding_intensity" => ai_herding_intensity,
-            "ai_delta" => ai_herding_intensity * 0.5
-        ),
-        "agentic_novelty" => Dict{String,Any}(
-            "level" => agentic_novelty_level,
-            "novelty_potential" => innovation_rate,
-            "component_scarcity" => env.agentic_novelty_state["component_scarcity"],
-            "reuse_pressure" => env.agentic_novelty_state["reuse_pressure"],
-            "ai_delta" => ai_novelty_effect
-        ),
-        "competitive_recursion" => Dict{String,Any}(
-            "level" => competitive_recursion_level,
-            "herding_pressure" => herding_pressure,
-            "ai_premium_share" => premium_share,
-            "ai_delta" => (premium_share + advanced_share) * 0.5
-        )
+    crowding_component = (
+        0.45 * invest_hhi +
+        0.35 * premium_share +
+        crowd_w * crowding_pressure +
+        0.12 * knowledge_overlap
     )
 
-    # Record evolution
-    push!(env.uncertainty_evolution, Dict(
-        "round" => round_num,
-        "actor_ignorance" => actor_ignorance_level,
-        "practical_indeterminism" => practical_indet_level,
-        "agentic_novelty" => agentic_novelty_level,
-        "competitive_recursion" => competitive_recursion_level
-    ))
+    scale = 0.5 + 0.5 * population_factor
+    recursion_level = clamp(
+        crowding_component * scale +
+        vol_w * volatility +
+        herd_w * ai_herding_intensity +
+        premium_reuse_w * premium_reuse,
+        0.0, 1.0
+    )
+
+    recursion_level_no_ai = clamp(
+        crowding_component * scale +
+        0.15 * volatility,
+        0.0, 1.0
+    )
+    ai_effects["ai_recursion_delta"] = recursion_level - recursion_level_no_ai
+
+    _update_short_term!(env, "competitive_recursion", recursion_level)
+
+    herding_pressure_map = Dict{String,Float64}()
+    herding_counts = get(action_summary, "herding_counts", Dict())
+    invest_count = max(1, get(action_summary, "invest", 1))
+    for (opp_id, count) in herding_counts
+        herding_pressure_map[opp_id] = count / invest_count
+    end
+
+    env.competitive_recursion_state["level"] = recursion_level
+    env.competitive_recursion_state["herding_pressure"] = herding_pressure_map
+
+    state["competitive_recursion"] = Dict{String,Any}(
+        "level" => recursion_level,
+        "herding_pressure" => herding_pressure_map,
+        "volatility" => volatility,
+        "ai_premium_share" => premium_share,
+        "ai_herding_intensity" => ai_herding_intensity,
+        "ai_delta" => get(ai_effects, "ai_recursion_delta", 0.0)
+    )
+
+    # Record evolution as tuple (round, state)
+    push!(env.uncertainty_evolution, (round_num, state))
+    env._last_environment_state = state
 
     return state
 end
@@ -518,6 +1155,18 @@ agent_knowledge : Set{String}
     Knowledge IDs known to the agent
 sector_knowledge : Dict{String,Float64}
     Agent's sector knowledge levels
+action_history : Vector{String}
+    Agent's recent action history for behavioral pattern analysis
+ai_learning_profile : AILearningProfile
+    Agent's learned understanding of AI capabilities
+agent_id : Int
+    Agent identifier for agent-specific short-term buffering
+agent_resources : Any
+    Agent's current resource state
+cached_metrics : Dict
+    Pre-computed metrics to avoid redundant calculation
+recent_outcomes : Vector{Dict}
+    Recent investment/innovation outcomes
 
 Returns
 -------
@@ -533,40 +1182,76 @@ function perceive_uncertainty(
     agent_knowledge::Set{String} = Set{String}(),
     sector_knowledge::Dict{String,Float64} = Dict{String,Float64}(),
     action_history::Vector{String} = String[],
-    ai_learning_profile::Union{AILearningProfile,Nothing} = nothing
+    ai_learning_profile::Union{AILearningProfile,Nothing} = nothing,
+    agent_id::Union{Int,Nothing} = nothing,
+    agent_resources::Any = nothing,
+    cached_metrics::Union{Dict{String,Any},Nothing} = nothing,
+    recent_outcomes::Vector{Dict{String,Any}} = Dict{String,Any}[]
 )::Dict{String,Any}
     perception = Dict{String,Any}()
+    env_state = env._last_environment_state
+    current_round = get(market_conditions, "round", 0)
+    volatility = Float64(get(env._volatility_state, "volatility_metric", 0.0))
+
+    # Get global action shares from volatility state
+    global_action_shares = get(env._volatility_state, "last_action_shares", zeros(4))
+    if isnothing(global_action_shares) || length(global_action_shares) != 4
+        global_share_invest = global_share_innovate = global_share_explore = global_share_maintain = 0.0
+    else
+        global_share_invest, global_share_innovate, global_share_explore, global_share_maintain = Float64.(global_action_shares)
+    end
+
+    # Compute agent-specific action shares from history
+    agent_counts = Dict{String,Int}()
+    for action in action_history
+        agent_counts[action] = get(agent_counts, action, 0) + 1
+    end
+    agent_total = length(action_history)
+
+    if agent_total > 0
+        agent_share_invest = get(agent_counts, "invest", 0) / agent_total
+        agent_share_innovate = get(agent_counts, "innovate", 0) / agent_total
+        agent_share_explore = get(agent_counts, "explore", 0) / agent_total
+        agent_share_maintain = get(agent_counts, "maintain", 0) / agent_total
+    else
+        agent_share_invest = global_share_invest
+        agent_share_innovate = global_share_innovate
+        agent_share_explore = global_share_explore
+        agent_share_maintain = global_share_maintain
+    end
+
+    # Blend agent-specific and global action shares (matching Python's 0.85 blend)
+    blend = 0.85
+    share_invest = blend * agent_share_invest + (1.0 - blend) * global_share_invest
+    share_innovate = blend * agent_share_innovate + (1.0 - blend) * global_share_innovate
+    share_explore = blend * agent_share_explore + (1.0 - blend) * global_share_explore
+    share_maintain = blend * agent_share_maintain + (1.0 - blend) * global_share_maintain
 
     # Get AI configuration
     ai_config = get(env.config.AI_LEVELS, ai_level, env.config.AI_LEVELS["none"])
-    info_quality = Float64(get(ai_config, "info_quality", 0.0))
-    info_breadth = Float64(get(ai_config, "info_breadth", 0.0))
+    info_quality = Float64(hasfield(typeof(ai_config), :info_quality) ? ai_config.info_quality : get(ai_config, "info_quality", 0.0))
+    info_breadth = Float64(hasfield(typeof(ai_config), :info_breadth) ? ai_config.info_breadth : get(ai_config, "info_breadth", 0.0))
 
-    # Extract agent traits
-    competence_trait = get(agent_traits, "competence", 0.5)
-    ai_trust_trait = get(agent_traits, "ai_trust", 0.5)
-    exploration_trait = get(agent_traits, "exploration_tendency", 0.5)
-    innovation_trait = get(agent_traits, "innovativeness", 0.5)
-    uncertainty_tolerance = get(agent_traits, "uncertainty_tolerance", 0.5)
-    analytical_ability = get(agent_traits, "analytical_ability", 0.5)
-
-    # Compute action shares from history
-    if !isempty(action_history)
-        action_counts = Dict{String,Int}()
-        for action in action_history
-            action_counts[action] = get(action_counts, action, 0) + 1
-        end
-        total = length(action_history)
-        share_invest = get(action_counts, "invest", 0) / total
-        share_innovate = get(action_counts, "innovate", 0) / total
-        share_explore = get(action_counts, "explore", 0) / total
-        share_maintain = get(action_counts, "maintain", 0) / total
+    # Get global AI shares
+    last_ai_shares = get(env._volatility_state, "last_ai_shares", zeros(4))
+    if isnothing(last_ai_shares) || length(last_ai_shares) != 4
+        ai_shares = Float64[1.0, 0.0, 0.0, 0.0]
     else
-        share_invest = share_innovate = share_explore = share_maintain = 0.25
+        ai_shares = Float64.(last_ai_shares)
     end
 
+    # Extract agent traits
+    competence_trait = Float64(get(agent_traits, "competence", 0.5))
+    ai_trust_trait = Float64(get(agent_traits, "ai_trust", 0.5))
+    exploration_trait = Float64(get(agent_traits, "exploration_tendency", 0.5))
+    innovation_trait = Float64(get(agent_traits, "innovativeness", 0.5))
+    uncertainty_tolerance = Float64(get(agent_traits, "uncertainty_tolerance", 0.5))
+    analytical_ability = Float64(get(agent_traits, "analytical_ability", 0.5))
+    risk_tolerance = Float64(get(agent_traits, "risk_tolerance", 0.5))
+
     # AI trust calibration
-    avg_ai_trust = ai_trust_trait
+    base_ai_trust = ai_trust_trait
+    avg_ai_trust = base_ai_trust
     hallucination_rate = 0.0
     if !isnothing(ai_learning_profile)
         trusts = collect(values(ai_learning_profile.domain_trust))
@@ -577,7 +1262,11 @@ function perceive_uncertainty(
         total_usage = max(1, sum(values(ai_learning_profile.usage_count)))
         hallucination_rate = clamp(total_hall / total_usage, 0.0, 1.0)
     end
-    avg_ai_trust = clamp(0.5 * ai_trust_trait + 0.5 * avg_ai_trust, 0.0, 1.0)
+    avg_ai_trust = clamp(0.5 * base_ai_trust + 0.5 * avg_ai_trust, 0.0, 1.0)
+
+    # Tier smoothing factor (matching Python)
+    tier_key = normalize_ai_label(ai_level)
+    tier_factor = get(env._tier_smoothing, tier_key, 1.0)
 
     # ========================================================================
     # ACTOR IGNORANCE PERCEPTION
@@ -643,10 +1332,9 @@ function perceive_uncertainty(
         end
     end
 
-    gap_pressure = isempty(knowledge_gaps) ? 0.0 : clamp(mean(values(knowledge_gaps)), 0.0, 1.0)
+    gap_pressure = isempty(knowledge_gaps) ? 0.0 : clamp(fast_mean(values(knowledge_gaps)), 0.0, 1.0)
 
     # Final ignorance level
-    volatility = Float64(get(env.practical_indeterminism_state, "volatility", 0.0))
     estimated_ignorance = clamp(
         base_ignorance -
         ignorance_reduction -
@@ -660,16 +1348,41 @@ function perceive_uncertainty(
         0.01, 0.99
     )
 
-    perception["actor_ignorance"] = Dict{String,Any}(
-        "ignorance_level" => estimated_ignorance,
-        "level" => estimated_ignorance,
+    # Short-term buffer integration (matching Python)
+    short_actor = _get_short_term_average(env, "actor_ignorance"; fallback=estimated_ignorance, agent_id=agent_id)
+    quality_term = 0.3 * info_quality + 0.2 * info_breadth
+    actor_mix_base = 0.45 + quality_term - 0.25 * knowledge_deficit
+    short_weight = clamp(0.32 - 0.28 * info_quality + 0.12 * tier_factor, 0.03, 0.45)
+    actor_mix = clamp(actor_mix_base, 0.05, 0.95)
+    ignorance_level = (1.0 - short_weight) * actor_mix * estimated_ignorance + short_weight * short_actor
+    ignorance_level = clamp(ignorance_level, 0.0, 1.0)
+
+    # Update short-term buffer
+    _update_short_term!(env, "actor_ignorance", ignorance_level; agent_id=agent_id)
+
+    # Knowledge signal (matching Python structure)
+    knowledge_signal = Dict{String,Any}(
+        "confidence" => max(0.0, 1.0 - ignorance_level),
+        "ignorance_level" => ignorance_level,
         "knowledge_gaps" => knowledge_gaps,
         "gap_pressure" => gap_pressure,
         "info_quality" => info_quality,
         "info_breadth" => info_breadth,
         "personal_knowledge" => personal_knowledge,
         "knowledge_span" => knowledge_span,
-        "discovery_momentum" => discovery_momentum
+        "discovery_momentum" => discovery_momentum,
+        "volatility" => volatility
+    )
+    perception["knowledge_signal"] = knowledge_signal
+
+    perception["actor_ignorance"] = Dict{String,Any}(
+        "ignorance_level" => ignorance_level,
+        "level" => ignorance_level,
+        "knowledge_gaps" => knowledge_gaps,
+        "info_sufficiency" => info_quality,
+        "discovery_momentum" => discovery_momentum,
+        "volatility" => volatility,
+        "gap_pressure" => gap_pressure
     )
 
     # ========================================================================
@@ -743,16 +1456,42 @@ function perceive_uncertainty(
         0.05 * ai_herding_intensity
     )
 
-    indeterminism_level = clamp(
+    indeterminism_value = clamp(
         agent_path_risk + 0.15 * agent_volatility_factor + agent_uncertainty + system_term + crowd_term,
         0.0, 1.0
     )
 
+    # Short-term buffer integration (matching Python)
+    short_practical = _get_short_term_average(env, "practical_indeterminism"; fallback=indeterminism_value, agent_id=agent_id)
+    short_weight_practical = clamp(0.34 - 0.30 * info_quality + 0.15 * tier_factor, 0.04, 0.5)
+    practical_mix = clamp(0.25 + 0.45 * info_quality + 0.25 * info_breadth - 0.2 * tier_factor, 0.1, 0.9)
+    indeterminism_level = clamp(
+        (1.0 - short_weight_practical) * practical_mix * indeterminism_value + short_weight_practical * short_practical,
+        0.0, 1.0
+    )
+
+    # Update short-term buffer
+    _update_short_term!(env, "practical_indeterminism", indeterminism_level; agent_id=agent_id)
+
+    # Execution risk signal (matching Python structure)
+    execution_signal = Dict{String,Any}(
+        "risk_level" => indeterminism_level,
+        "timing_pressure" => timing_pressure,
+        "market_regime_risk" => regime_uncertainty,
+        "volatility" => volatility,
+        "crowding_pressure" => crowding_pressure,
+        "ai_pressure" => ai_pressure_level,
+        "ai_herding_intensity" => ai_herding_intensity
+    )
+    perception["execution_risk"] = execution_signal
+
     perception["practical_indeterminism"] = Dict{String,Any}(
         "indeterminism_level" => indeterminism_level,
         "level" => indeterminism_level,
+        "timing_criticality" => timing_pressure,
         "timing_pressure" => timing_pressure,
         "market_regime_risk" => regime_uncertainty,
+        "regime_stability" => regime_uncertainty,
         "volatility" => volatility,
         "crowding_pressure" => crowding_pressure,
         "ai_pressure" => ai_pressure_level,
@@ -764,122 +1503,272 @@ function perceive_uncertainty(
     # ========================================================================
 
     novelty_state = env.agentic_novelty_state
-    novelty_level = Float64(get(novelty_state, "level", 0.5))
-    scarcity_signal = Float64(get(novelty_state, "component_scarcity", 0.5))
-    reuse_pressure = Float64(get(novelty_state, "reuse_pressure", 0.0))
-    new_possibility_rate = Float64(get(novelty_state, "new_possibility_rate", 0.0))
+    recent_new_possibility_rate = Float64(get(novelty_state, "new_possibility_rate", 0.0))
+    recent_innovation_births = Int(get(novelty_state, "innovation_births", 0))
+    recent_new_possibilities = Int(get(novelty_state, "new_possibilities", 0))
+    scarcity_signal = Float64(get(novelty_state, "recent_scarcity_signal", get(novelty_state, "scarcity_signal", 0.5)))
 
-    # Tier-specific adjustments
-    tier_combo_rate = Float64(get(get(novelty_state, "combo_rate_by_tier", Dict()), ai_level, 0.0))
-    tier_reuse_pressure = Float64(get(get(novelty_state, "reuse_pressure_by_tier", Dict()), ai_level, reuse_pressure))
+    novelty_level_global = Float64(get(novelty_state, "novelty_level", 0.5))
+    driver_snapshot = get(novelty_state, "drivers", Dict())
 
+    # Get base rates from driver snapshot
+    base_combo_rate = Float64(get(driver_snapshot, "combo_rate", 0.0))
+    base_reuse_pressure = Float64(get(driver_snapshot, "reuse_pressure", 0.0))
+    base_new_poss_rate = Float64(get(driver_snapshot, "new_possibility_rate", recent_new_possibility_rate))
+    base_adoption_rate = Float64(get(driver_snapshot, "adoption_rate", 0.0))
+
+    # Tier-specific rates from tier_drivers
+    tier_driver_map = get(novelty_state, "tier_drivers", Dict())
+    tier_combo_rate = Float64(get(get(tier_driver_map, "combo_rate", Dict()), ai_level, base_combo_rate))
+    tier_reuse_pressure = Float64(get(get(tier_driver_map, "reuse_pressure", Dict()), ai_level, base_reuse_pressure))
+    tier_new_poss_rate = Float64(get(get(tier_driver_map, "new_possibility_rate", Dict()), ai_level, base_new_poss_rate))
+    tier_adoption_rate = Float64(get(get(tier_driver_map, "adoption_rate", Dict()), ai_level, base_adoption_rate))
+
+    # Compute novelty adjustment (matching Python exactly)
     novelty_adjustment = (
-        0.25 * tier_combo_rate -
-        0.2 * tier_reuse_pressure +
-        0.15 * new_possibility_rate
+        0.25 * (tier_combo_rate - base_combo_rate) -
+        0.2 * (tier_reuse_pressure - base_reuse_pressure) +
+        0.15 * (tier_new_poss_rate - base_new_poss_rate) +
+        0.1 * (tier_adoption_rate - base_adoption_rate)
     )
 
+    novelty_level_agent = clamp(novelty_level_global + novelty_adjustment, 0.05, 0.95)
     novelty_level_agent = clamp(
-        novelty_level + novelty_adjustment +
+        novelty_level_agent +
         0.22 * (innovation_trait - 0.5) +
         0.15 * (exploration_trait - 0.5) +
         0.10 * personal_knowledge,
         0.0, 1.0
     )
 
-    disruption_potential = Dict{String,Float64}()
-    for sector in env.config.SECTORS
-        disruption_potential[sector] = 0.3 + 0.2 * novelty_level_agent
+    # Short-term buffer integration (matching Python)
+    short_novelty = _get_short_term_average(env, "agentic_novelty"; fallback=novelty_level_agent, agent_id=agent_id)
+    short_weight_novelty = clamp(0.30 - 0.26 * info_quality + 0.12 * tier_factor, 0.03, 0.45)
+    novelty_mix = clamp(0.2 + 0.4 * info_quality + 0.25 * info_breadth - 0.15 * tier_factor, 0.1, 0.95)
+    novelty_level_agent = clamp(
+        (1.0 - short_weight_novelty) * novelty_mix * novelty_level_agent + short_weight_novelty * short_novelty,
+        0.0, 1.0
+    )
+
+    # Update short-term buffer
+    _update_short_term!(env, "agentic_novelty", novelty_level_agent; agent_id=agent_id)
+
+    creative_momentum = novelty_level_agent
+
+    # Get disruption potential from state
+    disruption_potential = Dict{String,Float64}(get(novelty_state, "disruption_potential", Dict()))
+    if isempty(disruption_potential) && hasfield(typeof(env.config), :SECTORS)
+        for sector in env.config.SECTORS
+            disruption_potential[sector] = 0.3
+        end
     end
+
+    # Innovation signal (matching Python structure)
+    innovation_signal = Dict{String,Any}(
+        "novelty_potential" => novelty_level_agent,
+        "creative_confidence" => creative_momentum,
+        "component_scarcity" => scarcity_signal,
+        "new_possibility_rate" => recent_new_possibility_rate,
+        "innovation_births" => recent_innovation_births,
+        "new_possibilities" => recent_new_possibilities,
+        "combo_rate" => tier_combo_rate,
+        "reuse_pressure" => tier_reuse_pressure,
+        "adoption_rate" => tier_adoption_rate
+    )
+    perception["innovation_signal"] = innovation_signal
 
     perception["agentic_novelty"] = Dict{String,Any}(
         "novelty_potential" => novelty_level_agent,
         "level" => novelty_level_agent,
-        "creative_confidence" => novelty_level_agent,
+        "creative_confidence" => creative_momentum,
         "disruption_potential" => disruption_potential,
+        "volatility" => volatility,
+        "new_possibility_rate" => recent_new_possibility_rate,
+        "innovation_births" => recent_innovation_births,
+        "new_possibilities" => recent_new_possibilities,
         "component_scarcity" => scarcity_signal,
-        "reuse_pressure" => reuse_pressure,
-        "new_possibility_rate" => new_possibility_rate,
-        "combo_rate" => tier_combo_rate
+        "drivers" => driver_snapshot,
+        "combo_rate" => tier_combo_rate,
+        "reuse_pressure" => tier_reuse_pressure,
+        "adoption_rate" => tier_adoption_rate,
+        "tier_combo_rate" => tier_combo_rate,
+        "tier_reuse_pressure" => tier_reuse_pressure,
+        "tier_new_possibility_rate" => tier_new_poss_rate,
+        "tier_adoption_rate" => tier_adoption_rate,
+        "global_combo_rate" => base_combo_rate,
+        "global_reuse_pressure" => base_reuse_pressure,
+        "tier_novelty_adjustment" => novelty_adjustment
     )
 
     # ========================================================================
     # COMPETITIVE RECURSION PERCEPTION
     # ========================================================================
 
-    recursion_state = env.competitive_recursion_state
-    recursion_level = Float64(get(recursion_state, "level", 0.3))
-    herding_pressure = Float64(get(recursion_state, "herding_pressure", 0.0))
-    strategic_uncertainty = Float64(get(recursion_state, "strategic_uncertainty", 0.0))
+    # Get herding patterns from AI uncertainty signals
+    herding_patterns = get(env.ai_uncertainty_signals, "ai_herding_patterns", Dict())
 
-    # AI tier shares
-    ai_shares = get(market_conditions, "ai_tier_shares", Dict{String,Float64}())
-    premium_share = Float64(get(ai_shares, "premium", 0.0))
-    advanced_share = Float64(get(ai_shares, "advanced", 0.0))
-    basic_share = Float64(get(ai_shares, "basic", 0.0))
-    none_share = Float64(get(ai_shares, "none", 1.0))
+    # Compute herding pressure from visible opportunities
+    herding_pressure_map = Dict{String,Float64}()
+    for opp in visible_opportunities
+        demand = hasfield(typeof(opp), :competition) ? Float64(opp.competition) : 0.0
+        opp_id = hasfield(typeof(opp), :id) ? opp.id : "opp_$(objectid(opp))"
+        herding_pressure_map[opp_id] = clamp(demand, 0.0, 1.0)
+    end
 
-    # Agent perception of competitive recursion
-    # Higher AI tiers may perceive more recursion due to awareness
-    tier_awareness_bonus = Dict(
-        "none" => 0.0,
-        "basic" => 0.05,
-        "advanced" => 0.12,
-        "premium" => 0.20
+    pressure_vals = collect(values(herding_pressure_map))
+    avg_pressure = !isempty(pressure_vals) ? fast_mean(pressure_vals) : 0.0
+    if !isfinite(avg_pressure)
+        avg_pressure = 0.0
+    end
+
+    # Get confidence miscalibration
+    confidence_vals = get(env.ai_uncertainty_signals, "confidence_miscalibration", Float64[])
+    confidence_miscalibration = !isempty(confidence_vals) ? safe_mean(confidence_vals) : 0.0
+    if !isfinite(confidence_miscalibration)
+        confidence_miscalibration = 0.0
+    end
+
+    ai_herding_intensity = Float64(get(env.practical_indeterminism_state, "ai_herding_intensity", 0.0))
+    capital_crowding = Float64(get(get(market_conditions, "crowding_metrics", Dict()), "crowding_index", 0.0))
+
+    # Raw recursion level (matching Python)
+    recursion_raw = (
+        0.12 +
+        avg_pressure * 0.45 +
+        confidence_miscalibration * 0.18 +
+        hallucination_rate * 0.12 +
+        volatility * 0.08 +
+        share_invest * 0.08 +
+        ai_herding_intensity * 0.15 +
+        max(0.0, capital_crowding) * 0.08
     )
-    awareness = get(tier_awareness_bonus, ai_level, 0.0)
+    recursion_raw += (
+        0.10 * max(0.0, knowledge_span - 0.35) -
+        0.10 * (exploration_trait - 0.5) +
+        0.08 * max(0.0, 0.55 - personal_knowledge)
+    )
+    recursion_level = clamp(recursion_raw, 0.0, 1.0)
 
-    # Own contribution to recursion
-    own_tier_share = get(ai_shares, ai_level, 0.0)
-    self_contribution = own_tier_share * 0.1
+    # Update strategic opacity
+    hallucination_events = length(get(env.ai_uncertainty_signals, "hallucination_events", []))
+    strategic_opacity = clamp(
+        Float64(get(env.competitive_recursion_state, "strategic_opacity", 0.0)) * 0.9 +
+        hallucination_events * 0.03 +
+        avg_pressure * 0.1 +
+        volatility * 0.1,
+        0.0, 1.0
+    )
+    env.competitive_recursion_state["strategic_opacity"] = strategic_opacity
 
-    perceived_recursion = clamp(
-        recursion_level +
-        awareness +
-        self_contribution +
-        0.1 * herding_pressure +
-        0.05 * (premium_share + advanced_share) -
-        0.1 * uncertainty_tolerance,
+    # Short-term buffer integration (matching Python)
+    short_recursion = _get_short_term_average(env, "competitive_recursion"; fallback=recursion_level, agent_id=agent_id)
+    recursion_mix = clamp(0.25 + 0.45 * info_quality + 0.25 * info_breadth - 0.2 * tier_factor, 0.15, 0.9)
+    recursion_short_weight = clamp(0.32 - 0.28 * info_quality + 0.15 * tier_factor, 0.04, 0.5)
+    recursion_level = clamp(
+        (1.0 - recursion_short_weight) * recursion_mix * recursion_level + recursion_short_weight * short_recursion,
         0.0, 1.0
     )
 
+    # Update short-term buffer
+    _update_short_term!(env, "competitive_recursion", recursion_level; agent_id=agent_id)
+
+    ai_usage_share = 1.0 - ai_shares[1]  # 1 - none share
+
+    # Competition signal (matching Python structure)
+    ai_tier_shares_from_conditions = get(market_conditions, "ai_tier_shares", Dict{String,Float64}())
+    competition_signal = Dict{String,Any}(
+        "pressure_level" => recursion_level,
+        "herding_awareness" => avg_pressure,
+        "herding_pressure" => herding_pressure_map,
+        "ai_usage_share" => ai_usage_share,
+        "capital_crowding" => capital_crowding,
+        "ai_herding_intensity" => ai_herding_intensity
+    )
+    perception["competition_signal"] = competition_signal
+
     perception["competitive_recursion"] = Dict{String,Any}(
-        "recursion_level" => perceived_recursion,
-        "level" => perceived_recursion,
-        "herding_pressure" => herding_pressure,
-        "strategic_uncertainty" => strategic_uncertainty,
-        "ai_premium_share" => premium_share,
-        "ai_advanced_share" => advanced_share,
-        "own_tier_share" => own_tier_share
+        "recursion_level" => recursion_level,
+        "level" => recursion_level,
+        "herding_awareness" => avg_pressure,
+        "herding_pressure" => herding_pressure_map,
+        "ai_herding_patterns" => Dict{String,Float64}(herding_patterns),
+        "ai_herding_intensity" => ai_herding_intensity,
+        "strategic_opacity" => strategic_opacity,
+        "volatility" => volatility,
+        "ai_usage_share" => ai_usage_share
+    )
+
+    perception["crowding_metrics"] = get(market_conditions, "crowding_metrics", Dict())
+    perception["volatility_metric"] = volatility
+    perception["action_profile"] = Dict{String,Float64}(
+        "invest" => share_invest,
+        "innovate" => share_innovate,
+        "explore" => share_explore,
+        "maintain" => share_maintain
     )
 
     # ========================================================================
-    # DECISION CONFIDENCE
+    # DECISION CONFIDENCE (matching Python exactly)
     # ========================================================================
 
-    # Overall decision confidence integrating all dimensions
-    uncertainty_penalty = (
-        0.30 * estimated_ignorance +
-        0.25 * indeterminism_level +
-        0.20 * (1.0 - novelty_level_agent) +
-        0.25 * perceived_recursion
+    # Overall uncertainty from all dimensions
+    total_uncertainty = (
+        ignorance_level * 0.35 +
+        indeterminism_level * 0.25 +
+        (1.0 - novelty_level_agent) * 0.20 +
+        recursion_level * 0.20
     )
 
-    ai_confidence_boost = info_quality * avg_ai_trust * 0.2
-    hallucination_penalty = hallucination_rate * 0.15
+    ai_confidence_boost = info_quality * 0.2
 
-    decision_confidence = clamp(
-        0.5 +
-        0.3 * competence_trait +
-        0.2 * personal_knowledge +
-        ai_confidence_boost -
-        uncertainty_penalty -
-        hallucination_penalty,
-        0.1, 0.95
-    )
+    # Calculate experience-based multipliers from recent outcomes
+    recent_success_rate = 0.5
+    ai_success_rate = 0.5
+    mean_roi = 0.0
+    if !isempty(recent_outcomes)
+        invest_outcomes = filter(o -> get(o, "action", "") == "invest", recent_outcomes)
+        if !isempty(invest_outcomes)
+            recent_success_rate = count(o -> get(o, "success", false), invest_outcomes) / length(invest_outcomes)
+            ai_invest = filter(o -> get(o, "ai_used", false), invest_outcomes)
+            if !isempty(ai_invest)
+                ai_success_rate = count(o -> get(o, "success", false), ai_invest) / length(ai_invest)
+            else
+                ai_success_rate = recent_success_rate
+            end
+            rois = Float64[]
+            for outcome in invest_outcomes
+                invested = Float64(get(outcome, "investment_amount", get(get(outcome, "investment", Dict()), "amount", 0.0)))
+                returned = Float64(get(outcome, "capital_returned", 0.0))
+                if invested > 0
+                    push!(rois, (returned - invested) / invested)
+                end
+            end
+            if !isempty(rois)
+                mean_roi = clamp(mean(rois), -0.5, 0.5)
+            end
+        end
+    end
+
+    # Calculate raw confidence (matching Python's formula)
+    raw_confidence = competence_trait * exp(-total_uncertainty * 0.5) * (1 + ai_confidence_boost)
+    raw_confidence = isfinite(raw_confidence) ? raw_confidence : 0.5
+
+    experience_multiplier = clamp(0.4 + 1.4 * recent_success_rate * competence_trait, 0.2, 1.8)
+    ai_effective_trust = clamp(avg_ai_trust, 0.0, 1.0)
+    ai_experience_multiplier = clamp(0.4 + 1.4 * ai_success_rate * ai_effective_trust, 0.2, 1.8)
+    roi_multiplier = clamp(1 + mean_roi * (0.5 + risk_tolerance), 0.3, 1.7)
+
+    raw_confidence *= experience_multiplier * ai_experience_multiplier * roi_multiplier
+    raw_confidence = clamp(raw_confidence, 0.01, 2.0)
+
+    decision_confidence = stable_sigmoid(3.0 * (raw_confidence - 0.5))
+    decision_confidence = isfinite(decision_confidence) ? decision_confidence : 0.5
+
+    confidence_multiplier = 1 - 0.4 * hallucination_rate + 0.3 * avg_ai_trust
+    decision_confidence *= clamp(confidence_multiplier, 0.5, 1.3)
+    decision_confidence = clamp(decision_confidence, 0.02, 0.98)
 
     perception["decision_confidence"] = decision_confidence
-    perception["overall_uncertainty"] = 1.0 - decision_confidence
 
     return perception
 end
@@ -894,9 +1783,9 @@ function get_ai_perception_adjustments(
     ai_config = get(env.config.AI_LEVELS, ai_level, env.config.AI_LEVELS["none"])
 
     return Dict{String,Float64}(
-        "ignorance_reduction" => Float64(get(ai_config, "info_quality", 0.0)) * 0.3,
-        "indeterminism_reduction" => Float64(get(ai_config, "info_quality", 0.0)) * 0.2,
-        "novelty_boost" => Float64(get(ai_config, "info_breadth", 0.0)) * 0.15,
+        "ignorance_reduction" => ai_config.info_quality * 0.3,
+        "indeterminism_reduction" => ai_config.info_quality * 0.2,
+        "novelty_boost" => ai_config.info_breadth * 0.15,
         "recursion_awareness" => ai_level == "premium" ? 0.2 : (ai_level == "advanced" ? 0.12 : 0.0)
     )
 end

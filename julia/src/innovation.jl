@@ -154,23 +154,11 @@ function InnovationEngine(config::EmergentConfig, knowledge_base::KnowledgeBase,
 end
 
 """
-Stable sigmoid function.
-"""
-function stable_sigmoid(x::Float64)::Float64
-    if x >= 0
-        return 1.0 / (1.0 + exp(-x))
-    else
-        exp_x = exp(x)
-        return exp_x / (1.0 + exp_x)
-    end
-end
-
-"""
 Attempt to create an innovation.
 """
 function attempt_innovation!(
     engine::InnovationEngine,
-    agent::EmergentAgent,
+    agent::Any,  # EmergentAgent - using Any to avoid circular dependency
     market_conditions::Dict{String,Any},
     round::Int;
     ai_level::String="none",
@@ -195,7 +183,7 @@ function attempt_innovation!(
     base_prob = engine.config.INNOVATION_PROBABILITY
     competence_score = (
         get(agent.traits, "innovativeness", 0.5) * 0.6 +
-        get(agent.capabilities, "innovation", 0.1) * 0.4
+        get(agent.resources.capabilities, "innovation", 0.1) * 0.4
     )
 
     ai_bonus_map = Dict("none" => 0.0, "basic" => 0.12, "advanced" => 0.25, "premium" => 0.35)
@@ -261,7 +249,7 @@ function attempt_innovation!(
     end
 
     # Determine innovation type
-    experience_units = get(agent.experience, "units", 0.0)
+    experience_units = Float64(agent.resources.experience_units)
     innovation_type = determine_innovation_type(
         engine,
         accessible_knowledge,
@@ -276,8 +264,8 @@ function attempt_innovation!(
     n_components = get_component_count(innovation_type; rng=rng)
 
     # Check for reuse
-    reuse_prob = get(engine.config, :INNOVATION_REUSE_PROBABILITY, 0.0)
-    lookback = get(engine.config, :INNOVATION_REUSE_LOOKBACK, 100)
+    reuse_prob = engine.config.INNOVATION_REUSE_PROBABILITY
+    lookback = engine.config.INNOVATION_REUSE_LOOKBACK
     selected_knowledge = nothing
     reuse_signature = nothing
 
@@ -500,7 +488,7 @@ function select_knowledge_combination(
         end
         weights ./= total_weight
 
-        choice_pos = weighted_choice(1:length(remaining_indices), weights; rng=rng)
+        choice_pos = weighted_choice(collect(1:length(remaining_indices)), weights; rng=rng)
         next_idx = remaining_indices[choice_pos]
         deleteat!(remaining_indices, choice_pos)
 
@@ -558,7 +546,7 @@ Determine the sector for an innovation.
 """
 function determine_innovation_sector(
     engine::InnovationEngine,
-    agent::EmergentAgent,
+    agent::Any,  # EmergentAgent - using Any to avoid circular dependency
     selected_knowledge::Vector{Knowledge}
 )::String
     # Use knowledge base domain-to-sector mapping
@@ -587,7 +575,7 @@ function create_innovation(
     engine::InnovationEngine,
     knowledge_pieces::Vector{Knowledge},
     innovation_type::String,
-    agent::EmergentAgent,
+    agent::Any,  # EmergentAgent - using Any to avoid circular dependency
     round::Int;
     ai_assisted::Bool=false,
     ai_domains_used::Vector{String}=String[],
@@ -708,8 +696,8 @@ function evaluate_innovation_success!(
 
         impact = clamp(impact * (1.0 + (novelty - 0.5) * 0.25), 0.05, 2.5)
 
-        base_multiple = 1.25 + get(engine.config, :INNOVATION_SUCCESS_BASE_RETURN, 0.25)
-        mult_range = get(engine.config, :INNOVATION_SUCCESS_RETURN_MULTIPLIER, (1.8, 3.0))
+        base_multiple = 1.25 + engine.config.INNOVATION_SUCCESS_BASE_RETURN
+        mult_range = engine.config.INNOVATION_SUCCESS_RETURN_MULTIPLIER
 
         low, high = if isa(mult_range, Tuple) && length(mult_range) >= 2
             Float64(mult_range[1]), Float64(mult_range[2])
@@ -726,7 +714,7 @@ function evaluate_innovation_success!(
         novelty_bonus = 1.0 + (novelty - 0.5) * 0.55
         cash_multiple = clamp((base_multiple + impact * impact_gain) * scarcity_bonus * novelty_bonus, 1.1, 8.5)
     else
-        recovery_ratio = get(engine.config, :INNOVATION_FAIL_RECOVERY_RATIO, 0.15)
+        recovery_ratio = engine.config.INNOVATION_FAIL_RECOVERY_RATIO
         # Linear interpolation for recovery floor
         novelty_clamped = clamp(innovation.novelty, 0.05, 0.95)
         recovery_floor = 0.78 - (novelty_clamped - 0.05) / (0.95 - 0.05) * (0.78 - 0.42)

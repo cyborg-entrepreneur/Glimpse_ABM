@@ -24,6 +24,8 @@ mutable struct EmergentSimulation
     agents::Vector{EmergentAgent}
     market::MarketEnvironment
     uncertainty_env::KnightianUncertaintyEnvironment
+    knowledge_base::KnowledgeBase
+    innovation_engine::InnovationEngine
     current_round::Int
     history::Vector{Dict{String,Any}}
     run_id::String
@@ -39,7 +41,8 @@ function EmergentSimulation(;
     config::EmergentConfig = EmergentConfig(),
     output_dir::String = "results",
     run_id::String = "run_$(Dates.format(now(), "yyyymmdd_HHMMSS"))",
-    seed::Union{Int,Nothing} = nothing
+    seed::Union{Int,Nothing} = nothing,
+    initial_tier_distribution::Union{Dict{String,Float64},Nothing} = nothing
 )
     # Initialize configuration
     initialize!(config)
@@ -54,10 +57,42 @@ function EmergentSimulation(;
     # Create market environment
     market = MarketEnvironment(config; rng=rng)
 
-    # Create agents
+    # Create knowledge base and innovation engine (matches Python)
+    knowledge_base = KnowledgeBase(config)
+    combination_tracker = CombinationTracker()
+    innovation_engine = InnovationEngine(config, knowledge_base, combination_tracker)
+
+    # Determine initial AI tier distribution
+    # Default: 100% none. Can specify e.g. Dict("none"=>0.25, "basic"=>0.25, "advanced"=>0.25, "premium"=>0.25)
+    tier_order = ["none", "basic", "advanced", "premium"]
+    tier_probs = if isnothing(initial_tier_distribution)
+        [1.0, 0.0, 0.0, 0.0]  # Default: all start at none
+    else
+        [get(initial_tier_distribution, t, 0.0) for t in tier_order]
+    end
+    # Normalize probabilities
+    total_prob = sum(tier_probs)
+    if total_prob > 0
+        tier_probs = tier_probs ./ total_prob
+    else
+        tier_probs = [1.0, 0.0, 0.0, 0.0]
+    end
+
+    # Create agents with distributed initial tiers
     agents = EmergentAgent[]
     for i in 1:config.N_AGENTS
-        agent = EmergentAgent(i, config; rng=rng)
+        # Sample initial tier based on distribution
+        r = rand(rng)
+        cumsum = 0.0
+        initial_tier = "none"
+        for (j, tier) in enumerate(tier_order)
+            cumsum += tier_probs[j]
+            if r <= cumsum
+                initial_tier = tier
+                break
+            end
+        end
+        agent = EmergentAgent(i, config; rng=rng, initial_ai_level=initial_tier)
         push!(agents, agent)
     end
 
@@ -66,6 +101,8 @@ function EmergentSimulation(;
         agents,
         market,
         uncertainty_env,
+        knowledge_base,
+        innovation_engine,
         0,
         Dict{String,Any}[],
         run_id,
@@ -117,45 +154,87 @@ function step!(sim::EmergentSimulation, round::Int)
     # Get available opportunities
     available_opportunities = get_available_opportunities(sim.market)
 
-    # Get current uncertainty state
+    # Get current uncertainty state and market conditions
     uncertainty_state = get_uncertainty_state(sim.uncertainty_env)
+    market_conditions = get_market_conditions(sim.market)
+    market_conditions["uncertainty_state"] = uncertainty_state
 
-    # Phase 1: Collect agent decisions
+    # Get alive agents for neighbor signals
+    alive_agents = filter(a -> a.alive, sim.agents)
+
+    # Phase 1: AI level selection and action decisions using make_decision!
+    # This properly integrates AI tier effects through perceive_uncertainty()
     agent_actions = Dict{String,Any}[]
     for agent in sim.agents
         if !agent.alive
             continue
         end
 
-        # Select action
-        action = select_action(
-            agent,
-            get_market_conditions(sim.market),
-            uncertainty_state;
-            available_opportunities=available_opportunities
-        )
-
-        # Select opportunity if investing
-        opportunity = nothing
-        if action == "invest" && !isempty(available_opportunities)
-            opportunity = rand(sim.rng, available_opportunities)
+        # Collect neighbor agents for social influence
+        neighbor_agents = EmergentAgent[]
+        if length(alive_agents) > 1
+            other_agents = filter(a -> a.id != agent.id && a.alive, alive_agents)
+            if !isempty(other_agents)
+                n_neighbors = min(5, length(other_agents))
+                neighbor_agents = rand(sim.rng, other_agents, n_neighbors)
+            end
         end
 
-        # Execute action
-        outcome = execute_action!(agent, action, sim.market, round; opportunity=opportunity)
+        # Use make_decision! which properly integrates AI level effects:
+        # - Chooses AI level dynamically (if not fixed)
+        # - Calls perceive_uncertainty() with AI level for adjusted perception
+        # - Evaluates opportunities considering AI tier capabilities
+        # - Selects and executes action with AI-informed decision making
+        # - Uses full InnovationEngine for innovation actions (matches Python)
+        outcome = make_decision!(
+            agent,
+            available_opportunities,
+            market_conditions,
+            sim.market,
+            round;
+            uncertainty_env=sim.uncertainty_env,
+            neighbor_agents=neighbor_agents,
+            innovation_engine=sim.innovation_engine
+        )
+
         push!(agent_actions, outcome)
     end
 
-    # Phase 2: Process matured investments
+    # Phase 2: Process matured investments and update tier beliefs
     all_matured = Dict{String,Any}[]
     for agent in sim.agents
         matured = process_matured_investments!(agent, sim.market, round)
+        for m in matured
+            # Update tier beliefs based on investment outcomes
+            ai_tier = get(m, "ai_level", get_ai_level(agent))
+            success = get(m, "success", false)
+            update_tier_belief!(agent.ai_learning, ai_tier, success)
+        end
         append!(all_matured, matured)
     end
 
-    # Phase 3: Apply operational costs
+    # Update tier beliefs from immediate action outcomes (innovate, explore)
+    # FIX: Use agent_id from action dict instead of array index (indexing bug fix)
+    for action in agent_actions
+        agent_id = get(action, "agent_id", 0)
+        if agent_id < 1 || agent_id > length(sim.agents)
+            continue
+        end
+        agent = sim.agents[agent_id]
+        if !agent.alive
+            continue
+        end
+        action_type = get(action, "action", "maintain")
+        if action_type in ["innovate", "explore"]
+            success = get(action, "success", false)
+            ai_tier = get(action, "ai_level_used", get_ai_level(agent))
+            update_tier_belief!(agent.ai_learning, ai_tier, success)
+        end
+    end
+
+    # Phase 3: Apply operational costs (pass market for competition-based costs)
     for agent in sim.agents
-        apply_operational_costs!(agent, round)
+        apply_operational_costs!(agent, round; market=sim.market)
     end
 
     # Phase 4: Check survival
@@ -218,10 +297,20 @@ function compile_round_stats(
     capitals = [get_capital(a) for a in alive_agents]
     mean_capital = isempty(capitals) ? 0.0 : mean(capitals)
     std_capital = isempty(capitals) || length(capitals) < 2 ? 0.0 : std(capitals)
+    median_capital = isempty(capitals) ? 0.0 : median(capitals)
 
-    # Action counts
+    # Action counts and capital tracking by action type
     action_counts = Dict{String,Int}()
     ai_usage = Dict{String,Int}("none" => 0, "basic" => 0, "advanced" => 0, "premium" => 0)
+
+    # Track capital deployed/returned by action type for ROIC calculation
+    capital_deployed = Dict{String,Float64}("invest" => 0.0, "innovate" => 0.0, "explore" => 0.0)
+    capital_returned = Dict{String,Float64}("invest" => 0.0, "innovate" => 0.0, "explore" => 0.0)
+
+    # Track opportunity IDs for HHI calculation
+    opportunity_ids = String[]
+    invest_confidences = Float64[]
+
     for action in agent_actions
         act_type = get(action, "action", "maintain")
         action_counts[act_type] = get(action_counts, act_type, 0) + 1
@@ -230,7 +319,89 @@ function compile_round_stats(
         if haskey(ai_usage, ai_level)
             ai_usage[ai_level] += 1
         end
+
+        # Track capital deployed by action type
+        if act_type == "invest"
+            amount = Float64(get(action, "amount", 0.0))
+            capital_deployed["invest"] += amount
+            opp_id = get(action, "opportunity_id", nothing)
+            if !isnothing(opp_id)
+                push!(opportunity_ids, string(opp_id))
+            end
+            # Track decision confidence for invest actions
+            perception = get(action, "perception", Dict{String,Any}())
+            conf = Float64(get(perception, "decision_confidence", 0.5))
+            push!(invest_confidences, conf)
+        elseif act_type == "innovate"
+            rd_spend = Float64(get(action, "rd_spend", 0.0))
+            capital_deployed["innovate"] += rd_spend
+            if get(action, "success", false)
+                ret = Float64(get(action, "innovation_return", 0.0))
+                capital_returned["innovate"] += ret
+            else
+                rec = Float64(get(action, "recovery", 0.0))
+                capital_returned["innovate"] += rec
+            end
+        elseif act_type == "explore"
+            cost = Float64(get(action, "cost", 0.0))
+            capital_deployed["explore"] += cost
+            # Exploration doesn't have direct capital return
+        end
     end
+
+    # Add matured investment returns to capital_returned["invest"]
+    for outcome in matured_outcomes
+        ret = Float64(get(outcome, "capital_returned", 0.0))
+        capital_returned["invest"] += ret
+    end
+
+    # Calculate ROIC by action type (matches Python)
+    mean_roic_invest = capital_deployed["invest"] > 0 ?
+        (capital_returned["invest"] - capital_deployed["invest"]) / capital_deployed["invest"] : 0.0
+    mean_roic_innovate = capital_deployed["innovate"] > 0 ?
+        (capital_returned["innovate"] - capital_deployed["innovate"]) / capital_deployed["innovate"] : 0.0
+    mean_roic_explore = 0.0  # Explore doesn't have direct return
+
+    # Net capital flow by action type
+    net_capital_flow_invest = capital_returned["invest"] - capital_deployed["invest"]
+    net_capital_flow_innovate = capital_returned["innovate"] - capital_deployed["innovate"]
+
+    # Calculate HHI (Herfindahl-Hirschman Index) for investment concentration
+    overall_hhi = 0.0
+    if !isempty(opportunity_ids)
+        opp_counts = Dict{String,Int}()
+        for opp_id in opportunity_ids
+            opp_counts[opp_id] = get(opp_counts, opp_id, 0) + 1
+        end
+        total_invests = length(opportunity_ids)
+        overall_hhi = sum((count / total_invests)^2 for count in values(opp_counts))
+    end
+
+    # Action shares
+    total_actions = sum(values(action_counts))
+    action_shares = Dict(
+        "invest" => total_actions > 0 ? get(action_counts, "invest", 0) / total_actions : 0.0,
+        "innovate" => total_actions > 0 ? get(action_counts, "innovate", 0) / total_actions : 0.0,
+        "explore" => total_actions > 0 ? get(action_counts, "explore", 0) / total_actions : 0.0,
+        "maintain" => total_actions > 0 ? get(action_counts, "maintain", 0) / total_actions : 0.0
+    )
+
+    # AI tier shares
+    total_ai = sum(values(ai_usage))
+    ai_shares = Dict(
+        "none" => total_ai > 0 ? ai_usage["none"] / total_ai : 0.0,
+        "basic" => total_ai > 0 ? ai_usage["basic"] / total_ai : 0.0,
+        "advanced" => total_ai > 0 ? ai_usage["advanced"] / total_ai : 0.0,
+        "premium" => total_ai > 0 ? ai_usage["premium"] / total_ai : 0.0
+    )
+
+    # Innovation stats
+    innovation_attempts = get(action_counts, "innovate", 0)
+    innovation_successes = count(a -> get(a, "action", "") == "innovate" && get(a, "success", false), agent_actions)
+    innovation_success_rate = innovation_attempts > 0 ? innovation_successes / innovation_attempts : 0.0
+
+    # Mean confidence for invest actions
+    mean_confidence_invest = isempty(invest_confidences) ? 0.0 : mean(invest_confidences)
 
     # Matured investment stats
     n_matured = length(matured_outcomes)
@@ -243,30 +414,77 @@ function compile_round_stats(
     agentic_novelty = get(get(uncertainty_state, "agentic_novelty", Dict()), "level", 0.0)
     competitive_rec = get(get(uncertainty_state, "competitive_recursion", Dict()), "level", 0.0)
 
+    # Mean AI trust
+    trust_values = [Float64(get(a.traits, "ai_trust", 0.5)) for a in alive_agents]
+    mean_trust = isempty(trust_values) ? 0.5 : mean(trust_values)
+    std_trust = length(trust_values) < 2 ? 0.0 : std(trust_values)
+
     return Dict{String,Any}(
         "round" => round,
         "n_alive" => n_alive,
         "n_total" => n_total,
         "survival_rate" => n_alive / n_total,
         "mean_capital" => mean_capital,
+        "median_capital" => median_capital,
         "std_capital" => std_capital,
         "total_capital" => sum(capitals),
+        # Action counts
         "invest_count" => get(action_counts, "invest", 0),
         "innovate_count" => get(action_counts, "innovate", 0),
         "explore_count" => get(action_counts, "explore", 0),
         "maintain_count" => get(action_counts, "maintain", 0),
+        # Action shares
+        "action_share_invest" => action_shares["invest"],
+        "action_share_innovate" => action_shares["innovate"],
+        "action_share_explore" => action_shares["explore"],
+        "action_share_maintain" => action_shares["maintain"],
+        # AI tier counts and shares
         "ai_none_count" => ai_usage["none"],
         "ai_basic_count" => ai_usage["basic"],
         "ai_advanced_count" => ai_usage["advanced"],
         "ai_premium_count" => ai_usage["premium"],
+        "ai_share_none" => ai_shares["none"],
+        "ai_share_basic" => ai_shares["basic"],
+        "ai_share_advanced" => ai_shares["advanced"],
+        "ai_share_premium" => ai_shares["premium"],
+        # Capital deployed/returned by action type (matches Python)
+        "total_capital_deployed" => sum(values(capital_deployed)),
+        "total_capital_returned" => sum(values(capital_returned)),
+        "total_capital_deployed_invest" => capital_deployed["invest"],
+        "total_capital_deployed_innovate" => capital_deployed["innovate"],
+        "total_capital_deployed_explore" => capital_deployed["explore"],
+        "total_capital_returned_invest" => capital_returned["invest"],
+        "total_capital_returned_innovate" => capital_returned["innovate"],
+        "total_capital_returned_explore" => capital_returned["explore"],
+        "net_capital_flow_invest" => net_capital_flow_invest,
+        "net_capital_flow_innovate" => net_capital_flow_innovate,
+        # ROIC by action type (matches Python)
+        "mean_roic_invest" => mean_roic_invest,
+        "mean_roic_innovate" => mean_roic_innovate,
+        "mean_roic_explore" => mean_roic_explore,
+        # HHI and sector metrics (matches Python)
+        "overall_hhi" => overall_hhi,
+        # Innovation metrics
+        "innovation_attempts" => innovation_attempts,
+        "innovation_successes" => innovation_successes,
+        "innovation_success_rate" => innovation_success_rate,
+        # Confidence metrics
+        "mean_confidence_invest" => mean_confidence_invest,
+        "mean_ai_trust" => mean_trust,
+        "ai_trust_std" => std_trust,
+        # Matured investment stats
         "n_matured" => n_matured,
         "n_success" => n_success,
         "n_failure" => n_failure,
         "success_rate" => n_matured > 0 ? n_success / n_matured : 0.0,
+        # Uncertainty levels
         "actor_ignorance" => actor_ignorance,
         "practical_indeterminism" => practical_indet,
         "agentic_novelty" => agentic_novelty,
-        "competitive_recursion" => competitive_rec
+        "competitive_recursion" => competitive_rec,
+        # Agent counts
+        "alive_agents" => n_alive,
+        "dead_agents" => n_total - n_alive
     )
 end
 
@@ -591,6 +809,7 @@ mutable struct DataBuffer
     decisions::Vector{Dict{String,Any}}
     market::Vector{Dict{String,Any}}
     uncertainty::Vector{Dict{String,Any}}
+    uncertainty_details::Vector{Dict{String,Any}}  # Per-action uncertainty perception data
     innovations::Vector{Dict{String,Any}}
     knowledge::Vector{Dict{String,Any}}
     matured::Vector{Dict{String,Any}}
@@ -607,6 +826,7 @@ function DataBuffer(; flush_interval::Int=10, write_intermediate::Bool=true)
         Dict{String,Any}[],
         Dict{String,Any}[],
         Dict{String,Any}[],
+        Dict{String,Any}[],  # uncertainty_details
         Dict{String,Any}[],
         Dict{String,Any}[],
         Dict{String,Any}[],
@@ -623,6 +843,7 @@ function clear_buffers!(buffer::DataBuffer)
     empty!(buffer.decisions)
     empty!(buffer.market)
     empty!(buffer.uncertainty)
+    empty!(buffer.uncertainty_details)
     empty!(buffer.innovations)
     empty!(buffer.knowledge)
     empty!(buffer.matured)
@@ -702,6 +923,8 @@ mutable struct EnhancedSimulation
     agent_state::EnhancedVectorizedState
     market::MarketEnvironment
     uncertainty_env::KnightianUncertaintyEnvironment
+    knowledge_base::KnowledgeBase
+    innovation_engine::InnovationEngine
     agent_network::Union{AgentNetwork,Nothing}
     current_round::Int
     history::Vector{Dict{String,Any}}
@@ -722,7 +945,8 @@ function EnhancedSimulation(;
     config::EmergentConfig = EmergentConfig(),
     output_dir::String = "results",
     run_id::String = "run_$(Dates.format(now(), "yyyymmdd_HHMMSS"))",
-    seed::Union{Int,Nothing} = nothing
+    seed::Union{Int,Nothing} = nothing,
+    initial_tier_distribution::Union{Dict{String,Float64},Nothing} = nothing
 )
     initialize!(config)
 
@@ -733,12 +957,42 @@ function EnhancedSimulation(;
     uncertainty_env = KnightianUncertaintyEnvironment(config; rng=rng)
     market = MarketEnvironment(config; rng=rng)
 
-    # Create agents
+    # Create knowledge base and innovation engine (matches Python)
+    knowledge_base = KnowledgeBase(config)
+    combination_tracker = CombinationTracker()
+    innovation_engine = InnovationEngine(config, knowledge_base, combination_tracker)
+
+    # Determine initial AI tier distribution
+    tier_order = ["none", "basic", "advanced", "premium"]
+    tier_probs = if isnothing(initial_tier_distribution)
+        [1.0, 0.0, 0.0, 0.0]  # Default: all start at none
+    else
+        [get(initial_tier_distribution, t, 0.0) for t in tier_order]
+    end
+    total_prob = sum(tier_probs)
+    if total_prob > 0
+        tier_probs = tier_probs ./ total_prob
+    else
+        tier_probs = [1.0, 0.0, 0.0, 0.0]
+    end
+
+    # Create agents with distributed initial tiers
     agents = EmergentAgent[]
     trait_names = collect(keys(config.TRAIT_DISTRIBUTIONS))
 
     for i in 1:config.N_AGENTS
-        agent = EmergentAgent(i, config; rng=rng)
+        # Sample initial tier based on distribution
+        r = rand(rng)
+        cumsum = 0.0
+        initial_tier = "none"
+        for (j, tier) in enumerate(tier_order)
+            cumsum += tier_probs[j]
+            if r <= cumsum
+                initial_tier = tier
+                break
+            end
+        end
+        agent = EmergentAgent(i, config; rng=rng, initial_ai_level=initial_tier)
         push!(agents, agent)
     end
 
@@ -782,6 +1036,8 @@ function EnhancedSimulation(;
         agent_state,
         market,
         uncertainty_env,
+        knowledge_base,
+        innovation_engine,
         agent_network,
         0,
         Dict{String,Any}[],
@@ -806,6 +1062,7 @@ function setup_data_directories(base_dir::String, run_id::String)::Dict{String,S
         "decisions" => joinpath(run_dir, "decisions"),
         "market" => joinpath(run_dir, "market"),
         "uncertainty" => joinpath(run_dir, "uncertainty"),
+        "uncertainty_details" => joinpath(run_dir, "uncertainty_details"),
         "innovations" => joinpath(run_dir, "innovations"),
         "knowledge" => joinpath(run_dir, "knowledge"),
         "matured" => joinpath(run_dir, "matured"),
@@ -821,6 +1078,7 @@ end
 
 """
 Enforce survival threshold for an agent.
+Matches Python logic with both absolute threshold AND capital ratio check.
 """
 function enforce_survival_threshold!(agent::EmergentAgent, config::EmergentConfig)
     if !agent.alive
@@ -828,11 +1086,19 @@ function enforce_survival_threshold!(agent::EmergentAgent, config::EmergentConfi
     end
 
     capital = get_capital(agent)
+    initial_equity = max(agent.resources.performance.initial_equity, 1.0)
+
+    # Check 1: Absolute survival threshold
     survival_threshold = config.SURVIVAL_THRESHOLD
 
-    if capital < survival_threshold
+    # Check 2: Capital ratio threshold (percentage of initial equity)
+    # This is the key check that Python uses - agents fail if they drop below
+    # SURVIVAL_CAPITAL_RATIO (default 0.38 = 38%) of their initial capital
+    capital_ratio = capital / initial_equity
+
+    # Agent fails if EITHER threshold is breached
+    if capital < survival_threshold || capital_ratio < config.SURVIVAL_CAPITAL_RATIO
         agent.alive = false
-        agent.failure_round = agent.failure_round > 0 ? agent.failure_round : -1  # Mark as failed
     end
 end
 
@@ -1005,15 +1271,14 @@ function enhanced_step!(sim::EnhancedSimulation, round::Int)
     agent_actions = Dict{String,Any}[]
 
     for agent in alive_agents
-        # Get neighbor signals if network is enabled
-        neighbor_signals = Dict{String,Any}()
+        # Get neighbor agents from network
+        neighbor_agents = EmergentAgent[]
         if !isnothing(sim.agent_network)
             neighbor_ids = get_neighbors(sim.agent_network, agent.id)
             if length(neighbor_ids) > 5
                 neighbor_ids = rand(sim.rng, neighbor_ids, 5)
             end
-            neighbors = [sim.agents[nid] for nid in neighbor_ids if sim.agents[nid].alive]
-            neighbor_signals = collect_neighbor_signals(agent, neighbors)
+            neighbor_agents = [sim.agents[nid] for nid in neighbor_ids if sim.agents[nid].alive]
         end
 
         # Get opportunities available to this agent
@@ -1022,14 +1287,16 @@ function enhanced_step!(sim::EnhancedSimulation, round::Int)
             agent_opportunities = available_opportunities
         end
 
-        # Make decision
+        # Make decision with full InnovationEngine integration (matches Python)
         decision = make_decision!(
             agent,
             agent_opportunities,
             market_conditions,
             sim.market,
             round;
-            neighbor_signals=neighbor_signals
+            uncertainty_env=sim.uncertainty_env,
+            neighbor_agents=neighbor_agents,
+            innovation_engine=sim.innovation_engine
         )
 
         decision["agent_id"] = agent.id
@@ -1239,6 +1506,45 @@ function record_round_to_buffer!(
         "action_share_maintain" => get(action_counts, "maintain", 0) / total_actions
     )
     push!(sim.data_buffer.summary, summary_entry)
+
+    # Buffer uncertainty_details (per-action perception data - matches Python)
+    for action in decisions
+        agent_id = get(action, "agent_id", 0)
+        if agent_id < 1 || agent_id > length(sim.agents)
+            continue
+        end
+        agent = sim.agents[agent_id]
+        perception = get(action, "perception", Dict{String,Any}())
+
+        detail_entry = Dict{String,Any}(
+            "run_id" => sim.run_id,
+            "round" => round,
+            "agent_id" => agent_id,
+            "action" => get(action, "action", "maintain"),
+            "ai_level_used" => get(action, "ai_level_used", "none"),
+            # Decision confidence from perception
+            "decision_confidence" => Float64(get(perception, "decision_confidence", 0.5)),
+            # Four dimensions of perceived uncertainty
+            "actor_ignorance_perceived" => Float64(get(perception, "actor_ignorance", 0.5)),
+            "practical_indeterminism_perceived" => Float64(get(perception, "practical_indeterminism", 0.5)),
+            "agentic_novelty_perceived" => Float64(get(perception, "agentic_novelty", 0.5)),
+            "competitive_recursion_perceived" => Float64(get(perception, "competitive_recursion", 0.5)),
+            # Additional perception signals
+            "knowledge_signal" => Float64(get(perception, "knowledge_signal", 0.5)),
+            "execution_risk" => Float64(get(perception, "execution_risk", 0.5)),
+            "innovation_signal" => Float64(get(perception, "innovation_signal", 0.5)),
+            "competition_signal" => Float64(get(perception, "competition_signal", 0.5)),
+            # Agent state
+            "ai_trust" => Float64(get(agent.traits, "ai_trust", 0.5)),
+            "analytical_ability" => Float64(get(agent.traits, "analytical_ability", 0.5)),
+            "exploration_tendency" => Float64(get(agent.traits, "exploration_tendency", 0.5)),
+            # Investment-specific data (if applicable)
+            "amount" => Float64(get(action, "amount", 0.0)),
+            "opportunity_id" => string(get(action, "opportunity_id", "")),
+            "success" => get(action, "success", nothing)
+        )
+        push!(sim.data_buffer.uncertainty_details, detail_entry)
+    end
 end
 
 """
@@ -1266,6 +1572,13 @@ function flush_buffers!(sim::EnhancedSimulation, round::Int)
         df = DataFrame(sim.data_buffer.uncertainty)
         save_dataframe_arrow(df, joinpath(sim.data_paths["uncertainty"], "batch_$(round).arrow"))
         empty!(sim.data_buffer.uncertainty)
+    end
+
+    # Write uncertainty_details (per-action perception data)
+    if !isempty(sim.data_buffer.uncertainty_details)
+        df = DataFrame(sim.data_buffer.uncertainty_details)
+        save_dataframe_arrow(df, joinpath(sim.data_paths["uncertainty_details"], "batch_$(round).arrow"))
+        empty!(sim.data_buffer.uncertainty_details)
     end
 
     # Write innovations

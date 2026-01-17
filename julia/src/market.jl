@@ -46,11 +46,15 @@ mutable struct MarketEnvironment
     regime_return_multiplier::Float64
     regime_failure_multiplier::Float64
     tier_invest_share::Dict{String,Float64}
+    tier_capital_flow::Dict{String,Float64}  # Per-tier capital flow tracking (Python match)
     sector_clearing_index::Dict{String,Float64}
     aggregate_clearing_ratio::Float64
     sector_demand_adjustments::Dict{String,Dict{String,Float64}}
     branch_params::Dict{String,Dict{String,Any}}
     crowding_metrics::Dict{String,Float64}
+    _last_crowding_metrics::Dict{String,Any}  # Cache for uncertainty module
+    _last_market_shift::Union{Dict{String,Any},Nothing}  # Market shift event tracking
+    sector_pressure::Dict{String,Float64}  # Sector performance pressure from realized returns
     rng::AbstractRNG
 end
 
@@ -84,11 +88,15 @@ function MarketEnvironment(
         1.0,
         1.0,
         Dict("none" => 0.0, "basic" => 0.0, "advanced" => 0.0, "premium" => 0.0),
+        Dict("none" => 0.0, "basic" => 0.0, "advanced" => 0.0, "premium" => 0.0),  # tier_capital_flow
         Dict{String,Float64}(),
         1.0,
         Dict{String,Dict{String,Float64}}(),
         Dict{String,Dict{String,Any}}(),
         Dict{String,Float64}(),
+        Dict{String,Any}(),  # _last_crowding_metrics
+        nothing,  # _last_market_shift
+        Dict{String,Float64}(),  # sector_pressure
         rng
     )
 
@@ -181,12 +189,14 @@ end
 
 """
 Create a realistic opportunity in a given sector.
+Matches Python behavior: applies demand adjustments at creation time.
 """
 function _create_realistic_opportunity(
     market::MarketEnvironment,
     opp_id::String,
     sector::String;
-    innovator_capability::Float64 = 0.5
+    innovator_capability::Float64 = 0.5,
+    apply_demand_adj::Bool = true
 )::Opportunity
     quality_roll = rand(market.rng)
     latent_return, latent_failure, capital_req, maturity = _sample_branch_characteristics(
@@ -196,6 +206,25 @@ function _create_realistic_opportunity(
     # Apply regime modifiers
     latent_return *= market.regime_return_multiplier
     latent_failure *= market.regime_failure_multiplier
+
+    # Apply demand adjustments at creation (Python match)
+    if apply_demand_adj
+        demand_adj = get_demand_adjustments(market, sector)
+        latent_return *= get(demand_adj, "return", 1.0)
+        latent_failure *= get(demand_adj, "failure", 1.0)
+    end
+
+    # Risk-return shift based on uncertainty (Python match)
+    # Higher uncertainty environments shift towards higher risk/return
+    uncertainty_signal = market.volatility + abs(market.trend) * 0.3
+    normalized_uncertainty = clamp((uncertainty_signal - 0.15) / 0.5, -0.5, 0.5)
+    if normalized_uncertainty > 0.1
+        latent_return *= 1.0 + normalized_uncertainty * 0.2
+        latent_failure *= 1.0 + normalized_uncertainty * 0.15
+    elseif normalized_uncertainty < -0.1
+        latent_return *= 1.0 + normalized_uncertainty * 0.1
+        latent_failure *= 1.0 + normalized_uncertainty * 0.08
+    end
 
     # Clamp values
     latent_return = clamp(latent_return, 0.5, 25.0)
@@ -271,6 +300,7 @@ end
 
 """
 Step the market environment forward one round.
+Matches Python behavior with market shift events and tier capital tracking.
 """
 function step!(
     market::MarketEnvironment,
@@ -281,17 +311,24 @@ function step!(
 )::Dict{String,Any}
     market.current_round = round
     empty!(market.sector_demand_adjustments)
+    market._last_market_shift = nothing
 
     # Record innovations
     append!(market.innovations, innovations)
 
-    # Calculate total investment
+    # Calculate total investment and track per-tier capital flows
     invest_actions = filter(a -> get(a, "action", "") == "invest", agent_actions)
-    total_investment = isempty(invest_actions) ? 0.0 : sum(
-        Float64(get(a, "amount", get(a, "capital_deployed", 0.0)))
-        for a in invest_actions
-    )
+    total_investment = 0.0
+    tier_capital = Dict("none" => 0.0, "basic" => 0.0, "advanced" => 0.0, "premium" => 0.0)
+
+    for action in invest_actions
+        capital = Float64(get(action, "amount", get(action, "capital_deployed", 0.0)))
+        total_investment += capital
+        tier = normalize_ai_label(get(action, "ai_level_used", "none"))
+        tier_capital[tier] = get(tier_capital, tier, 0.0) + capital
+    end
     push!(market.total_investment_by_round, total_investment)
+    market.tier_capital_flow = tier_capital
 
     # Update competition levels
     for action in agent_actions
@@ -305,45 +342,56 @@ function step!(
         end
     end
 
-    # Update regime with some probability
-    if rand(market.rng) < 0.1
-        _transition_regime!(market)
-    end
+    # Update sector pressure from matured outcomes (Python match)
+    _update_sector_pressure!(market, matured_outcomes)
 
     # Calculate crowding metrics
     total_actions = length(agent_actions)
+    ai_usage_count = 0
     if total_actions > 0
         action_counts = Dict{String,Int}()
         for action in agent_actions
             act_type = get(action, "action", "maintain")
             action_counts[act_type] = get(action_counts, act_type, 0) + 1
+            tier = normalize_ai_label(get(action, "ai_level_used", "none"))
+            if tier != "none"
+                ai_usage_count += 1
+            end
         end
 
         share_invest = get(action_counts, "invest", 0) / total_actions
         share_innovate = get(action_counts, "innovate", 0) / total_actions
         share_explore = get(action_counts, "explore", 0) / total_actions
         share_maintain = get(action_counts, "maintain", 0) / total_actions
+        ai_usage_share = ai_usage_count / total_actions
 
         crowding_index = share_invest^2 + share_innovate^2 + share_explore^2 + share_maintain^2
+        boom_streak = get(market.crowding_metrics, "boom_streak", 0.0)
 
-        market.crowding_metrics = Dict(
+        market.crowding_metrics = Dict{String,Float64}(
             "crowding_index" => crowding_index,
             "share_invest" => share_invest,
             "share_innovate" => share_innovate,
             "share_explore" => share_explore,
-            "share_maintain" => share_maintain
+            "share_maintain" => share_maintain,
+            "ai_usage_share" => ai_usage_share,
+            "boom_streak" => boom_streak
+        )
+
+        # Cache for uncertainty module
+        market._last_crowding_metrics = Dict{String,Any}(
+            "crowding_index" => crowding_index,
+            "ai_usage_share" => ai_usage_share,
+            "share_invest" => share_invest
         )
     end
 
     # Calculate tier investment shares
-    invest_actions = [a for a in agent_actions if get(a, "action", "") == "invest"]
     if !isempty(invest_actions)
         tier_counts = Dict("none" => 0, "basic" => 0, "advanced" => 0, "premium" => 0)
         for action in invest_actions
-            tier = lowercase(string(get(action, "ai_level_used", "none")))
-            if haskey(tier_counts, tier)
-                tier_counts[tier] += 1
-            end
+            tier = normalize_ai_label(get(action, "ai_level_used", "none"))
+            tier_counts[tier] = get(tier_counts, tier, 0) + 1
         end
         n_invest = length(invest_actions)
         for tier in keys(tier_counts)
@@ -351,7 +399,118 @@ function step!(
         end
     end
 
-    return get_market_conditions(market)
+    # Update market dynamics (signal-driven regime transitions)
+    ai_invest_share = 1.0 - get(market.tier_invest_share, "none", 1.0)
+    update_market_dynamics!(market, agent_actions, total_investment, ai_invest_share)
+
+    # Check for market shift events (Python match)
+    shift_event = _check_market_shift_event!(market)
+    if !isnothing(shift_event)
+        market._last_market_shift = shift_event
+    end
+
+    conditions = get_market_conditions(market)
+    if !isnothing(shift_event)
+        conditions["market_shift_event"] = shift_event
+    end
+
+    return conditions
+end
+
+"""
+Update sector pressure from realized returns (Python match).
+"""
+function _update_sector_pressure!(market::MarketEnvironment, matured_outcomes::Vector{Dict{String,Any}})
+    sector_returns = Dict{String,Vector{Float64}}()
+
+    for outcome in matured_outcomes
+        sector = get(outcome, "sector", nothing)
+        if isnothing(sector)
+            continue
+        end
+        roi = get(outcome, "roi", nothing)
+        if isnothing(roi) || !isfinite(roi)
+            continue
+        end
+        if !haskey(sector_returns, sector)
+            sector_returns[sector] = Float64[]
+        end
+        push!(sector_returns[sector], Float64(roi))
+    end
+
+    # Update sector pressure with decay
+    decay = 0.85
+    for sector in keys(market.sector_pressure)
+        market.sector_pressure[sector] *= decay
+    end
+
+    for (sector, returns) in sector_returns
+        if isempty(returns)
+            continue
+        end
+        avg_roi = mean(returns)
+        pressure = clamp(avg_roi * 0.3, -0.5, 0.5)
+        market.sector_pressure[sector] = get(market.sector_pressure, sector, 0.0) + pressure
+    end
+end
+
+"""
+Check for and generate market shift events (Python match).
+"""
+function _check_market_shift_event!(market::MarketEnvironment)::Union{Dict{String,Any},Nothing}
+    # Market shift probability based on conditions
+    crowding = get(market.crowding_metrics, "crowding_index", 0.25)
+    ai_share = get(market.crowding_metrics, "ai_usage_share", 0.0)
+    boom_streak = get(market.crowding_metrics, "boom_streak", 0.0)
+
+    # Base shift probability
+    base_prob = Float64(getfield_default(market.config, :MARKET_SHIFT_BASE_PROBABILITY, 0.02))
+
+    # Adjust by conditions
+    shift_prob = base_prob
+    shift_prob += 0.01 * max(0.0, crowding - 0.35)  # High crowding increases shift risk
+    shift_prob += 0.005 * ai_share  # AI usage adds to shift probability
+    shift_prob += 0.008 * max(0.0, boom_streak - 2)  # Long booms increase correction risk
+
+    # Random check
+    if rand(market.rng) > shift_prob
+        return nothing
+    end
+
+    # Determine shift type and severity
+    severity = rand(market.rng) * (0.5 + 0.5 * crowding)
+
+    shift_types = ["crowding_correction", "ai_herding_adjustment", "innovation_wave", "sector_rotation"]
+    weights = [0.3 + crowding * 0.3, 0.2 + ai_share * 0.3, 0.25, 0.25]
+    weights ./= sum(weights)
+
+    cumsum_weights = cumsum(weights)
+    r = rand(market.rng)
+    idx = searchsortedfirst(cumsum_weights, r)
+    shift_type = shift_types[min(idx, length(shift_types))]
+
+    # Apply shift effects
+    if shift_type == "crowding_correction"
+        # Reduce returns temporarily
+        market.regime_return_multiplier *= (1.0 - severity * 0.15)
+    elseif shift_type == "ai_herding_adjustment"
+        # Increase failure rates for high AI usage
+        market.regime_failure_multiplier *= (1.0 + severity * 0.1)
+    elseif shift_type == "innovation_wave"
+        # Boost returns
+        market.regime_return_multiplier *= (1.0 + severity * 0.1)
+    elseif shift_type == "sector_rotation"
+        # Increase volatility
+        market.volatility = clamp(market.volatility + severity * 0.1, 0.05, 1.0)
+    end
+
+    return Dict{String,Any}(
+        "type" => shift_type,
+        "severity" => severity,
+        "round" => market.current_round,
+        "crowding_level" => crowding,
+        "ai_share" => ai_share
+    )
 end
 
 """
@@ -423,7 +582,7 @@ function apply_branch_feedback!(market::MarketEnvironment, branch_name::String, 
     end
 
     profile = params["profile"]
-    rate = get(market.config.BRANCH_FEEDBACK_RATE, 0.02)
+    rate = market.config.BRANCH_FEEDBACK_RATE
     feedback = clamp(mean_roi, -1.0, 1.0) * rate
 
     # Adjust log_mu based on ROI
@@ -525,6 +684,7 @@ end
 
 """
 Get demand adjustments for a sector based on clearing metrics.
+Matches Python behavior with dispersion-scaled crowding.
 """
 function get_demand_adjustments(market::MarketEnvironment, sector::String)::Dict{String,Float64}
     if haskey(market.sector_demand_adjustments, sector)
@@ -541,25 +701,44 @@ function get_demand_adjustments(market::MarketEnvironment, sector::String)::Dict
     competition_intensity = market.config.COMPETITION_INTENSITY
 
     # Crowding calculations
-    crowd_threshold = get(market.config.RETURN_DEMAND_CROWDING_THRESHOLD, 0.35)
-    flow_share = 0.0
-    if haskey(market.crowding_metrics, "share_invest")
-        flow_share = get(market.crowding_metrics, "share_invest", 0.25)
-    end
+    crowd_threshold = Float64(getfield_default(market.config, :RETURN_DEMAND_CROWDING_THRESHOLD, 0.35))
+    flow_share = Float64(get(market.crowding_metrics, "share_invest", 0.25))
 
     crowd_excess = max(0.0, flow_share - crowd_threshold)
     crowd_relief = max(0.0, crowd_threshold - flow_share)
 
     # Scale penalty strength by competition intensity
-    penalty_strength = get(market.config.RETURN_DEMAND_CROWDING_PENALTY, 0.4) * competition_intensity
+    penalty_strength = Float64(getfield_default(market.config, :RETURN_DEMAND_CROWDING_PENALTY, 0.4)) * competition_intensity
 
-    # Convex crowding penalty and relief (scaled by competition intensity)
-    return_penalty = 1.0 - penalty_strength * crowd_excess^2
+    # Dispersion scaling (Python match) - calculate from sector clearing variance
+    sector_dispersions = Float64[]
+    for (s, idx) in market.sector_clearing_index
+        if isfinite(idx)
+            push!(sector_dispersions, abs(idx - 1.0))
+        end
+    end
+    dispersion = isempty(sector_dispersions) ? 0.1 : mean(sector_dispersions)
+    dispersion_scale = clamp(1.0 + dispersion * 0.5, 0.8, 1.5)
+
+    # Convex crowding penalty and relief (scaled by competition intensity and dispersion)
+    return_penalty = 1.0 - penalty_strength * dispersion_scale * crowd_excess^2
     return_penalty *= 1.0 + 0.35 * competition_intensity * crowd_relief^2
 
-    failure_pressure_base = get(market.config.FAILURE_DEMAND_PRESSURE, 0.25) * competition_intensity
-    failure_pressure = 1.0 + failure_pressure_base * crowd_excess^2
+    failure_pressure_base = Float64(getfield_default(market.config, :FAILURE_DEMAND_PRESSURE, 0.25)) * competition_intensity
+    failure_pressure = 1.0 + failure_pressure_base * dispersion_scale * crowd_excess^2
     failure_pressure *= 1.0 - 0.2 * competition_intensity * crowd_relief^2
+
+    # Sector pressure adjustment (Python match - feedback from realized returns)
+    sector_pressure = get(market.sector_pressure, sector, 0.0)
+    if sector_pressure > 0.1
+        # Good sector performance → better returns
+        return_penalty *= 1.0 + sector_pressure * 0.3
+        failure_pressure *= 1.0 - sector_pressure * 0.15
+    elseif sector_pressure < -0.1
+        # Bad sector performance → worse returns
+        return_penalty *= 1.0 + sector_pressure * 0.4
+        failure_pressure *= 1.0 - sector_pressure * 0.2
+    end
 
     # Supply/demand adjustments
     if clearing_ratio > 1.0
@@ -571,6 +750,10 @@ function get_demand_adjustments(market::MarketEnvironment, sector::String)::Dict
         return_penalty *= 1.0 - 0.7 * oversupply_gap
         failure_pressure *= 1.0 + 0.6 * oversupply_gap
     end
+
+    # Clamp final values
+    return_penalty = clamp(return_penalty, 0.3, 2.5)
+    failure_pressure = clamp(failure_pressure, 0.5, 2.0)
 
     adjustments = Dict{String,Float64}(
         "return" => return_penalty,
@@ -699,7 +882,7 @@ function update_macro_regime!(
 
     # Crowding effects (scaled by competition intensity)
     competition_intensity = market.config.COMPETITION_INTENSITY
-    crowd_threshold = get(market.config.RETURN_DEMAND_CROWDING_THRESHOLD, 0.35)
+    crowd_threshold = market.config.RETURN_DEMAND_CROWDING_THRESHOLD
     if crowding > crowd_threshold
         penalty = 0.05 * competition_intensity * (crowding - crowd_threshold)
         if haskey(idx_map, "recession")

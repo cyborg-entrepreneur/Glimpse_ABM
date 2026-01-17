@@ -129,6 +129,75 @@ function logistic(x::Float64; k::Float64 = 1.0, x0::Float64 = 0.0)::Float64
     return 1.0 / (1.0 + exp(-k * (x - x0)))
 end
 
+"""
+Numerically stable sigmoid function.
+Matches Python's stable_sigmoid for uncertainty calculations.
+"""
+function stable_sigmoid(x::Float64)::Float64
+    if !isfinite(x)
+        return x > 0 ? 1.0 : 0.0
+    end
+    if x >= 0.0
+        z = exp(-x)
+        return 1.0 / (1.0 + z)
+    else
+        z = exp(x)
+        return z / (1.0 + z)
+    end
+end
+
+"""
+Safe exponential that handles overflow.
+"""
+function safe_exp(x::Float64)::Float64
+    if !isfinite(x)
+        return x > 0 ? Inf : 0.0
+    end
+    # Clamp to prevent overflow
+    x_clamped = clamp(x, -700.0, 700.0)
+    return exp(x_clamped)
+end
+
+"""
+Safe mean that handles empty collections and NaN values.
+"""
+function safe_mean(values)::Float64
+    if isempty(values)
+        return 0.0
+    end
+    # Filter out non-finite values
+    finite_vals = filter(isfinite, values)
+    if isempty(finite_vals)
+        return 0.0
+    end
+    return mean(finite_vals)
+end
+
+"""
+Fast mean optimized for collections (matches Python's fast_mean).
+"""
+function fast_mean(values)::Float64
+    if isempty(values)
+        return 0.0
+    end
+    s = 0.0
+    n = 0
+    for v in values
+        if isfinite(v)
+            s += v
+            n += 1
+        end
+    end
+    return n > 0 ? s / n : 0.0
+end
+
+"""
+Helper to get field with default value.
+"""
+function getfield_default(obj, field::Symbol, default)
+    return hasfield(typeof(obj), field) ? getfield(obj, field) : default
+end
+
 # ============================================================================
 # OPPORTUNITY HELPERS
 # ============================================================================
