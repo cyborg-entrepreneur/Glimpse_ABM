@@ -561,24 +561,27 @@ function update_trust!(profile::AILearningProfile, domain::String, was_accurate:
 end
 
 """
-Update Bayesian beliefs about AI tier effectiveness based on action outcome.
+Update Bayesian beliefs about AI tier effectiveness based on realized return multiplier.
 
-Uses a Bayesian update: success increases alpha (success count), failure increases beta.
-The posterior mean is alpha / (alpha + beta).
+Uses continuous evidence derived from the return multiplier (matches Python implementation).
+Higher returns provide stronger positive evidence, lower returns provide negative evidence.
+The evidence is computed as: stable_sigmoid((multiplier - 1.0) * 2.5), clamped to [0.02, 0.98].
 """
-function update_tier_belief!(profile::AILearningProfile, tier::String, was_successful::Bool;
-                             magnitude::Float64 = 1.0)
+function update_tier_belief!(profile::AILearningProfile, tier::String, realized_multiplier::Float64)
     if !haskey(profile.tier_beliefs, tier)
         # Initialize with default prior if tier not found
-        profile.tier_beliefs[tier] = Dict("alpha" => 2.0, "beta" => 2.0)
+        prior = get(DEFAULT_TIER_PRIORS, tier, Dict("alpha" => 2.0, "beta" => 2.0))
+        profile.tier_beliefs[tier] = copy(prior)
     end
 
     belief = profile.tier_beliefs[tier]
-    if was_successful
-        belief["alpha"] += magnitude
-    else
-        belief["beta"] += magnitude
-    end
+
+    # Compute continuous evidence from realized multiplier (matches Python lines 1551-1554)
+    multiplier = clamp(realized_multiplier, 0.0, 3.0)
+    evidence = clamp(stable_sigmoid((multiplier - 1.0) * 2.5), 0.02, 0.98)
+
+    belief["alpha"] += evidence
+    belief["beta"] += (1.0 - evidence)
 
     # Cap beliefs to prevent extreme certainty (keep some exploration)
     max_strength = 50.0
@@ -588,6 +591,19 @@ function update_tier_belief!(profile::AILearningProfile, tier::String, was_succe
         belief["alpha"] *= scale
         belief["beta"] *= scale
     end
+end
+
+"""
+Update Bayesian beliefs about AI tier effectiveness based on binary success/failure.
+
+This is a convenience method that converts success to a multiplier estimate:
+- Success: multiplier = 1.5 (positive evidence)
+- Failure: multiplier = 0.5 (negative evidence)
+"""
+function update_tier_belief!(profile::AILearningProfile, tier::String, was_successful::Bool)
+    # Convert binary outcome to estimated multiplier for continuous update
+    estimated_multiplier = was_successful ? 1.5 : 0.5
+    update_tier_belief!(profile, tier, estimated_multiplier)
 end
 
 """

@@ -520,13 +520,14 @@ function _execute_invest!(
 
     # Use pre-computed sized_amount if available (from make_portfolio_decision)
     # Otherwise fall back to simple fraction-based sizing
+    # NOTE: Python does NOT cap at capital_requirements - amount is determined by position sizing
     invest_amount = if !isnothing(sized_amount) && sized_amount > 0
         # Use the confidence-scaled position size from portfolio decision
-        min(sized_amount, capital, opportunity.capital_requirements)
+        min(sized_amount, capital)
     else
         # Legacy fallback: simple fraction-based sizing
         max_invest = capital * agent.config.MAX_INVESTMENT_FRACTION
-        min(max_invest, opportunity.capital_requirements)
+        min(max_invest, capital)
     end
 
     if invest_amount <= 0 || invest_amount > capital
@@ -2820,13 +2821,18 @@ function make_portfolio_decision(
     min_fraction = Float64(getfield_default(agent.config, :MIN_FUNDING_FRACTION, 0.25))
     min_required = required_capital > 0 ? required_capital * min_fraction : 0.0
 
-    if amount < min_required && min_required > 0
-        # Can't meet minimum funding requirement
-        return _make_maintain_decision(agent, round_num, ai_level)
+    # Check minimum funding vs available capital (Python lines 2711-2712)
+    if required_capital > 0 && amount < min_required && available_capital >= min_required
+        amount = min(max_investment, min_required)
     end
 
-    # Ensure we don't exceed capital requirements
-    amount = min(amount, required_capital > 0 ? required_capital : amount)
+    # Final caps (matches Python lines 2714-2715)
+    amount = min(amount, available_capital)
+    amount = max(0.0, amount)
+
+    if amount <= 0
+        return _make_maintain_decision(agent, round_num, ai_level)
+    end
 
     # Return investment decision
     return Dict{String,Any}(
