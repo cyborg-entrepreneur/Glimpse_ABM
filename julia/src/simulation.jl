@@ -162,23 +162,68 @@ end
 
 """
 Execute a single simulation round.
+Matches Python _step order: operating costs -> matured investments -> decisions -> survival checks
 """
 function step!(sim::EmergentSimulation, round::Int)
     sim.current_round = round
-
-    # Get available opportunities
-    available_opportunities = get_available_opportunities(sim.market)
 
     # Get current uncertainty state and market conditions
     uncertainty_state = get_uncertainty_state(sim.uncertainty_env)
     market_conditions = get_market_conditions(sim.market)
     market_conditions["uncertainty_state"] = uncertainty_state
 
-    # Get alive agents for neighbor signals
+    # Get alive agents
     alive_agents = filter(a -> a.alive, sim.agents)
 
-    # Phase 1: AI level selection and action decisions using make_decision!
-    # This properly integrates AI tier effects through perceive_uncertainty()
+    # Phase 1: Apply operational costs FIRST with severity multiplier (matching Python order)
+    # Python applies this before matured investments and decisions
+    avg_comp = Float64(get(market_conditions, "avg_competition", 0.0))
+    volatility = Float64(get(market_conditions, "volatility", sim.config.MARKET_VOLATILITY))
+    base_vol = Float64(sim.config.MARKET_VOLATILITY)
+    severity = 1.0 + avg_comp * 0.35 + max(0.0, volatility - base_vol) * 0.45
+    severity = clamp(severity, 0.7, 1.9)
+
+    for agent in sim.agents
+        if !agent.alive
+            continue
+        end
+        # Calculate base cost
+        estimated_cost = estimate_operational_costs(agent, sim.market)
+        # Apply severity multiplier (matching Python _apply_operating_costs)
+        operating_cost = max(0.0, estimated_cost * severity)
+        agent.operating_cost_estimate = operating_cost
+        if operating_cost > 0.0
+            set_capital!(agent, get_capital(agent) - operating_cost)
+            # Check survival after operating costs (matches Python line 189)
+            check_survival!(agent, round)
+        end
+    end
+
+    # Phase 2: Process matured investments (matching Python BLOCK 1)
+    all_matured = Dict{String,Any}[]
+    for agent in sim.agents
+        if !agent.alive
+            continue
+        end
+        matured = process_matured_investments!(agent, sim.market, round)
+        for m in matured
+            # Update tier beliefs based on investment outcomes
+            ai_tier = get(m, "ai_level", get_ai_level(agent))
+            success = get(m, "success", false)
+            update_tier_belief!(agent.ai_learning, ai_tier, success)
+        end
+        append!(all_matured, matured)
+        # Check survival after matured investments (matches Python line 1003)
+        check_survival!(agent, round)
+    end
+
+    # Get available opportunities (after applying costs, matching Python timing)
+    available_opportunities = get_available_opportunities(sim.market)
+
+    # Refresh alive agents after survival checks
+    alive_agents = filter(a -> a.alive, sim.agents)
+
+    # Phase 3: AI level selection and action decisions (matching Python BLOCK 2)
     agent_actions = Dict{String,Any}[]
     for agent in sim.agents
         if !agent.alive
@@ -195,13 +240,7 @@ function step!(sim::EmergentSimulation, round::Int)
             end
         end
 
-        # Use make_decision! which properly integrates AI level effects:
-        # - Chooses AI level dynamically (if not fixed)
-        # - Calls perceive_uncertainty() with AI level for adjusted perception
-        # - Evaluates opportunities considering AI tier capabilities
-        # - Selects and executes action with AI-informed decision making
-        # - Uses full InnovationEngine for innovation actions (matches Python)
-        # - Uses InformationSystem for domain-specific AI accuracy and per-use costs
+        # Use make_decision! which properly integrates AI level effects
         outcome = make_decision!(
             agent,
             available_opportunities,
@@ -217,21 +256,7 @@ function step!(sim::EmergentSimulation, round::Int)
         push!(agent_actions, outcome)
     end
 
-    # Phase 2: Process matured investments and update tier beliefs
-    all_matured = Dict{String,Any}[]
-    for agent in sim.agents
-        matured = process_matured_investments!(agent, sim.market, round)
-        for m in matured
-            # Update tier beliefs based on investment outcomes
-            ai_tier = get(m, "ai_level", get_ai_level(agent))
-            success = get(m, "success", false)
-            update_tier_belief!(agent.ai_learning, ai_tier, success)
-        end
-        append!(all_matured, matured)
-    end
-
     # Update tier beliefs from immediate action outcomes (innovate, explore)
-    # FIX: Use agent_id from action dict instead of array index (indexing bug fix)
     for action in agent_actions
         agent_id = get(action, "agent_id", 0)
         if agent_id < 1 || agent_id > length(sim.agents)
@@ -249,12 +274,7 @@ function step!(sim::EmergentSimulation, round::Int)
         end
     end
 
-    # Phase 3: Apply operational costs (pass market for competition-based costs)
-    for agent in sim.agents
-        apply_operational_costs!(agent, round; market=sim.market)
-    end
-
-    # Phase 4: Check survival
+    # Phase 4: Final survival check for all agents (matches Python lines 1077-1078)
     for agent in sim.agents
         check_survival!(agent, round)
     end
