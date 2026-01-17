@@ -468,7 +468,8 @@ function execute_action!(
     opportunity::Union{Opportunity,Nothing} = nothing,
     investment_amount::Union{Float64,Nothing} = nothing,  # Pre-computed position size
     innovation_engine::Union{InnovationEngine,Nothing} = nothing,
-    market_conditions::Union{Dict{String,Any},Nothing} = nothing
+    market_conditions::Union{Dict{String,Any},Nothing} = nothing,
+    ai_info::Union{Dict{String,Any},Nothing} = nothing
 )::Dict{String,Any}
     outcome = Dict{String,Any}(
         "action" => action,
@@ -480,7 +481,8 @@ function execute_action!(
 
     if action == "invest" && !isnothing(opportunity)
         outcome = _execute_invest!(agent, opportunity, market, round, outcome;
-                                   sized_amount=investment_amount)
+                                   sized_amount=investment_amount,
+                                   ai_info=ai_info)
     elseif action == "innovate"
         outcome = _execute_innovate!(agent, market, round, outcome;
                                      innovation_engine=innovation_engine,
@@ -511,7 +513,8 @@ function _execute_invest!(
     market::MarketEnvironment,
     round::Int,
     outcome::Dict{String,Any};
-    sized_amount::Union{Float64,Nothing} = nothing
+    sized_amount::Union{Float64,Nothing} = nothing,
+    ai_info::Union{Dict{String,Any},Nothing} = nothing
 )::Dict{String,Any}
     capital = get_capital(agent)
 
@@ -546,6 +549,10 @@ function _execute_invest!(
         "maturity_round" => round + opportunity.time_to_maturity,
         "ai_level" => get_ai_level(agent)
     )
+    # Attach AI info for maturation outcomes (matches Python accuracy/hallucination adjustments)
+    if !isnothing(ai_info)
+        investment["ai_info"] = ai_info
+    end
     push!(agent.active_investments, investment)
 
     # Track performance
@@ -2555,6 +2562,15 @@ function evaluate_portfolio_opportunities(
         # Store Information object for outcome-based learning (matches Python _source_analysis)
         if !isnothing(info)
             eval_record["_source_info"] = info
+            # Compact AI info dict for investment outcomes (used at maturity)
+            eval_record["ai_info"] = Dict{String,Any}(
+                "actual_accuracy" => actual_accuracy,
+                "contains_hallucination" => contains_hallucination,
+                "domain" => analysis_domain,
+                "estimated_return" => ai_estimated_return,
+                "estimated_uncertainty" => ai_estimated_uncertainty,
+                "confidence" => ai_confidence
+            )
         end
 
         push!(evaluations, eval_record)
@@ -2675,6 +2691,7 @@ function make_portfolio_decision(
 
     best_eval = evaluated_opportunities[1]  # Already sorted
     best_score = Float64(get(best_eval, "final_score", 0.0))
+    ai_info_payload = get(best_eval, "ai_info", nothing)
 
     # Check against threshold
     if best_score < decision_threshold
@@ -2730,7 +2747,8 @@ function make_portfolio_decision(
         "hurdle_rate" => hurdle_rate,
         "decision_threshold" => decision_threshold,
         "stress" => stress,
-        "capital_utilization" => capital_utilization
+        "capital_utilization" => capital_utilization,
+        "ai_info" => ai_info_payload
     )
 end
 
@@ -2974,19 +2992,21 @@ function make_decision!(
         # Extract per-use cost from evaluations (stored in first eval by evaluate_portfolio_opportunities)
         ai_per_use_cost_tracked[] = !isempty(evals) ? Float64(get(evals[1], "ai_per_use_cost", 0.0)) : 0.0
 
-        if !isempty(evals)
-            # Use make_portfolio_decision for hurdle rate and confidence-scaled sizing
-            portfolio_decision = make_portfolio_decision(
-                agent, evals, market, round_num, ai_level, perception, market_conditions
-            )
+            if !isempty(evals)
+                # Use make_portfolio_decision for hurdle rate and confidence-scaled sizing
+                portfolio_decision = make_portfolio_decision(
+                    agent, evals, market, round_num, ai_level, perception, market_conditions
+                )
 
             if get(portfolio_decision, "action", "maintain") == "invest"
                 # Execute with the computed investment amount
                 opp = portfolio_decision["opportunity"]
                 sized_amount = Float64(get(portfolio_decision, "amount", 0.0))
+                ai_info_payload = get(portfolio_decision, "ai_info", nothing)
                 execute_action!(agent, "invest", market, round_num;
                                opportunity=opp,
                                investment_amount=sized_amount,
+                               ai_info=ai_info_payload,
                                innovation_engine=innovation_engine,
                                market_conditions=market_conditions)
             else

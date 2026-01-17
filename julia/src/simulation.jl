@@ -11,6 +11,7 @@ using Random
 using Statistics
 using DataFrames
 using Dates
+using SHA
 
 # ============================================================================
 # EMERGENT SIMULATION
@@ -53,8 +54,8 @@ function EmergentSimulation(;
     actual_seed = if !isnothing(seed)
         seed
     elseif !isnothing(config.RANDOM_SEED) && config.RANDOM_SEED > 0
-        # Mix in run_id hash like Python does for reproducibility across runs
-        run_hash = mod(hash(run_id), 1_000_000)
+        # Deterministic hash (avoid Julia's randomized hash)
+        run_hash = reinterpret(UInt64, sha256(run_id)[1:8])[1] % 1_000_000
         mod(config.RANDOM_SEED + run_hash, 2^32 - 1)
     else
         # Fallback to random seed
@@ -987,7 +988,15 @@ function EnhancedSimulation(;
 )
     initialize!(config)
 
-    actual_seed = isnothing(seed) ? config.RANDOM_SEED : seed
+    # Seed derivation (match Python pattern with run_id hash)
+    actual_seed = if !isnothing(seed)
+        seed
+    elseif !isnothing(config.RANDOM_SEED) && config.RANDOM_SEED > 0
+        run_hash = reinterpret(UInt64, sha256(run_id)[1:8])[1] % 1_000_000
+        mod(config.RANDOM_SEED + run_hash, 2^32 - 1)
+    else
+        rand(1:2^31-1)
+    end
     rng = MersenneTwister(actual_seed)
 
     # Create components
