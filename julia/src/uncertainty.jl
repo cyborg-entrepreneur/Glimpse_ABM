@@ -727,23 +727,13 @@ function measure_uncertainty_state!(
     hallucination_rate = length(env.ai_uncertainty_signals["hallucination_events"]) / max(1, env._ai_signal_history)
     knowledge_gap_term = 1.0 - clamp(knowledge_norm, 0.0, 1.0)
 
-    # Calculate weighted average AI info_quality based on tier usage
-    # Access AILevelConfig struct fields directly
-    basic_config = get(env.config.AI_LEVELS, "basic", nothing)
-    advanced_config = get(env.config.AI_LEVELS, "advanced", nothing)
-    premium_config = get(env.config.AI_LEVELS, "premium", nothing)
-    ai_tier_qualities = Dict{String,Float64}(
-        "none" => 0.0,
-        "basic" => isnothing(basic_config) ? 0.35 : Float64(basic_config.info_quality),
-        "advanced" => isnothing(advanced_config) ? 0.65 : Float64(advanced_config.info_quality),
-        "premium" => isnothing(premium_config) ? 0.90 : Float64(premium_config.info_quality)
-    )
-    avg_ai_info_quality = (
-        ai_shares[2] * ai_tier_qualities["basic"] +
-        ai_shares[3] * ai_tier_qualities["advanced"] +
-        ai_shares[4] * ai_tier_qualities["premium"]
-    )
-    ai_ignorance_reduction = avg_ai_info_quality * 0.25
+    # REMOVED: Direct ai_ignorance_reduction based on info_quality
+    # Previously: ai_ignorance_reduction = avg_ai_info_quality * 0.25
+    # This was "putting finger on the scale" by assuming premium AI directly reduces
+    # ignorance. Instead, we let ignorance effects emerge from whether AI actually
+    # helps agents fill knowledge gaps (via accuracy, hallucination rates, etc.)
+    # The AI's effect on ignorance should emerge from the mechanics, not be assumed.
+    ai_ignorance_reduction = 0.0
 
     # Raw actor ignorance with AI reduction
     raw_actor = (
@@ -959,14 +949,14 @@ function measure_uncertainty_state!(
         "disruption_avg" => disruption_avg
     )
 
-    # AI novelty effect (matching Python exactly)
+    # AI quality component
     ai_quality = clamp(ai_usage_pressure, 0.0, 1.0)
-    novelty_constraint_intensity = Float64(getfield_default(env.config, :AI_NOVELTY_CONSTRAINT_INTENSITY, 1.0))
-    ai_novelty_effect = (
-        0.3 * ai_shares[2] +  # Basic enables some novelty
-        0.4 * ai_shares[3] -  # Advanced enables more
-        0.1 * ai_shares[4] * novelty_constraint_intensity  # Premium constraint scaled
-    )
+    # REMOVED: Hardcoded tier-specific novelty effects
+    # Previously premium AI was penalized here, but this contradicted the actual mechanics
+    # where premium AI has LOWER reuse probability (tier_reuse_shift = -0.08).
+    # Now we let the novelty effects emerge from actual agent behavior (measured via
+    # tier_reuse_pressure) rather than assuming them.
+    ai_novelty_effect = 0.0
 
     ai_novelty_uplift = Float64(getfield_default(env.config, :AI_NOVELTY_UPLIFT, 0.08))
     agentic_level = clamp(
@@ -1782,10 +1772,13 @@ function get_ai_perception_adjustments(
 )::Dict{String,Float64}
     ai_config = get(env.config.AI_LEVELS, ai_level, env.config.AI_LEVELS["none"])
 
+    # FIXED: All adjustments now emerge from config parameters (info_quality, info_breadth)
+    # Previously recursion_awareness was hardcoded by tier (premium=0.2, advanced=0.12, others=0.0)
+    # Now it emerges from info_quality: better info → better understanding of competitive dynamics
     return Dict{String,Float64}(
         "ignorance_reduction" => ai_config.info_quality * 0.3,
         "indeterminism_reduction" => ai_config.info_quality * 0.2,
         "novelty_boost" => ai_config.info_breadth * 0.15,
-        "recursion_awareness" => ai_level == "premium" ? 0.2 : (ai_level == "advanced" ? 0.12 : 0.0)
+        "recursion_awareness" => ai_config.info_quality * 0.22
     )
 end

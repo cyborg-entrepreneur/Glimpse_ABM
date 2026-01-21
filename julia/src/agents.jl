@@ -650,6 +650,10 @@ function _execute_innovate!(
             agent.innovation_count += 1
             agent.success_count += 1
 
+            # Record the innovation return
+            record_return!(agent.resources.performance, "innovate", innovation_return;
+                          ai_level=ai_level, round_num=round)
+
             outcome["success"] = true
             outcome["rd_spend"] = rd_spend
             outcome["innovation_return"] = innovation_return
@@ -676,6 +680,10 @@ function _execute_innovate!(
             recovery = rd_spend * clamp(salvage, 0.25, 0.65)
 
             set_capital!(agent, get_capital(agent) + recovery)
+
+            # Record the innovation recovery as return
+            record_return!(agent.resources.performance, "innovate", recovery;
+                          ai_level=ai_level, round_num=round)
 
             outcome["success"] = false
             outcome["rd_spend"] = rd_spend
@@ -712,12 +720,9 @@ function _execute_innovate!(
         get(agent.resources.capabilities, "innovation", 0.1) * 0.4
     )
 
-    ai_bonus_map = Dict(
-        "none" => 0.0,
-        "basic" => 0.12,
-        "advanced" => 0.25,
-        "premium" => 0.35
-    )
+    # REMOVED: Hardcoded ai_bonus_map that gave direct tier-based bonuses
+    # Previously: ai_bonus_map = Dict("none" => 0.0, "basic" => 0.12, "advanced" => 0.25, "premium" => 0.35)
+    # Now AI bonus emerges purely from agent's learned trust and reliability estimates
 
     # Compute clarity signal from perception
     clarity_signal = 0.0
@@ -727,7 +732,7 @@ function _execute_innovate!(
         clarity_signal = ((stable_sigmoid(1.0 - ignorance) + stable_sigmoid(1.0 - indeterminism)) / 2.0) - 0.5
     end
 
-    # AI learning profile adjustments
+    # AI learning profile adjustments - dynamic bonus based on LEARNED trust and reliability (emergent)
     avg_trust = 0.5
     dynamic_bonus = 0.0
     if ai_level != "none"
@@ -749,8 +754,8 @@ function _execute_innovate!(
         dynamic_bonus = (avg_trust - 0.5) * 0.2 + reliability * 0.25 + clarity_signal * 0.15
     end
 
-    structural_bonus = get(ai_bonus_map, ai_level, 0.0) * max(0.0, clarity_signal + 0.5)
-    ai_bonus = clamp(structural_bonus + dynamic_bonus, -0.2, 0.3)
+    # AI bonus now purely from emergent learning, no hardcoded tier bonuses
+    ai_bonus = clamp(dynamic_bonus, -0.2, 0.3)
 
     human_bonus = (
         get(agent.traits, "exploration_tendency", 0.5) * 0.15 +
@@ -760,11 +765,15 @@ function _execute_innovate!(
 
     success_prob = clamp(base_prob * 0.35 + competence_score * 0.45 + ai_bonus + human_bonus + knowledge_factor, 0.05, 0.95)
 
-    # Reuse probability by tier
-    tier_reuse_shift = Dict(
-        "none" => 0.05, "basic" => 0.07, "advanced" => -0.03, "premium" => -0.08
-    )
-    reuse_prob = clamp(0.3 + get(tier_reuse_shift, ai_level, 0.0), 0.02, 0.75)
+    # FIXED: Remove hardcoded tier_reuse_shift - let effect emerge through info_breadth
+    # Previously had direct tier shifts (none=+0.05, premium=-0.08)
+    # Now reuse probability emerges from info_breadth: broader info access → more novel
+    # combinations available → lower tendency to reuse existing combinations
+    ai_cfg = get(agent.config.AI_LEVELS, ai_level, get(agent.config.AI_LEVELS, "none", Dict()))
+    info_breadth_reuse = Float64(get(ai_cfg, "info_breadth", 0.0))
+    # Higher info_breadth reduces reuse (access to broader knowledge enables novel combinations)
+    reuse_shift = -info_breadth_reuse * 0.12
+    reuse_prob = clamp(0.3 + reuse_shift, 0.02, 0.75)
     is_reused_combination = rand(agent.rng) < reuse_prob
 
     # Innovation type determination
@@ -821,6 +830,10 @@ function _execute_innovate!(
         agent.innovation_count += 1
         agent.success_count += 1
 
+        # Record the innovation return
+        record_return!(agent.resources.performance, "innovate", innovation_return;
+                      ai_level=ai_level, round_num=round)
+
         outcome["success"] = true
         outcome["rd_spend"] = rd_spend
         outcome["innovation_return"] = innovation_return
@@ -839,6 +852,10 @@ function _execute_innovate!(
         recovery = rd_spend * clamp(salvage, 0.25, 0.65)
 
         set_capital!(agent, get_capital(agent) + recovery)
+
+        # Record the innovation recovery as return
+        record_return!(agent.resources.performance, "innovate", recovery;
+                      ai_level=ai_level, round_num=round)
 
         outcome["success"] = false
         outcome["rd_spend"] = rd_spend
@@ -865,20 +882,19 @@ function _execute_explore!(
 )::Dict{String,Any}
     ai_level = get_ai_level(agent)
 
-    # AI tier multiplier for exploration effectiveness (matches Python logic)
-    tier_multiplier = Dict(
-        "none" => 0.85,
-        "basic" => 1.0,
-        "advanced" => 1.15,
-        "premium" => 1.35
-    )
-    ai_mult = get(tier_multiplier, ai_level, 1.0)
+    # FIXED: Remove hardcoded tier_multiplier - let effect emerge through info_breadth
+    # Previously had direct tier bonuses (none=0.85, premium=1.35)
+    # Now multiplier emerges from AI_LEVELS config info_breadth parameter
+    ai_cfg = get(agent.config.AI_LEVELS, ai_level, get(agent.config.AI_LEVELS, "none", Dict()))
+    info_breadth = Float64(get(ai_cfg, "info_breadth", 0.0))
+    # Map info_breadth (0.0-0.85) to multiplier range (~0.85-1.36)
+    breadth_multiplier = 0.85 + info_breadth * 0.6
 
     # Exploration cost scales with traits and AI tier
     exploration_tendency = get(agent.traits, "exploration_tendency", 0.3)
     uncertainty_tolerance = get(agent.traits, "uncertainty_tolerance", 0.5)
 
-    trait_factor = (0.02 + exploration_tendency * 0.07) * ai_mult
+    trait_factor = (0.02 + exploration_tendency * 0.07) * breadth_multiplier
     uncertainty_cushion = max(0.02, 0.12 - uncertainty_tolerance * 0.08)
 
     # Get uncertainty values from perception (matches Python uncertainty hooks)
@@ -903,17 +919,15 @@ function _execute_explore!(
 
     set_capital!(agent, get_capital(agent) - explore_cost)
 
-    # Discovery probability with AI tier bonus
+    # Discovery probability - effect emerges through info_quality
     base_discovery_prob = agent.config.DISCOVERY_PROBABILITY
 
-    # AI-enhanced discovery probability
-    discovery_bonus = Dict(
-        "none" => 0.0,
-        "basic" => 0.05,
-        "advanced" => 0.12,
-        "premium" => 0.18
-    )
-    ai_discovery_bonus = get(discovery_bonus, ai_level, 0.0)
+    # FIXED: Remove hardcoded discovery_bonus - let effect emerge through info_quality
+    # Previously had direct tier bonuses (none=0.0, premium=0.18)
+    # Now discovery bonus emerges from AI_LEVELS config info_quality parameter
+    info_quality = Float64(get(ai_cfg, "info_quality", 0.0))
+    # Better info_quality → better ability to identify discovery opportunities
+    ai_discovery_bonus = info_quality * 0.2
 
     discovery_prob = clamp(base_discovery_prob + ai_discovery_bonus, 0.1, 0.9)
     discovered = rand(agent.rng) < discovery_prob
@@ -943,7 +957,7 @@ function _execute_explore!(
             end
 
             # Apply amplification based on exploration tendency and AI tier
-            trait_amp = (0.7 + 0.6 * exploration_tendency) * ai_mult
+            trait_amp = (0.7 + 0.6 * exploration_tendency) * breadth_multiplier
             agent.resources.knowledge[niche_id] = min(
                 1.0, agent.resources.knowledge[niche_id] * (0.9 + 0.2 * trait_amp)
             )
@@ -956,7 +970,7 @@ function _execute_explore!(
 
             # Serendipity rewards for niche discovery (higher multiplier)
             serendipity_chance = clamp(
-                (0.18 + 0.4 * (exploration_tendency - 0.3)) * ai_mult,
+                (0.18 + 0.4 * (exploration_tendency - 0.3)) * breadth_multiplier,
                 0.05,
                 0.7
             )
@@ -974,7 +988,7 @@ function _execute_explore!(
 
             # Knowledge gain also scales with AI tier
             base_gain = rand(agent.rng, Uniform(0.05, 0.15))
-            knowledge_gain = base_gain * ai_mult
+            knowledge_gain = base_gain * breadth_multiplier
             agent.resources.knowledge[sector] = min(1.0, current_knowledge + knowledge_gain)
             agent.resources.knowledge_last_used[sector] = round
 
@@ -984,7 +998,7 @@ function _execute_explore!(
 
             # Serendipity rewards for sector exploration (lower multiplier)
             serendipity_chance = clamp(
-                (0.12 + 0.25 * (exploration_tendency - 0.4)) * ai_mult,
+                (0.12 + 0.25 * (exploration_tendency - 0.4)) * breadth_multiplier,
                 0.04,
                 0.55
             )
@@ -1001,7 +1015,7 @@ function _execute_explore!(
     end
 
     outcome["explore_cost"] = explore_cost
-    outcome["ai_multiplier_applied"] = ai_mult
+    outcome["breadth_multiplieriplier_applied"] = breadth_multiplier
     record_deployment!(agent.resources.performance, "explore", explore_cost;
                        ai_level=ai_level, round_num=round)
 
@@ -1645,12 +1659,12 @@ function choose_ai_level(
     metrics = compute_ai_performance_metrics(agent)
     order = ["none", "basic", "advanced", "premium"]
 
-    # Prior beliefs for each tier
+    # Neutral priors - agents learn from experience (matches Python/DEFAULT_TIER_PRIORS)
     prior_map = Dict(
-        "none" => (2.6, 2.4),
-        "basic" => (2.4, 2.6),
-        "advanced" => (1.7, 3.1),
-        "premium" => (1.2, 3.4)
+        "none" => (2.0, 2.0),      # Prior mean = 0.50 (neutral)
+        "basic" => (2.0, 2.0),     # Prior mean = 0.50 (neutral)
+        "advanced" => (2.0, 2.0),  # Prior mean = 0.50 (neutral)
+        "premium" => (2.0, 2.0)    # Prior mean = 0.50 (neutral)
     )
 
     # Compute posterior means from AI learning profile
@@ -1763,16 +1777,11 @@ function choose_ai_level(
         switch_penalty = max(0.0, compute_ai_switch_penalty(agent, current_level, tier) - learning_relief)
         reserve_penalty = get(reserve_haircut, tier, 0.0) * max(0.0, 1.0 - capital_health)
 
-        # Paradox signal effect (matches Python implementation)
+        # REMOVED: Tier-specific paradox response
+        # Previously: premium/advanced penalized by paradox, none rewarded
+        # Now agents should learn from their own experience with paradox conditions
+        # The paradox effect should emerge from actual outcomes, not hardcoded tier rules
         paradox_term = 0.0
-        paradox_signal = agent.paradox_signal
-        if paradox_signal != 0.0
-            if tier in ("premium", "advanced")
-                paradox_term -= 0.15 * paradox_signal
-            elseif tier == "none"
-                paradox_term += 0.1 * paradox_signal
-            end
-        end
 
         # Gumbel noise for stochastic selection
         noise = -log(-log(rand(agent.rng))) * 0.02  # Gumbel(0,1) * 0.02
@@ -2013,15 +2022,9 @@ function calculate_investment_utility(
     value *= clamp(0.85 + 0.3 * risk_tolerance, 0.5, 1.4)
     value -= avoidance * 0.12
 
-    # AI tier specific tier_reuse/tier_combo adjustments (matches Python lines 1760-1765)
-    if ai_level in ["premium", "advanced"]
-        value -= 0.35 * tier_reuse
-        if tier_combo > 0.45
-            value -= 0.2 * (tier_combo - 0.45)
-        end
-    else
-        value += 0.1 * max(0.0, 0.4 - tier_combo)
-    end
+    # REMOVED: Tier-specific utility biases
+    # Previously: premium/advanced penalized for tier_reuse, basic/none rewarded for low combo
+    # Now tier effects emerge from information quality affecting evaluations, not direct utility mods
 
     # Paradox signal effect (matches Python implementation)
     paradox_signal = agent.paradox_signal
@@ -2202,11 +2205,9 @@ function calculate_exploration_utility(
     capital_crowding = Float64(get(competition_signal, "capital_crowding", 0.25))
     recursion_penalty += 0.08 * max(0.0, ai_usage_share - 0.45)
     recursion_penalty += 0.1 * max(0.0, capital_crowding - 0.4)
-    if ai_level in ["premium", "advanced"]
-        recursion_penalty += 0.12 * max(0.0, ai_usage_share - 0.5)
-    else
-        recursion_penalty -= 0.05 * max(0.0, ai_usage_share - 0.5)
-    end
+    # REMOVED: Tier-specific recursion penalty adjustments
+    # Previously: premium/advanced penalized more when AI usage high, basic/none rewarded
+    # Now tier effects emerge from information quality, not hardcoded utility modifications
 
     # Momentum bonus from explore ROIC
     explore_roic = compute_roic(agent.resources.performance, "explore")
@@ -2384,6 +2385,18 @@ function evaluate_opportunity_basic(
     sector_knowledge = get(agent.resources.knowledge, sector, 0.1)
     score *= 1.0 + sector_knowledge * 0.5
 
+    # Sector crowding penalty - discount opportunities in crowded sectors
+    # This encourages diversification across sectors
+    clearing_index = get(market_conditions, "sector_clearing_index", Dict{String,Float64}())
+    sector_crowding = Float64(get(clearing_index, sector, 0.0))
+    if sector_crowding > 1.0
+        # Apply penalty: score * (1 / (1 + 0.3 * excess_crowding))
+        # At crowding=2 (1 excess): multiplier = 0.77
+        # At crowding=4 (3 excess): multiplier = 0.53
+        crowding_penalty = 1.0 / (1.0 + 0.3 * (sector_crowding - 1.0))
+        score *= crowding_penalty
+    end
+
     return max(0.1, score)
 end
 
@@ -2540,20 +2553,12 @@ function evaluate_portfolio_opportunities(
     # Fallback hallucination risk when no info_system
     fallback_hallucination_risk = max(0.0, 0.5 - info_quality * 0.5)
 
-    # Filter opportunities based on AI level (matches Python)
+    # REMOVED: Tier-based pre-filtering that gave premium/advanced first look at best opportunities
+    # Previously: premium saw top 65% sorted by quality, none saw random 60%
+    # Now ALL agents evaluate ALL opportunities - better AI tiers will make better selections
+    # through more accurate information quality, not through pre-filtered access
+    # This lets selection quality emerge from the information system, not hardcoded filtering
     opp_pool = copy(opportunities)
-    if length(opp_pool) > 1
-        if ai_level in ["premium", "advanced"]
-            sort!(opp_pool, by=o -> o.latent_return_potential, rev=true)
-            cutoff = max(1, Int(floor(length(opp_pool) * (ai_level == "premium" ? 0.65 : 0.8))))
-            opp_pool = opp_pool[1:cutoff]
-        else
-            shuffle!(agent.rng, opp_pool)
-            discard = ai_level == "basic" ? 0.25 : 0.4
-            keep = max(1, Int(floor(length(opp_pool) * (1.0 - discard))))
-            opp_pool = opp_pool[1:keep]
-        end
-    end
 
     for opp in opp_pool
         # ========================================================================

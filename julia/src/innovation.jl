@@ -186,7 +186,9 @@ function attempt_innovation!(
         get(agent.resources.capabilities, "innovation", 0.1) * 0.4
     )
 
-    ai_bonus_map = Dict("none" => 0.0, "basic" => 0.12, "advanced" => 0.25, "premium" => 0.35)
+    # REMOVED: Hardcoded ai_bonus_map that gave direct tier-based bonuses
+    # Previously: ai_bonus_map = Dict("none" => 0.0, "basic" => 0.12, "advanced" => 0.25, "premium" => 0.35)
+    # Now AI bonus emerges purely from agent's learned trust and reliability estimates
     avg_trust = 0.5
     dynamic_bonus = 0.0
     clarity_signal = 0.0
@@ -197,7 +199,7 @@ function attempt_innovation!(
         clarity_signal = ((stable_sigmoid(1.0 - ignorance) + stable_sigmoid(1.0 - indeterminism)) / 2.0) - 0.5
     end
 
-    # AI learning profile adjustments
+    # AI learning profile adjustments - dynamic bonus based on LEARNED trust and reliability (emergent)
     if ai_level != "none" && !isnothing(agent.ai_learning)
         learning_profile = agent.ai_learning
         trust_values = [
@@ -217,8 +219,8 @@ function attempt_innovation!(
         dynamic_bonus = (avg_trust - 0.5) * 0.2 + reliability * 0.25 + clarity_signal * 0.15
     end
 
-    structural_bonus = get(ai_bonus_map, ai_level, 0.0) * max(0.0, clarity_signal + 0.5)
-    ai_bonus = clamp(structural_bonus + dynamic_bonus, -0.2, 0.3)
+    # AI bonus now purely from emergent learning, no hardcoded tier bonuses
+    ai_bonus = clamp(dynamic_bonus, -0.2, 0.3)
 
     human_ingenuity_bonus = (
         get(agent.traits, "exploration_tendency", 0.5) * 0.15 +
@@ -269,14 +271,16 @@ function attempt_innovation!(
     selected_knowledge = nothing
     reuse_signature = nothing
 
-    tier_reuse_shift = Dict(
-        "none" => 0.05,
-        "basic" => 0.07,
-        "advanced" => -0.03,
-        "premium" => -0.08
-    )
+    # FIXED: Remove hardcoded tier_reuse_shift - let effect emerge through info_breadth
+    # Previously had direct tier shifts (none=+0.05, premium=-0.08)
+    # Now reuse probability emerges from info_breadth: broader info access → more novel
+    # combinations available → lower tendency to reuse existing combinations
+    ai_cfg = get(engine.config.AI_LEVELS, ai_level, get(engine.config.AI_LEVELS, "none", Dict()))
+    info_breadth = Float64(get(ai_cfg, "info_breadth", 0.0))
+    # Higher info_breadth reduces reuse (access to broader knowledge enables novel combinations)
+    reuse_shift = -info_breadth * 0.12
 
-    effective_reuse_prob = clamp(reuse_prob + get(tier_reuse_shift, ai_level, 0.0), 0.02, 0.75)
+    effective_reuse_prob = clamp(reuse_prob + reuse_shift, 0.02, 0.75)
 
     if reuse_prob > 0 && rand(rng) < effective_reuse_prob
         reuse_signature = sample_signature(engine.combination_tracker; lookback=lookback, rng=rng)

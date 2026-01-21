@@ -722,11 +722,14 @@ class EmergentAgent:
         self.ai_roi_count: int = 0
         self.ai_accuracy_cumulative: float = 0.0
         self.ai_accuracy_observations: int = 0
+        # FIXED: Neutral priors for all tiers - agents learn from experience
+        # Previously had built-in skepticism: none=0.52, basic=0.48, advanced=0.35, premium=0.26
+        # Now all tiers start at 0.5 and agents update beliefs based on actual outcomes
         _prior_map = {
-            'none': (2.6, 2.4),
-            'basic': (2.4, 2.6),
-            'advanced': (1.7, 3.1),
-            'premium': (1.2, 3.4),
+            'none': (2.0, 2.0),      # Prior mean = 0.50 (neutral)
+            'basic': (2.0, 2.0),     # Prior mean = 0.50 (neutral)
+            'advanced': (2.0, 2.0),  # Prior mean = 0.50 (neutral)
+            'premium': (2.0, 2.0),   # Prior mean = 0.50 (neutral)
         }
         self.ai_tier_beliefs: Dict[str, Dict[str, float]] = {
             lvl: {"alpha": _prior_map.get(lvl, (2.5, 2.5))[0], "beta": _prior_map.get(lvl, (2.5, 2.5))[1]}
@@ -1376,11 +1379,12 @@ class EmergentAgent:
         avoidance = 1.0 - uncertainty_tolerance
         metrics = self._compute_ai_performance_metrics()
         order = ['none', 'basic', 'advanced', 'premium']
+        # Neutral priors - agents learn from experience
         prior_map = {
-            'none': (2.6, 2.4),
-            'basic': (2.4, 2.6),
-            'advanced': (1.7, 3.1),
-            'premium': (1.2, 3.4),
+            'none': (2.0, 2.0),
+            'basic': (2.0, 2.0),
+            'advanced': (2.0, 2.0),
+            'premium': (2.0, 2.0),
         }
         posterior_means: Dict[str, float] = {}
         for tier in order:
@@ -1460,12 +1464,11 @@ class EmergentAgent:
                 cost_term *= 0.85
             switch_penalty = max(0.0, self._compute_ai_switch_penalty(current_level, tier) - learning_relief)
             reserve_penalty = reserve_haircut.get(tier, 0.0) * max(0.0, 1.0 - capital_health)
+            # REMOVED: Tier-specific paradox response
+            # Previously: premium/advanced penalized by paradox, none rewarded
+            # Now agents should learn from their own experience with paradox conditions
+            # The paradox effect should emerge from actual outcomes, not hardcoded tier rules
             paradox_term = 0.0
-            if paradox_signal:
-                if tier in {'premium', 'advanced'}:
-                    paradox_term -= 0.15 * paradox_signal
-                elif tier == 'none':
-                    paradox_term += 0.1 * paradox_signal
             noise = np.random.gumbel() * 0.02
             total_score = (
                 trust_term
@@ -1540,13 +1543,14 @@ class EmergentAgent:
         tier = normalize_ai_label(tier)
         if realized_multiplier is None:
             return
+        # Neutral priors - agents learn from experience
         prior_map = {
-            'none': (2.6, 2.4),
-            'basic': (2.4, 2.6),
-            'advanced': (1.7, 3.1),
-            'premium': (1.2, 3.4),
+            'none': (2.0, 2.0),
+            'basic': (2.0, 2.0),
+            'advanced': (2.0, 2.0),
+            'premium': (2.0, 2.0),
         }
-        alpha_default, beta_default = prior_map.get(tier, (2.5, 2.5))
+        alpha_default, beta_default = prior_map.get(tier, (2.0, 2.0))
         belief = self.ai_tier_beliefs.setdefault(tier, {"alpha": alpha_default, "beta": beta_default})
         multiplier = float(np.clip(realized_multiplier, 0.0, 3.0))
         evidence = float(np.clip(stable_sigmoid((multiplier - 1.0) * 2.5), 0.02, 0.98))
@@ -1757,12 +1761,9 @@ class EmergentAgent:
         avoidance = 1.0 - risk_tolerance
         value *= float(np.clip(0.85 + 0.3 * risk_tolerance, 0.5, 1.4))
         value -= avoidance * 0.12
-        if ai_level in {'premium', 'advanced'}:
-            value -= 0.35 * tier_reuse
-            if tier_combo > 0.45:
-                value -= 0.2 * (tier_combo - 0.45)
-        else:
-            value += 0.1 * max(0.0, 0.4 - tier_combo)
+        # REMOVED: Tier-specific utility biases
+        # Previously: premium/advanced penalized for tier_reuse, basic/none rewarded for low combo
+        # Now tier effects emerge from information quality affecting evaluations, not direct utility mods
         paradox_signal = getattr(self, 'paradox_signal', 0.0)
         if paradox_signal:
             trust = float(self.traits.get('ai_trust', 0.5))
@@ -1901,10 +1902,9 @@ class EmergentAgent:
         capital_crowding = float(competition_signal.get('capital_crowding', 0.25))
         recursion_penalty += 0.08 * max(0.0, ai_usage_share - 0.45)
         recursion_penalty += 0.1 * max(0.0, capital_crowding - 0.4)
-        if ai_level in {'premium', 'advanced'}:
-            recursion_penalty += 0.12 * max(0.0, ai_usage_share - 0.5)
-        else:
-            recursion_penalty -= 0.05 * max(0.0, ai_usage_share - 0.5)
+        # REMOVED: Tier-specific recursion penalty adjustments
+        # Previously: premium/advanced penalized more when AI usage high, basic/none rewarded
+        # Now tier effects emerge from information quality, not hardcoded utility modifications
 
         momentum_bonus = 0.0
         explore_roic = float(self.resources.performance.compute_roic('explore'))
@@ -2153,13 +2153,14 @@ class EmergentAgent:
 
     def _make_exploration_decision(self, round_num: int, ai_level: str) -> Dict:
         ai_level = normalize_ai_label(ai_level or getattr(self, "current_ai_level", getattr(self, "agent_type", "none")))
-        tier_multiplier = {
-            "none": 0.85,
-            "basic": 1.0,
-            "advanced": 1.15,
-            "premium": 1.35,
-        }.get(ai_level, 1.0)
-        trait_factor = (0.02 + self.traits['exploration_tendency'] * 0.07) * tier_multiplier
+        # FIXED: Remove hardcoded breadth_multiplier - let effect emerge through info_breadth
+        # Previously had direct tier bonuses (none=0.85, premium=1.35)
+        # Now multiplier emerges from AI_LEVELS config info_breadth parameter
+        ai_cfg = self.config.AI_LEVELS.get(ai_level, self.config.AI_LEVELS.get('none', {}))
+        info_breadth = float(ai_cfg.get('info_breadth', 0.0))
+        # Map info_breadth (0.0-0.85) to multiplier range (~0.85-1.36)
+        breadth_multiplier = 0.85 + info_breadth * 0.6
+        trait_factor = (0.02 + self.traits['exploration_tendency'] * 0.07) * breadth_multiplier
         uncertainty_cushion = max(0.02, 0.12 - self.traits['uncertainty_tolerance'] * 0.08)
         # Uncertainty hooks: high ignorance/recursion push explore up
         last_view = getattr(self, '_last_perception', {}) or {}
@@ -2211,7 +2212,7 @@ class EmergentAgent:
             self.resources.knowledge_last_used[niche_id] = round_num
             self.resources.knowledge_last_used[base_sector] = round_num
         
-            trait_amp = (0.7 + 0.6 * self.traits.get('exploration_tendency', 0.5)) * tier_multiplier
+            trait_amp = (0.7 + 0.6 * self.traits.get('exploration_tendency', 0.5)) * breadth_multiplier
             self.resources.knowledge[niche_id] = min(
                 1.0, self.resources.knowledge[niche_id] * (0.9 + 0.2 * trait_amp)
             )
@@ -2223,7 +2224,7 @@ class EmergentAgent:
 
             # Higher chance of serendipitous discovery in new niches
             serendipity_chance = np.clip(
-                (0.18 + 0.4 * (self.traits.get('exploration_tendency', 0.5) - 0.3)) * tier_multiplier,
+                (0.18 + 0.4 * (self.traits.get('exploration_tendency', 0.5) - 0.3)) * breadth_multiplier,
                 0.05,
                 0.7,
             )
@@ -2236,7 +2237,7 @@ class EmergentAgent:
             # Low saturation: Traditional sector exploration
             exploration_type = 'sector_knowledge'
             domain = np.random.choice(list(self.config.SECTOR_PROFILES.keys()))
-            trait_amp = (0.65 + 0.5 * self.traits.get('exploration_tendency', 0.5)) * tier_multiplier
+            trait_amp = (0.65 + 0.5 * self.traits.get('exploration_tendency', 0.5)) * breadth_multiplier
             knowledge_gain = np.random.uniform(0.08, 0.28) * trait_amp
             self.resources.knowledge[domain] = min(1.0, self.resources.knowledge.get(domain, 0) + knowledge_gain)
             self.resources.knowledge_last_used[domain] = round_num
@@ -2248,7 +2249,7 @@ class EmergentAgent:
 
             # Standard serendipity chance
             serendipity_chance = np.clip(
-                (0.12 + 0.25 * (self.traits.get('exploration_tendency', 0.5) - 0.4)) * tier_multiplier,
+                (0.12 + 0.25 * (self.traits.get('exploration_tendency', 0.5) - 0.4)) * breadth_multiplier,
                 0.04,
                 0.55,
             )
@@ -2429,6 +2430,18 @@ class EmergentAgent:
         if hasattr(opportunity, 'sector'):
             score *= (1 + (self.resources.knowledge.get(opportunity.sector, 0.1) * 0.5))
 
+        # Sector crowding penalty - discount opportunities in crowded sectors
+        # This encourages diversification across sectors
+        clearing_index = market_conditions.get('sector_clearing_index', {}) or {}
+        sector = getattr(opportunity, 'sector', 'unknown')
+        sector_crowding = float(clearing_index.get(sector, 0.0) or 0.0)
+        if sector_crowding > 1.0:
+            # Apply penalty: score * (1 / (1 + 0.3 * excess_crowding))
+            # At crowding=2 (1 excess): multiplier = 0.77
+            # At crowding=4 (3 excess): multiplier = 0.53
+            crowding_penalty = 1.0 / (1.0 + 0.3 * (sector_crowding - 1.0))
+            score *= crowding_penalty
+
         # --- 2. Logic for Qualitative Insights ---
         # Define insight modifiers
         insight_modifiers = {
@@ -2495,18 +2508,11 @@ class EmergentAgent:
         def _opp_quality(opportunity: Opportunity) -> float:
             return float(getattr(opportunity, "latent_return_potential", 1.0) or 1.0)
 
-        if len(opportunity_pool) > 1:
-            if ai_level in {"premium", "advanced"}:
-                reverse = True
-                opportunity_pool.sort(key=_opp_quality, reverse=reverse)
-                top_frac = 0.65 if ai_level == "premium" else 0.8
-                cutoff = max(1, int(len(opportunity_pool) * top_frac))
-                opportunity_pool = opportunity_pool[:cutoff]
-            elif ai_level in {"basic", "none"}:
-                np.random.shuffle(opportunity_pool)
-                discard_frac = 0.25 if ai_level == "basic" else 0.4
-                keep = max(1, int(len(opportunity_pool) * (1.0 - discard_frac)))
-                opportunity_pool = opportunity_pool[:keep]
+        # REMOVED: Tier-based pre-filtering that gave premium/advanced first look at best opportunities
+        # Previously: premium saw top 65% sorted by quality, none saw random 60%
+        # Now ALL agents evaluate ALL opportunities - better AI tiers will make better selections
+        # through more accurate information quality, not through pre-filtered access
+        # This lets selection quality emerge from the information system, not hardcoded filtering
 
         for opp in opportunity_pool:
             domain = info_system._determine_domain(opp) if hasattr(info_system, '_determine_domain') else 'market_analysis'

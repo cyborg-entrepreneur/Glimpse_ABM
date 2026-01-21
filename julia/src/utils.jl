@@ -30,7 +30,8 @@ function sample_trait(dist_spec::TraitDistribution; rng::Random.AbstractRNG = Ra
     elseif dist_type == "lognormal"
         mu = get(params, "mean", 0.0)
         sigma = get(params, "sigma", 1.0)
-        return rand(rng, LogNormal(mu, sigma))
+        # Clip to [0, 1] to match Python behavior
+        return clamp(rand(rng, LogNormal(mu, sigma)), 0.0, 1.0)
     elseif dist_type == "normal_clipped"
         mean_val = get(params, "mean", 0.5)
         std_val = get(params, "std", 0.2)
@@ -39,7 +40,8 @@ function sample_trait(dist_spec::TraitDistribution; rng::Random.AbstractRNG = Ra
     elseif dist_type == "normal"
         mean_val = get(params, "mean", 0.0)
         std_val = get(params, "std", 1.0)
-        return mean_val + std_val * randn(rng)
+        # Clip to [0, 1] to match Python behavior
+        return clamp(mean_val + std_val * randn(rng), 0.0, 1.0)
     else
         # Default to uniform [0, 1]
         return rand(rng)

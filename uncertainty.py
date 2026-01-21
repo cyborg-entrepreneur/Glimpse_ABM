@@ -622,22 +622,13 @@ class KnightianUncertaintyEnvironment:
         hallucination_rate = len(self.ai_uncertainty_signals["hallucination_events"]) / max(1, self._ai_signal_history)
         knowledge_gap_term = 1.0 - np.clip(knowledge_norm, 0.0, 1.0)
 
-        # Calculate weighted average AI info_quality based on tier usage
-        # This captures how AI reduces actor ignorance through better information
-        ai_tier_qualities = {
-            "none": 0.0,
-            "basic": self.config.AI_LEVELS.get("basic", {}).get("info_quality", 0.35),
-            "advanced": self.config.AI_LEVELS.get("advanced", {}).get("info_quality", 0.65),
-            "premium": self.config.AI_LEVELS.get("premium", {}).get("info_quality", 0.90),
-        }
-        # ai_shares is [none, basic, advanced, premium]
-        avg_ai_info_quality = float(
-            ai_shares[1] * ai_tier_qualities["basic"]
-            + ai_shares[2] * ai_tier_qualities["advanced"]
-            + ai_shares[3] * ai_tier_qualities["premium"]
-        )
-        # AI reduces ignorance through information quality (matching agent-level logic)
-        ai_ignorance_reduction = avg_ai_info_quality * 0.25
+        # REMOVED: Direct ai_ignorance_reduction based on info_quality
+        # Previously: ai_ignorance_reduction = avg_ai_info_quality * 0.25
+        # This was "putting finger on the scale" by assuming premium AI directly reduces
+        # ignorance. Instead, we let ignorance effects emerge from whether AI actually
+        # helps agents fill knowledge gaps (via accuracy, hallucination rates, etc.)
+        # The AI's effect on ignorance should emerge from the mechanics, not be assumed.
+        ai_ignorance_reduction = 0.0
 
         raw_actor = (
             0.7 * knowledge_gap_term
@@ -816,15 +807,12 @@ class KnightianUncertaintyEnvironment:
         combo_pressure = float(np.clip(combo_rate + reuse_pressure * 0.4, 0.0, 1.0))
         # AI quality uplift on novelty
         ai_quality = float(np.clip(ai_usage_pressure, 0.0, 1.0))
-        # AI can both enable and constrain novelty (matching Julia implementation)
-        # Premium AI may anchor on historical patterns, reducing novelty
-        # Scale the constraint effect by AI_NOVELTY_CONSTRAINT_INTENSITY (for robustness testing)
-        novelty_constraint_intensity = float(getattr(self.config, "AI_NOVELTY_CONSTRAINT_INTENSITY", 1.0))
-        ai_novelty_effect = (
-            0.3 * float(ai_shares[1] if ai_shares.size > 1 else 0.0) +  # Basic enables some novelty
-            0.4 * float(ai_shares[2] if ai_shares.size > 2 else 0.0) -  # Advanced enables more
-            0.1 * float(ai_shares[3] if ai_shares.size > 3 else 0.0) * novelty_constraint_intensity  # Premium constraint scaled
-        )
+        # REMOVED: Hardcoded tier-specific novelty effects
+        # Previously premium AI was penalized here, but this contradicted the actual mechanics
+        # where premium AI has LOWER reuse probability (tier_reuse_shift = -0.08).
+        # Now we let the novelty effects emerge from actual agent behavior (measured via
+        # tier_reuse_pressure) rather than assuming them.
+        ai_novelty_effect = 0.0
         agentic_level = float(np.clip(
             0.25 + 0.38 * novelty_level + 0.25 * combo_pressure + 0.25 * scarcity_signal + 0.1 * disruption_avg + float(getattr(self.config, "AI_NOVELTY_UPLIFT", 0.08)) * ai_quality + ai_novelty_effect,
             0.0,

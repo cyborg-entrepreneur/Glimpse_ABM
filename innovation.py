@@ -111,7 +111,9 @@ class InnovationEngine:
         competence_score = (
             agent.traits["innovativeness"] * 0.6 + agent.resources.capabilities.get("innovation", 0.1) * 0.4
         )
-        ai_bonus_map = {"none": 0.0, "basic": 0.12, "advanced": 0.25, "premium": 0.35}
+        # REMOVED: Hardcoded ai_bonus_map that gave direct tier-based bonuses
+        # Previously: ai_bonus_map = {"none": 0.0, "basic": 0.12, "advanced": 0.25, "premium": 0.35}
+        # Now AI bonus emerges purely from agent's learned trust and reliability estimates
         avg_trust = 0.5
         dynamic_bonus = 0.0
         clarity_signal = 0.0
@@ -133,10 +135,11 @@ class InnovationEngine:
                 if scores:
                     reliability_signals.append(float(fast_mean(scores[-5:])) - 0.5)
             reliability = float(fast_mean(reliability_signals)) if reliability_signals else 0.0
+            # Dynamic bonus based on LEARNED trust and reliability (emergent)
             dynamic_bonus = (avg_trust - 0.5) * 0.2 + reliability * 0.25 + clarity_signal * 0.15
 
-        structural_bonus = ai_bonus_map.get(ai_level, 0.0) * max(0.0, clarity_signal + 0.5)
-        ai_bonus = np.clip(structural_bonus + dynamic_bonus, -0.2, 0.3)
+        # AI bonus now purely from emergent learning, no hardcoded tier bonuses
+        ai_bonus = np.clip(dynamic_bonus, -0.2, 0.3)
         human_ingenuity_bonus = (
             agent.traits["exploration_tendency"] * 0.15
             + agent.traits["market_awareness"] * 0.15
@@ -173,13 +176,15 @@ class InnovationEngine:
         lookback = int(getattr(self.config, "INNOVATION_REUSE_LOOKBACK", 100))
         selected_knowledge = None
         reuse_signature = None
-        tier_reuse_shift = {
-            "none": 0.05,
-            "basic": 0.07,
-            "advanced": -0.03,
-            "premium": -0.08,
-        }
-        effective_reuse_prob = np.clip(reuse_prob + tier_reuse_shift.get(ai_level, 0.0), 0.02, 0.75)
+        # FIXED: Remove hardcoded tier_reuse_shift - let effect emerge through info_breadth
+        # Previously had direct tier shifts (none=+0.05, premium=-0.08)
+        # Now reuse probability emerges from info_breadth: broader info access → more novel
+        # combinations available → lower tendency to reuse existing combinations
+        ai_cfg = self.config.AI_LEVELS.get(ai_level, self.config.AI_LEVELS.get('none', {}))
+        info_breadth = float(ai_cfg.get('info_breadth', 0.0))
+        # Higher info_breadth reduces reuse (access to broader knowledge enables novel combinations)
+        reuse_shift = -info_breadth * 0.12
+        effective_reuse_prob = np.clip(reuse_prob + reuse_shift, 0.02, 0.75)
         if reuse_prob > 0 and np.random.random() < effective_reuse_prob:
             reuse_signature = self.combination_tracker.sample_signature(lookback=lookback)
             if reuse_signature:

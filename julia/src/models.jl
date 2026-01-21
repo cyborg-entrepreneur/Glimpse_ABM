@@ -525,12 +525,15 @@ end
 const DEFAULT_DOMAINS = ["market_analysis", "technical_assessment", "uncertainty_evaluation", "innovation_potential"]
 const AI_TIERS = ["none", "basic", "advanced", "premium"]
 
-# Default priors: slight advantage for "none", skepticism about higher tiers
+# FIXED: Neutral priors for all tiers - agents learn from experience
+# Previously had built-in skepticism: none=0.52, basic=0.48, advanced=0.35, premium=0.26
+# Now all tiers start at 0.5 and agents update beliefs based on actual outcomes
+# This lets tier preferences emerge from experience, not hardcoded prior bias
 const DEFAULT_TIER_PRIORS = Dict(
-    "none" => Dict("alpha" => 2.6, "beta" => 2.4),      # Prior mean ~0.52
-    "basic" => Dict("alpha" => 2.4, "beta" => 2.6),     # Prior mean ~0.48
-    "advanced" => Dict("alpha" => 1.7, "beta" => 3.1),  # Prior mean ~0.35
-    "premium" => Dict("alpha" => 1.2, "beta" => 3.4)    # Prior mean ~0.26
+    "none" => Dict("alpha" => 2.0, "beta" => 2.0),      # Prior mean = 0.50 (neutral)
+    "basic" => Dict("alpha" => 2.0, "beta" => 2.0),     # Prior mean = 0.50 (neutral)
+    "advanced" => Dict("alpha" => 2.0, "beta" => 2.0),  # Prior mean = 0.50 (neutral)
+    "premium" => Dict("alpha" => 2.0, "beta" => 2.0)    # Prior mean = 0.50 (neutral)
 )
 
 function AILearningProfile()

@@ -113,10 +113,13 @@ class KnowledgeBase:
     ) -> None:
         tier = normalize_ai_label(ai_level)
         info_quality, _ = self._get_ai_info_signals(ai_level)
-        decay_map = {"none": 0.08, "basic": 0.05, "advanced": 0.025, "premium": 0.0}
-        drop_prob = decay_map.get(tier, 0.04)
+        # FIXED: Uniform base decay rate - tier differences emerge through info_quality
+        # Previously had hardcoded tier-specific decay (premium=0.0, none=0.08)
+        # Now all tiers have same base decay, modified by info_quality retention
+        base_decay = 0.06  # Uniform base decay rate
+        # Higher info_quality reduces decay (retention_modifier ranges 0.2 to 0.73)
         retention_modifier = float(np.clip(1.0 - 0.45 * info_quality, 0.2, 1.0))
-        drop_prob *= retention_modifier
+        drop_prob = base_decay * retention_modifier
         knowledge_ids = self.agent_knowledge.get(agent_id, set())
         if not knowledge_ids or drop_prob <= 0.0:
             return
@@ -196,8 +199,10 @@ class KnowledgeBase:
         self._apply_tier_decay(agent_id, ai_level, agent_resources)
 
         info_quality, info_breadth = self._get_ai_info_signals(ai_level)
-        ai_knowledge_bonus = {"none": 0.02, "basic": 0.12, "advanced": 0.28, "premium": 0.42}
-        bonus = ai_knowledge_bonus.get(ai_level, 0.0) + info_quality * 0.55 + info_breadth * 0.45
+        # FIXED: Remove hardcoded tier bonuses - let effects emerge through info_quality/info_breadth
+        # Previously had double-dipping: flat tier bonus + info_quality effects
+        # Now tier differences emerge purely from AI_LEVELS config (info_quality, info_breadth)
+        bonus = info_quality * 0.55 + info_breadth * 0.45
 
         exploration_trait = 0.0
         if agent_traits:

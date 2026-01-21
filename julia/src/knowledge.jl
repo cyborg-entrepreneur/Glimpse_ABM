@@ -325,10 +325,12 @@ function get_accessible_knowledge(
     # Apply tier decay (Python match)
     apply_tier_decay!(kb, agent_id, ai_level; rng=rng)
 
-    # Get AI bonuses
+    # Get AI info signals - tier differences emerge through these config values
     info_quality, info_breadth = get_ai_info_signals(kb, ai_level)
-    ai_knowledge_bonus = Dict("none" => 0.02, "basic" => 0.12, "advanced" => 0.28, "premium" => 0.42)
-    bonus = get(ai_knowledge_bonus, ai_level, 0.0) + info_quality * 0.55 + info_breadth * 0.45
+    # FIXED: Remove hardcoded tier bonuses - let effects emerge through info_quality/info_breadth
+    # Previously had double-dipping: flat tier bonus + info_quality effects
+    # Now tier differences emerge purely from AI_LEVELS config (info_quality, info_breadth)
+    bonus = info_quality * 0.55 + info_breadth * 0.45
 
     # Add trait bonuses
     exploration_trait = 0.0
@@ -889,13 +891,13 @@ function apply_tier_decay!(
         info_quality = get(info_quality_map, tier, 0.0)
     end
 
-    # Decay probabilities by tier
-    decay_map = Dict("none" => 0.08, "basic" => 0.05, "advanced" => 0.025, "premium" => 0.0)
-    drop_prob = get(decay_map, tier, 0.04)
-
-    # Higher AI quality reduces decay
+    # FIXED: Uniform base decay rate - tier differences emerge through info_quality
+    # Previously had hardcoded tier-specific decay (premium=0.0, none=0.08)
+    # Now all tiers have same base decay, modified by info_quality retention
+    base_decay = 0.06  # Uniform base decay rate
+    # Higher info_quality reduces decay (retention_modifier ranges 0.2 to 0.73)
     retention_modifier = clamp(1.0 - 0.45 * info_quality, 0.2, 1.0)
-    drop_prob *= retention_modifier
+    drop_prob = base_decay * retention_modifier
 
     knowledge_ids = get(kb.agent_knowledge, agent_id, Set{String}())
     if isempty(knowledge_ids) || drop_prob <= 0.0
