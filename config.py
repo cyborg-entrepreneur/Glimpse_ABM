@@ -161,128 +161,140 @@ class EmergentConfig:
     OPPORTUNITY_UNCERTAINTY_RANGE: Tuple[float, float] = (0.12, 0.60)
     OPPORTUNITY_COMPLEXITY_RANGE: Tuple[float, float] = (0.0, 2.0)
 
-    # AI tool configuration with nuanced cost/benefit
+    # AI tool configuration based on 2027 scaling law projections
+    # Capability scaling: info_quality = 0.25 + 0.09 * log10(effective_compute)
+    # Cost scaling: ~10-20x efficiency improvement from 2024, inference cost ~ compute
+    # Tiers represent: none=human baseline, basic=2024 GPT-4 commoditized,
+    #                  advanced=2026 frontier, premium=2027 frontier
     AI_LEVELS: Dict = field(
         default_factory=lambda: {
             "none": {
                 "cost": 0,
                 "cost_type": "none",
-                "info_quality": 0.2,
-                "info_breadth": 0.18,
+                "info_quality": 0.25,       # Human baseline (log10(1) = 0)
+                "info_breadth": 0.20,
                 "per_use_cost": 0.0,
+                "effective_compute_log10": 0,  # Reference: human analytical capacity
             },
             "basic": {
-                "cost": 45,
+                "cost": 30,                 # Monthly subscription (commoditized 2024 tech)
                 "cost_type": "per_use",
-                "info_quality": 0.48,
+                "info_quality": 0.43,       # log10(10^2) = 2 -> 0.25 + 0.09*2 = 0.43
                 "info_breadth": 0.38,
-                "per_use_cost": 6.0,
+                "per_use_cost": 3.0,        # Very cheap per-query
+                "effective_compute_log10": 2,
             },
             "advanced": {
-                "cost": 1500,
+                "cost": 400,                # Monthly subscription
                 "cost_type": "subscription",
-                "info_quality": 0.78,
-                "info_breadth": 0.68,
-                "per_use_cost": 60.0,
+                "info_quality": 0.70,       # log10(10^5) = 5 -> 0.25 + 0.09*5 = 0.70
+                "info_breadth": 0.65,
+                "per_use_cost": 35.0,
+                "effective_compute_log10": 5,
             },
             "premium": {
-                "cost": 14000,
+                "cost": 3500,               # Monthly subscription (2027 frontier)
                 "cost_type": "subscription",
-                "info_quality": 0.93,
-                "info_breadth": 0.88,
-                "per_use_cost": 240.0,
+                "info_quality": 0.97,       # log10(10^8) = 8 -> 0.25 + 0.09*8 = 0.97
+                "info_breadth": 0.92,
+                "per_use_cost": 150.0,
+                "effective_compute_log10": 8,
             },
         }
     )
 
+    # AI domain capabilities aligned with 2027 scaling law projections
+    # Accuracy tracks info_quality with domain-specific offsets
+    # Hallucination rate scales inversely: ~0.30*(1-info_quality)
+    # Bias decreases toward 0 with higher capability
     AI_DOMAIN_CAPABILITIES: Dict = field(
         default_factory=lambda: {
-            "none": {
+            "none": {  # Human baseline (info_quality=0.25)
                 "market_analysis": {
-                    "accuracy": 0.45,
-                    "hallucination_rate": 0.22,
-                    "bias": 0.05,
-                },
-                "technical_assessment": {
-                    "accuracy": 0.48,
-                    "hallucination_rate": 0.20,
-                    "bias": -0.03,
-                },
-                "uncertainty_evaluation": {
-                    "accuracy": 0.42,
-                    "hallucination_rate": 0.25,
-                    "bias": -0.04,
-                },
-                "innovation_potential": {
-                    "accuracy": 0.40,
-                    "hallucination_rate": 0.24,
+                    "accuracy": 0.38,
+                    "hallucination_rate": 0.28,
                     "bias": 0.06,
                 },
-            },
-            "basic": {
-                "market_analysis": {
-                    "accuracy": 0.65,
-                    "hallucination_rate": 0.18,
-                    "bias": 0.03,
-                },
                 "technical_assessment": {
-                    "accuracy": 0.66,
-                    "hallucination_rate": 0.17,
-                    "bias": -0.02,
+                    "accuracy": 0.40,
+                    "hallucination_rate": 0.26,
+                    "bias": -0.04,
                 },
                 "uncertainty_evaluation": {
-                    "accuracy": 0.62,
-                    "hallucination_rate": 0.18,
-                    "bias": -0.03,
+                    "accuracy": 0.35,
+                    "hallucination_rate": 0.30,
+                    "bias": -0.05,
                 },
                 "innovation_potential": {
-                    "accuracy": 0.60,
+                    "accuracy": 0.33,
+                    "hallucination_rate": 0.29,
+                    "bias": 0.07,
+                },
+            },
+            "basic": {  # 2024 GPT-4 commoditized (info_quality=0.43)
+                "market_analysis": {
+                    "accuracy": 0.52,
                     "hallucination_rate": 0.20,
                     "bias": 0.04,
                 },
-            },
-            "advanced": {
-                "market_analysis": {
-                    "accuracy": 0.89,
-                    "hallucination_rate": 0.05,
-                    "bias": 0.02,
-                },
                 "technical_assessment": {
-                    "accuracy": 0.91,
-                    "hallucination_rate": 0.035,
-                    "bias": -0.01,
+                    "accuracy": 0.54,
+                    "hallucination_rate": 0.19,
+                    "bias": -0.03,
                 },
                 "uncertainty_evaluation": {
-                    "accuracy": 0.90,
-                    "hallucination_rate": 0.045,
+                    "accuracy": 0.50,
+                    "hallucination_rate": 0.21,
+                    "bias": -0.04,
+                },
+                "innovation_potential": {
+                    "accuracy": 0.48,
+                    "hallucination_rate": 0.22,
+                    "bias": 0.05,
+                },
+            },
+            "advanced": {  # 2026 frontier (info_quality=0.70)
+                "market_analysis": {
+                    "accuracy": 0.78,
+                    "hallucination_rate": 0.10,
+                    "bias": 0.025,
+                },
+                "technical_assessment": {
+                    "accuracy": 0.80,
+                    "hallucination_rate": 0.09,
+                    "bias": -0.015,
+                },
+                "uncertainty_evaluation": {
+                    "accuracy": 0.76,
+                    "hallucination_rate": 0.11,
                     "bias": -0.02,
                 },
                 "innovation_potential": {
-                    "accuracy": 0.89,
-                    "hallucination_rate": 0.05,
-                    "bias": 0.015,
+                    "accuracy": 0.74,
+                    "hallucination_rate": 0.12,
+                    "bias": 0.02,
                 },
             },
-            "premium": {
+            "premium": {  # 2027 frontier (info_quality=0.97)
                 "market_analysis": {
-                    "accuracy": 0.985,
-                    "hallucination_rate": 0.008,
-                    "bias": 0.002,
+                    "accuracy": 0.96,
+                    "hallucination_rate": 0.015,
+                    "bias": 0.003,
                 },
                 "technical_assessment": {
-                    "accuracy": 0.992,
-                    "hallucination_rate": 0.005,
-                    "bias": -0.001,
-                },
-                "uncertainty_evaluation": {
-                    "accuracy": 0.990,
-                    "hallucination_rate": 0.006,
+                    "accuracy": 0.97,
+                    "hallucination_rate": 0.012,
                     "bias": -0.002,
                 },
+                "uncertainty_evaluation": {
+                    "accuracy": 0.95,
+                    "hallucination_rate": 0.018,
+                    "bias": -0.003,
+                },
                 "innovation_potential": {
-                    "accuracy": 0.988,
-                    "hallucination_rate": 0.007,
-                    "bias": 0.001,
+                    "accuracy": 0.94,
+                    "hallucination_rate": 0.02,
+                    "bias": 0.004,
                 },
             },
         }

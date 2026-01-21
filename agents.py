@@ -2487,7 +2487,10 @@ class EmergentAgent:
         score *= complexity_penalty
     
         # The final score is scaled by the AI's confidence in its analysis
-        score *= (0.5 + info.confidence * 0.5)
+        # FIXED: Remove artificial floor that dampened confidence signal
+        # Previously (0.5 + conf * 0.5) compressed 2.6x confidence diff to 1.44x
+        # Now confidence has realistic impact on opportunity evaluation
+        score *= (0.15 + info.confidence * 0.85)
     
         return max(0.1, score)
 

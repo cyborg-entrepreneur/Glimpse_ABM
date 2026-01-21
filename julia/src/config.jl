@@ -162,39 +162,47 @@ parameters preserved for exact behavioral compatibility.
     OPPORTUNITY_COMPLEXITY_RANGE::Tuple{Float64,Float64} = (0.0, 2.0)
 
     # ========================================================================
-    # AI TOOL CONFIGURATION
+    # AI TOOL CONFIGURATION - 2027 Scaling Law Projections
     # ========================================================================
+    # Capability scaling: info_quality = 0.25 + 0.09 * log10(effective_compute)
+    # Cost scaling: ~10-20x efficiency improvement from 2024, inference cost ~ compute
+    # Tiers: none=human baseline (10^0), basic=2024 GPT-4 commoditized (10^2),
+    #        advanced=2026 frontier (10^5), premium=2027 frontier (10^8)
+    # AILevelConfig fields: (cost, cost_type, info_quality, info_breadth, per_use_cost)
     AI_LEVELS::Dict{String,AILevelConfig} = Dict(
-        "none" => AILevelConfig(0.0, "none", 0.2, 0.18, 0.0),
-        "basic" => AILevelConfig(45.0, "per_use", 0.48, 0.38, 6.0),
-        "advanced" => AILevelConfig(1500.0, "subscription", 0.78, 0.68, 60.0),
-        "premium" => AILevelConfig(14000.0, "subscription", 0.93, 0.88, 240.0),
+        "none" => AILevelConfig(0.0, "none", 0.25, 0.20, 0.0),           # Human baseline
+        "basic" => AILevelConfig(30.0, "per_use", 0.43, 0.38, 3.0),      # 2024 tech commoditized
+        "advanced" => AILevelConfig(400.0, "subscription", 0.70, 0.65, 35.0),  # 2026 frontier
+        "premium" => AILevelConfig(3500.0, "subscription", 0.97, 0.92, 150.0), # 2027 frontier
     )
 
+    # AI domain capabilities aligned with 2027 scaling law projections
+    # AIDomainCapability fields: (accuracy, hallucination_rate, bias)
+    # Accuracy tracks info_quality; hallucination ~0.30*(1-info_quality); bias -> 0 with capability
     AI_DOMAIN_CAPABILITIES::Dict{String,Dict{String,AIDomainCapability}} = Dict(
-        "none" => Dict(
-            "market_analysis" => AIDomainCapability(0.45, 0.22, 0.05),
-            "technical_assessment" => AIDomainCapability(0.48, 0.20, -0.03),
-            "uncertainty_evaluation" => AIDomainCapability(0.42, 0.25, -0.04),
-            "innovation_potential" => AIDomainCapability(0.40, 0.24, 0.06),
+        "none" => Dict(  # Human baseline (info_quality=0.25)
+            "market_analysis" => AIDomainCapability(0.38, 0.28, 0.06),
+            "technical_assessment" => AIDomainCapability(0.40, 0.26, -0.04),
+            "uncertainty_evaluation" => AIDomainCapability(0.35, 0.30, -0.05),
+            "innovation_potential" => AIDomainCapability(0.33, 0.29, 0.07),
         ),
-        "basic" => Dict(
-            "market_analysis" => AIDomainCapability(0.65, 0.18, 0.03),
-            "technical_assessment" => AIDomainCapability(0.66, 0.17, -0.02),
-            "uncertainty_evaluation" => AIDomainCapability(0.62, 0.18, -0.03),
-            "innovation_potential" => AIDomainCapability(0.60, 0.20, 0.04),
+        "basic" => Dict(  # 2024 GPT-4 commoditized (info_quality=0.43)
+            "market_analysis" => AIDomainCapability(0.52, 0.20, 0.04),
+            "technical_assessment" => AIDomainCapability(0.54, 0.19, -0.03),
+            "uncertainty_evaluation" => AIDomainCapability(0.50, 0.21, -0.04),
+            "innovation_potential" => AIDomainCapability(0.48, 0.22, 0.05),
         ),
-        "advanced" => Dict(
-            "market_analysis" => AIDomainCapability(0.89, 0.05, 0.02),
-            "technical_assessment" => AIDomainCapability(0.91, 0.035, -0.01),
-            "uncertainty_evaluation" => AIDomainCapability(0.90, 0.045, -0.02),
-            "innovation_potential" => AIDomainCapability(0.89, 0.05, 0.015),
+        "advanced" => Dict(  # 2026 frontier (info_quality=0.70)
+            "market_analysis" => AIDomainCapability(0.78, 0.10, 0.025),
+            "technical_assessment" => AIDomainCapability(0.80, 0.09, -0.015),
+            "uncertainty_evaluation" => AIDomainCapability(0.76, 0.11, -0.02),
+            "innovation_potential" => AIDomainCapability(0.74, 0.12, 0.02),
         ),
-        "premium" => Dict(
-            "market_analysis" => AIDomainCapability(0.985, 0.008, 0.002),
-            "technical_assessment" => AIDomainCapability(0.992, 0.005, -0.001),
-            "uncertainty_evaluation" => AIDomainCapability(0.990, 0.006, -0.002),
-            "innovation_potential" => AIDomainCapability(0.988, 0.007, 0.001),
+        "premium" => Dict(  # 2027 frontier (info_quality=0.97)
+            "market_analysis" => AIDomainCapability(0.96, 0.015, 0.003),
+            "technical_assessment" => AIDomainCapability(0.97, 0.012, -0.002),
+            "uncertainty_evaluation" => AIDomainCapability(0.95, 0.018, -0.003),
+            "innovation_potential" => AIDomainCapability(0.94, 0.02, 0.004),
         ),
     )
 

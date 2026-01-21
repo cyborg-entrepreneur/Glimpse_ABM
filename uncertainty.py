@@ -1536,7 +1536,10 @@ class KnightianUncertaintyEnvironment:
             + perception["competitive_recursion"]["recursion_level"] * 0.20
         )
 
-        ai_confidence_boost = info_quality * 0.2
+        # FIXED: Increase coefficient to allow info_quality to meaningfully impact decision confidence
+        # Previously 0.2 was too weak - Premium AI (info_quality=0.95) only gave 0.19 boost
+        # Now Premium gives 0.38 boost vs None (0.45) giving 0.18 - proper differentiation
+        ai_confidence_boost = info_quality * 0.4
         recent_success_rate = 0.5
         ai_success_rate = 0.5
         mean_roi = 0.0
