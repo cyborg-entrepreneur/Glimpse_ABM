@@ -276,7 +276,7 @@ function attempt_innovation!(
     # Now reuse probability emerges from info_breadth: broader info access → more novel
     # combinations available → lower tendency to reuse existing combinations
     ai_cfg = get(engine.config.AI_LEVELS, ai_level, get(engine.config.AI_LEVELS, "none", Dict()))
-    info_breadth = Float64(get(ai_cfg, "info_breadth", 0.0))
+    info_breadth = Float64(ai_cfg.info_breadth)
     # Higher info_breadth reduces reuse (access to broader knowledge enables novel combinations)
     reuse_shift = -info_breadth * 0.12
 

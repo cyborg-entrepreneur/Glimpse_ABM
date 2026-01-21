@@ -770,7 +770,7 @@ function _execute_innovate!(
     # Now reuse probability emerges from info_breadth: broader info access → more novel
     # combinations available → lower tendency to reuse existing combinations
     ai_cfg = get(agent.config.AI_LEVELS, ai_level, get(agent.config.AI_LEVELS, "none", Dict()))
-    info_breadth_reuse = Float64(get(ai_cfg, "info_breadth", 0.0))
+    info_breadth_reuse = Float64(ai_cfg.info_breadth)
     # Higher info_breadth reduces reuse (access to broader knowledge enables novel combinations)
     reuse_shift = -info_breadth_reuse * 0.12
     reuse_prob = clamp(0.3 + reuse_shift, 0.02, 0.75)
@@ -886,7 +886,7 @@ function _execute_explore!(
     # Previously had direct tier bonuses (none=0.85, premium=1.35)
     # Now multiplier emerges from AI_LEVELS config info_breadth parameter
     ai_cfg = get(agent.config.AI_LEVELS, ai_level, get(agent.config.AI_LEVELS, "none", Dict()))
-    info_breadth = Float64(get(ai_cfg, "info_breadth", 0.0))
+    info_breadth = Float64(ai_cfg.info_breadth)
     # Map info_breadth (0.0-0.85) to multiplier range (~0.85-1.36)
     breadth_multiplier = 0.85 + info_breadth * 0.6
 
@@ -925,7 +925,7 @@ function _execute_explore!(
     # FIXED: Remove hardcoded discovery_bonus - let effect emerge through info_quality
     # Previously had direct tier bonuses (none=0.0, premium=0.18)
     # Now discovery bonus emerges from AI_LEVELS config info_quality parameter
-    info_quality = Float64(get(ai_cfg, "info_quality", 0.0))
+    info_quality = Float64(ai_cfg.info_quality)
     # Better info_quality → better ability to identify discovery opportunities
     ai_discovery_bonus = info_quality * 0.2
 
