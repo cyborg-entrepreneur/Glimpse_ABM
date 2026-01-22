@@ -889,7 +889,7 @@ function choose_ai_level(
     cash_buffer = max(get_capital(agent), agent.resources.performance.initial_equity, 1.0)
     operating_cost = agent.config.BASE_OPERATIONAL_COST
     recent_activity = max(1.0, Float64(get(metrics, "recent_ai_activity", 1.0)))
-    amort_horizon = max(1, get(agent.config.AI_SUBSCRIPTION_AMORTIZATION_ROUNDS, 20))
+    amort_horizon = max(1, agent.config.AI_SUBSCRIPTION_AMORTIZATION_ROUNDS)
     ref_scale = max(operating_cost * 4.0, cash_buffer * 0.12, 1.0)
 
     cost_ratios = Dict{String,Float64}()
@@ -898,10 +898,14 @@ function choose_ai_level(
             cost_ratios[tier] = 0.0
             continue
         end
-        cfg = get(agent.config.AI_LEVELS, tier, Dict())
-        cost_type = get(cfg, "cost_type", "none")
-        base_cost = Float64(get(cfg, "cost", 0.0))
-        per_use_cost = Float64(get(cfg, "per_use_cost", 0.0))
+        cfg = get(agent.config.AI_LEVELS, tier, nothing)
+        if isnothing(cfg)
+            cost_ratios[tier] = 0.0
+            continue
+        end
+        cost_type = cfg.cost_type
+        base_cost = Float64(cfg.cost)
+        per_use_cost = Float64(cfg.per_use_cost)
 
         total_cost = if cost_type == "subscription"
             per_round = base_cost / amort_horizon

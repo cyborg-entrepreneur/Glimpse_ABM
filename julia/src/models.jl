@@ -348,7 +348,9 @@ function realized_return(
     # Scarcity and novelty increase the ceiling for rare outcomes
     scarcity_headroom = 10.0 + 5.0 * max(0.0, scarcity_signal + novelty_signal - 0.8)
     upper_bound = clamp(scarcity_headroom, 5.0, 50.0)  # Allow up to 50× for true unicorns
-    lower_bound = isnothing(config) ? 0.0 : max(0.0, config.RETURN_LOWER_BOUND)  # Floor at 0 for successful investments
+    # Lower bound: 0.0 = total loss, 0.5 = 50% loss, 1.0 = break-even
+    # Note: RETURN_LOWER_BOUND should be ≥0 to represent minimum return multiple
+    lower_bound = isnothing(config) ? 0.0 : clamp(config.RETURN_LOWER_BOUND, 0.0, 1.0)
 
     return clamp(scaled_return, lower_bound, upper_bound)
 end

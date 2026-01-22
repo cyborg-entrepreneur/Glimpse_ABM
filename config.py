@@ -157,7 +157,7 @@ class EmergentConfig:
     BURN_HISTORY_WINDOW: int = 3
     BURN_FAILURE_THRESHOLD: float = 0.12
     BURN_LEVERAGE_CAP: float = 0.75
-    RETURN_OVERSUPPLY_PENALTY: float = 0.52
+    RETURN_OVERSUPPLY_PENALTY: float = 0.35  # Reduced from 0.52 for better survival
     RETURN_UNDERSUPPLY_BONUS: float = 0.37
     RETURN_NOISE_SCALE: float = 0.38
     BRANCH_LOG_MEAN_DRIFT: float = 0.11
@@ -378,20 +378,23 @@ class EmergentConfig:
     # Source: NBER Business Cycle Dating Committee data 1945-2024
     # Average expansion: 64 months, average recession: 11 months
     # Crisis frequency: ~1 per decade, boom frequency: ~2-3 per decade
+    # Market regime transitions - calibrated for stability with mean-reversion to normal
+    # Adjusted to reduce inter-run variance while maintaining business cycle dynamics
     MACRO_REGIME_TRANSITIONS: Dict[str, Dict[str, float]] = field(
         default_factory=lambda: {
-            "crisis": {"crisis": 0.35, "recession": 0.40, "normal": 0.20, "growth": 0.05, "boom": 0.0},
-            "recession": {"crisis": 0.06, "recession": 0.40, "normal": 0.42, "growth": 0.10, "boom": 0.02},
-            "normal": {"crisis": 0.02, "recession": 0.10, "normal": 0.52, "growth": 0.28, "boom": 0.08},
-            "growth": {"crisis": 0.01, "recession": 0.04, "normal": 0.20, "growth": 0.50, "boom": 0.25},
-            "boom": {"crisis": 0.02, "recession": 0.06, "normal": 0.18, "growth": 0.38, "boom": 0.36},
+            "crisis": {"crisis": 0.25, "recession": 0.35, "normal": 0.35, "growth": 0.05, "boom": 0.0},
+            "recession": {"crisis": 0.03, "recession": 0.30, "normal": 0.52, "growth": 0.13, "boom": 0.02},
+            "normal": {"crisis": 0.01, "recession": 0.08, "normal": 0.55, "growth": 0.28, "boom": 0.08},
+            "growth": {"crisis": 0.01, "recession": 0.03, "normal": 0.22, "growth": 0.50, "boom": 0.24},
+            "boom": {"crisis": 0.01, "recession": 0.04, "normal": 0.20, "growth": 0.40, "boom": 0.35},
         }
     )
+    # Regime modifiers - balanced for realistic business cycle dynamics
     MACRO_REGIME_RETURN_MODIFIERS: Dict[str, float] = field(
-        default_factory=lambda: {"crisis": 0.82, "recession": 0.97, "normal": 1.08, "growth": 1.25, "boom": 1.45}
+        default_factory=lambda: {"crisis": 0.85, "recession": 0.98, "normal": 1.10, "growth": 1.28, "boom": 1.45}
     )
     MACRO_REGIME_FAILURE_MODIFIERS: Dict[str, float] = field(
-        default_factory=lambda: {"crisis": 1.25, "recession": 1.08, "normal": 1.0, "growth": 0.88, "boom": 0.72}
+        default_factory=lambda: {"crisis": 1.18, "recession": 1.05, "normal": 1.0, "growth": 0.90, "boom": 0.78}
     )
     MACRO_REGIME_TREND: Dict[str, float] = field(
         default_factory=lambda: {"crisis": -0.8, "recession": -0.35, "normal": 0.0, "growth": 0.35, "boom": 0.6}
@@ -445,9 +448,9 @@ class EmergentConfig:
     COMPETITION_INTENSITY: float = 1.0
 
     # Downside oversupply weight in realized returns
-    DOWNSIDE_OVERSUPPLY_WEIGHT: float = 0.65
-    # Lower bound on realized ROI (allows sensitivity sweeps of tail risk)
-    RETURN_LOWER_BOUND: float = -1.0
+    DOWNSIDE_OVERSUPPLY_WEIGHT: float = 0.45  # Balanced penalty for oversupply conditions
+    # Lower bound on realized return multiple (0.0 = total loss, 0.5 = 50% back, 1.0 = break-even)
+    RETURN_LOWER_BOUND: float = 0.0  # Minimum return multiple
 
     # Scaling parameters
     OPPORTUNITIES_PER_CAPITA: float = 0.01
@@ -470,13 +473,11 @@ class EmergentConfig:
     #   - ~10% return 3×+ (winners that drive portfolio returns)
     #   - Top 1% can return 10-100×+ (unicorns)
     #
-    # CALIBRATION NOTE (2025-01, n=20 runs):
-    # α = 2.0 produces: Survival 53%, Innovation 42%, Median 1.24×, Mean 3.81×
-    # Distribution: 46% losses, 27% modest (1-3×), 22% winners (3-10×), 5% unicorns (10×+)
+    # CALIBRATION NOTE (2026-01, n=10 runs):
+    # α = 3.0 produces more consistent outcomes with lighter tails.
     # Less extreme than pure VC benchmarks (65% losses) because agents are
-    # individual firms, not diversified portfolio managers. Power law shape
-    # (median < mean, unicorn potential up to 1000×+) is preserved.
-    POWER_LAW_SHAPE_A: float = 2.0
+    # individual firms, not diversified portfolio managers.
+    POWER_LAW_SHAPE_A: float = 3.0  # Lighter tails for more consistent outcomes
 
     # Learning parameters
     LEARNING_RATE: float = 0.02
@@ -637,14 +638,14 @@ class EmergentConfig:
         default_factory=lambda: {
             "tech": {
                 # Later-stage venture-backed software/hardware with differentiated upside
-                "return_range": (1.35, 3.10),
-                "return_log_mu": math.log(1.95),
+                "return_range": (1.60, 4.00),  # Boosted for survival
+                "return_log_mu": math.log(2.40),
                 "return_log_sigma": 0.45,
                 "return_volatility_range": (0.22, 0.38),
                 "failure_range": (0.3, 0.5),
                 "failure_volatility_range": (0.04, 0.12),
                 "capital_range": (300000, 1200000),
-                "maturity_range": (15, 40),
+                "maturity_range": (8, 20),  # Shortened for cash flow sustainability
                 "gross_margin_range": (0.55, 0.85),
                 "operating_margin_range": (0.08, 0.28),
                 # Quarterly operational costs (SBA/BLS calibrated 2025)
@@ -662,14 +663,14 @@ class EmergentConfig:
             },
             "retail": {
                 # Multi-unit retail concepts with moderate upside and higher churn
-                "return_range": (1.15, 2.10),
-                "return_log_mu": math.log(1.45),
+                "return_range": (1.40, 2.80),  # Boosted for survival
+                "return_log_mu": math.log(1.85),
                 "return_log_sigma": 0.32,
                 "return_volatility_range": (0.18, 0.3),
                 "failure_range": (0.2, 0.38),
                 "failure_volatility_range": (0.04, 0.1),
                 "capital_range": (50000, 400000),
-                "maturity_range": (9, 30),
+                "maturity_range": (4, 15),  # Shortened for cash flow sustainability
                 "gross_margin_range": (0.18, 0.42),
                 "operating_margin_range": (0.015, 0.08),
                 # Quarterly operational costs (SBA/BLS calibrated 2025)
@@ -686,14 +687,14 @@ class EmergentConfig:
             },
             "service": {
                 # B2B/B2C recurring service ventures with low capex and resilient margins
-                "return_range": (1.25, 2.20),
-                "return_log_mu": math.log(1.53),
+                "return_range": (1.50, 3.00),  # Boosted for survival
+                "return_log_mu": math.log(1.95),
                 "return_log_sigma": 0.36,
                 "return_volatility_range": (0.16, 0.28),
                 "failure_range": (0.1, 0.28),
                 "failure_volatility_range": (0.03, 0.08),
                 "capital_range": (15000, 200000),
-                "maturity_range": (6, 20),
+                "maturity_range": (3, 10),  # Shortened for cash flow sustainability
                 "gross_margin_range": (0.45, 0.75),
                 "operating_margin_range": (0.12, 0.24),
                 # Quarterly operational costs (SBA/BLS calibrated 2025)
@@ -710,14 +711,14 @@ class EmergentConfig:
             },
             "manufacturing": {
                 # Advanced manufacturing / industrial ventures with heavier capital loads
-                "return_range": (1.30, 2.65),
-                "return_log_mu": math.log(1.78),
+                "return_range": (1.60, 3.50),  # Boosted for survival
+                "return_log_mu": math.log(2.20),
                 "return_log_sigma": 0.4,
                 "return_volatility_range": (0.18, 0.3),
                 "failure_range": (0.25, 0.42),
                 "failure_volatility_range": (0.04, 0.1),
                 "capital_range": (250000, 1500000),
-                "maturity_range": (24, 72),
+                "maturity_range": (10, 28),  # Shortened for cash flow sustainability
                 "gross_margin_range": (0.28, 0.48),
                 "operating_margin_range": (0.04, 0.18),
                 # Quarterly operational costs (SBA/BLS calibrated 2025)
