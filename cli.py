@@ -173,6 +173,7 @@ from .analysis import (
     ComprehensiveVisualizationSuite,
     StatisticalAnalysisSuite,
 )
+from .publication import PublicationPipeline
 from .config import (
     CalibrationProfile,
     EmergentConfig,
@@ -1980,6 +1981,17 @@ def _parse_cli_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Run full ablation study: compare baseline with each mechanism disabled.",
     )
+    parser.add_argument(
+        "--publication",
+        action="store_true",
+        help="Generate publication-ready outputs: LaTeX tables, PDF figures, and a comprehensive report.",
+    )
+    parser.add_argument(
+        "--publication-author",
+        type=str,
+        default="",
+        help="Author name(s) for the publication report.",
+    )
     return parser.parse_args(args=list(argv) if argv is not None else None)
 
 
@@ -2207,6 +2219,23 @@ def run_cli(
             print(f"[CLI] Sensitivity summary: {result['summary_csv']}")
         if "effects_csv" in result:
             print(f"[CLI] Sensitivity effects: {result['effects_csv']}")
+
+        # Generate publication outputs if requested
+        if getattr(args, 'publication', False):
+            results_dir = result.get('results_directory') or result.get('results_dir')
+            if results_dir:
+                print("\n[CLI] 📖 Generating publication outputs...")
+                try:
+                    pub_output_dir = os.path.join(results_dir, 'publication')
+                    pipeline = PublicationPipeline(results_dir, pub_output_dir)
+                    pub_results = pipeline.run_full_pipeline(
+                        author=getattr(args, 'publication_author', '')
+                    )
+                    result['publication_outputs'] = pub_results
+                    print(f"[CLI] Publication outputs: {pub_output_dir}")
+                except Exception as exc:
+                    print(f"[CLI] ⚠️ Publication generation failed: {exc}")
+
     print("[CLI] ✅ Task completed.")
     return result
 
