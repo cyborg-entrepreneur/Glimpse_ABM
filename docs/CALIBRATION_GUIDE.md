@@ -62,6 +62,28 @@ Common knobs in the current build:
 * **Recursion weights:** `RECURSION_WEIGHTS.crowd_weight`, `.ai_herd_weight`, `.volatility_weight`, `.premium_reuse_weight` (control how crowding/volatility/AI herding shape competitive recursion).
 * **Capital resilience:** `SURVIVAL_CAPITAL_RATIO`, `BASE_OPERATIONAL_COST`.
 
+### 3.1 Sector-Specific Parameters (Empirically Calibrated)
+
+The model includes sector-specific parameters calibrated to empirical data sources:
+
+| Parameter | Tech | Retail | Service | Manufacturing | Source |
+|-----------|------|--------|---------|---------------|--------|
+| `initial_capital_range` | $800k-$2.5M | $200k-$800k | $150k-$500k | $1.2M-$3.5M | NVCA 2024 Yearbook |
+| `survival_threshold` | $150k | $180k | $70k | $220k | BLS BED, Fed SBCS 2024 |
+| `innovation_probability` | 0.48 | 0.32 | 0.38 | 0.52 | NSF BRDIS 2023, USPTO |
+| `knowledge_decay_rate` | 0.12 | 0.07 | 0.05 | 0.03 | Learning curve research |
+| `competition_intensity` | 1.2 | 0.7 | 0.9 | 1.4 | Census Bureau HHI |
+
+**Sector Assignment Weights** (NVCA 2024 Deal Flow):
+- Tech: 60% | Service: 15% | Manufacturing: 15% | Retail: 10%
+
+**Market Regime Transitions** are calibrated to NBER Business Cycle Dating (1945-2024):
+- Average expansion: 64 months → `normal→growth: 0.30`
+- Average recession: 11 months → `recession→normal: 0.40`
+- Crisis frequency: ~1/decade → `normal→crisis: 0.02`
+
+These sector-specific parameters are defined in `SECTOR_PROFILES` in both `config.py` and `julia/src/config.jl`.
+
 ### 4. Validate Robustness
 
 Use the built-in sweeps to show the model is stable:

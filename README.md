@@ -205,6 +205,39 @@ Full-scale configuration anchored to empirical benchmarks:
 - **Mean investment ROI**: 1.12× ± 0.20 (Source: PitchBook Series A-D)
 - **Innovation share**: 40% ± 10% (Source: NVCA 2024 estimates)
 
+## Empirical Calibration Sources
+
+All simulation parameters are calibrated to real-world empirical data:
+
+| Parameter Category | Empirical Source | Key Metrics |
+|-------------------|------------------|-------------|
+| **Initial Capital** | NVCA 2024 Yearbook, PitchBook | Sector-specific seed/Series A medians |
+| **Survival Thresholds** | BLS Business Employment Dynamics, Fed SBCS 2024 | 3-6 months operating expenses by sector |
+| **Innovation Rates** | NSF BRDIS 2023, USPTO Patent Statistics | R&D intensity and patent grant rates |
+| **Knowledge Decay** | Ebbinghaus forgetting curve, skill depreciation studies | Sector-specific half-lives (2-10 years) |
+| **Market Regimes** | NBER Business Cycle Dating (1945-2024) | Expansion/recession durations and frequencies |
+| **Competition** | Census Bureau Economic Census, DOJ HHI Guidelines | Industry concentration indices |
+| **Sector Weights** | NVCA 2024 Deal Flow | Tech 60%, Service 15%, Manufacturing 15%, Retail 10% |
+
+### Sector-Specific Parameters
+
+Each sector has empirically-calibrated profiles:
+
+| Sector | Initial Capital | Survival Threshold | Innovation Prob | Knowledge Decay |
+|--------|----------------|-------------------|-----------------|-----------------|
+| **Tech** | $800k-$2.5M | $150k | 48% | 12%/round |
+| **Retail** | $200k-$800k | $180k | 32% | 7%/round |
+| **Service** | $150k-$500k | $70k | 38% | 5%/round |
+| **Manufacturing** | $1.2M-$3.5M | $220k | 52% | 3%/round |
+
+### AI Parameters (2027 Projections)
+
+AI cost and capability parameters are calibrated to 2027 scaling law projections based on:
+- Hoffmann et al. (2022) - Chinchilla scaling laws
+- Kaplan et al. (2020) - Neural scaling laws
+
+These parameters are intentionally forward-looking and should not be modified for empirical validation against current data
+
 ## Output Structure
 
 ```

@@ -9,7 +9,9 @@ utilities. The configuration structure is designed to support:
    snapshot, enabling exact replication of results.
 
 2. **Calibration**: Built-in profiles anchor simulations to empirical benchmarks
-   (BLS survival rates, NVCA investment returns, PitchBook multiples).
+   including sector-specific parameters from NVCA 2024 (capital), BLS/Fed SBCS
+   (survival), NSF BRDIS/USPTO (innovation), NBER (market regimes), and Census
+   Bureau HHI (competition).
 
 3. **Sensitivity Analysis**: Parameter ranges and override mechanisms support
    Latin Hypercube Sampling and grid-based sensitivity sweeps.

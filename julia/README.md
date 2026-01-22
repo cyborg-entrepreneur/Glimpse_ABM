@@ -13,6 +13,22 @@ GlimpseABM.jl is a complete port of the Python [glimpse_abm](https://github.com/
 - **Knightian Uncertainty**: Four-dimensional uncertainty framework (actor ignorance, practical indeterminism, agentic novelty, competitive recursion)
 - **Causal Analysis**: Fixed-tier sweeps for measuring true AI adoption effects
 - **High Performance**: ~5M agent-rounds/second (vs ~70k in Python)
+- **Empirical Calibration**: Sector-specific parameters calibrated to NVCA, BLS, NSF, and NBER data
+
+## Empirical Calibration
+
+All sector-specific parameters are calibrated to real-world empirical data:
+
+| Parameter | Empirical Source |
+|-----------|------------------|
+| Initial Capital | NVCA 2024 Yearbook, PitchBook |
+| Survival Threshold | BLS Business Employment Dynamics, Fed SBCS 2024 |
+| Innovation Probability | NSF BRDIS 2023, USPTO Patent Statistics |
+| Knowledge Decay | Ebbinghaus forgetting curve, skill depreciation studies |
+| Market Regimes | NBER Business Cycle Dating (1945-2024) |
+| Competition Intensity | Census Bureau Economic Census, DOJ HHI Guidelines |
+
+See `docs/PARAMETER_GLOSSARY.md` for detailed parameter documentation and calibration sources.
 
 ## Installation
 
