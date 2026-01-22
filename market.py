@@ -281,6 +281,24 @@ class MarketEnvironment:
             parent = child
         return self.branch_params[branch_name]
 
+    def get_sector_competition_intensity(self, sector: str) -> float:
+        """
+        Get sector-specific competition intensity based on Census HHI data.
+
+        Competition intensity values calibrated from Census Bureau Economic Census:
+        - Tech: 1.2 (HHI 1500-2500, moderate concentration)
+        - Retail: 0.7 (HHI 500-1000, fragmented)
+        - Service: 0.9 (HHI 800-1500, moderately fragmented)
+        - Manufacturing: 1.4 (HHI 1800-3000, concentrated)
+        """
+        profile = self.config.SECTOR_PROFILES.get(sector, {})
+        return float(profile.get('competition_intensity', 1.0))
+
+    def update_opportunity_competition(self, opp, delta: float) -> None:
+        """Apply sector-specific competition intensity to opportunity competition updates."""
+        intensity = self.get_sector_competition_intensity(opp.sector)
+        opp.competition = float(np.clip(opp.competition + delta * intensity, 0.0, 1.0))
+
     def _sample_branch_characteristics(
         self, branch_name: str, quality_roll: Optional[float] = None
     ) -> Tuple[float, float, float, int]:

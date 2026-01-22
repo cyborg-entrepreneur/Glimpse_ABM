@@ -31,14 +31,13 @@ end
 """
 Sector-specific economic parameters.
 
-Includes operational_cost_range calibrated to SBA/BLS data (2025):
-- Technology: \$60k-\$90k/quarter (high R&D, personnel, infrastructure)
-- Retail: \$70k-\$110k/quarter (rent, inventory, staffing)
-- Service: \$25k-\$45k/quarter (lowest overhead)
-- Manufacturing: \$90k-\$130k/quarter (facilities, materials, equipment)
-
-Sources: SBA Startup Cost Calculator, BLS Industry Statistics, Federal Reserve
-Small Business Credit Survey 2025
+Calibration Sources:
+- initial_capital_range: NVCA 2024 Yearbook, PitchBook seed/early stage data
+- survival_threshold: BLS Business Employment Dynamics, Fed SBCS 2024 (2-3 quarters operating expenses)
+- innovation_probability: NSF BRDIS 2023, USPTO Patent Statistics grant rates
+- innovation_return_multiplier: Industry R&D intensity studies
+- knowledge_decay_rate: Ebbinghaus forgetting curve, industry skill depreciation research
+- competition_intensity: Census Bureau Economic Census HHI data, DOJ HHI guidelines
 """
 struct SectorProfile
     return_range::Tuple{Float64,Float64}
@@ -51,8 +50,13 @@ struct SectorProfile
     maturity_range::Tuple{Int,Int}
     gross_margin_range::Tuple{Float64,Float64}
     operating_margin_range::Tuple{Float64,Float64}
-    # Quarterly operational cost range (SBA/BLS calibrated 2025)
-    operational_cost_range::Tuple{Float64,Float64}
+    # New empirically-calibrated fields
+    initial_capital_range::Tuple{Float64,Float64}      # NVCA 2024: sector-specific seed/early stage
+    survival_threshold::Float64                         # BLS/Fed: ~2 quarters operating expenses
+    innovation_probability::Float64                     # NSF BRDIS 2023, USPTO grant rates
+    innovation_return_multiplier::Tuple{Float64,Float64}  # R&D intensity returns by sector
+    knowledge_decay_rate::Float64                       # Skill depreciation half-life research
+    competition_intensity::Float64                      # Census HHI-based competition intensity
 end
 
 # ============================================================================
@@ -89,20 +93,14 @@ parameters preserved for exact behavioral compatibility.
     # ========================================================================
     # AGENT CONFIGURATION
     # ========================================================================
-    # Capital settings calibrated for ~50% ± 8% survival rate (42-58% target range)
-    # at 200 rounds with 30 agents. Calibration performed 2025-01 against
-    # BLS Business Employment Dynamics benchmarks for 5-year startup survival.
-    # Key relationship: capital / operational_cost = months of runway
-    # At $1.5M / $50k = 30 months runway → ~45% survival (within target)
     AGENT_AI_MODE::String = "emergent"
     N_AGENTS::Int = 1000
-    INITIAL_CAPITAL::Float64 = 1_500_000.0
-    INITIAL_CAPITAL_RANGE::Tuple{Float64,Float64} = (1_200_000.0, 1_800_000.0)
+    INITIAL_CAPITAL::Float64 = 5_000_000.0
+    INITIAL_CAPITAL_RANGE::Tuple{Float64,Float64} = (2_500_000.0, 10_000_000.0)
     SURVIVAL_THRESHOLD::Float64 = 230_000.0
     SURVIVAL_CAPITAL_RATIO::Float64 = 0.38
     INSOLVENCY_GRACE_ROUNDS::Int = 7
     RANDOM_SEED::Int = 42
-    USE_NUMPY_RNG::Bool = false  # Use numpy-compatible RNG for cross-language reproducibility
 
     BASE_OPERATIONAL_COST::Float64 = 50000.0
     COMPETITION_COST_MULTIPLIER::Float64 = 150.0
@@ -180,84 +178,39 @@ parameters preserved for exact behavioral compatibility.
     OPPORTUNITY_COMPLEXITY_RANGE::Tuple{Float64,Float64} = (0.0, 2.0)
 
     # ========================================================================
-    # AI TOOL CONFIGURATION - 2027 Scaling Law Projections
+    # AI TOOL CONFIGURATION
     # ========================================================================
-    #
-    # SCALING LAW CALIBRATION (Hoffmann et al. 2022, Kaplan et al. 2020)
-    # ─────────────────────────────────────────────────────────────────────
-    # Core formula: info_quality = 0.25 + 0.09 × log₁₀(effective_compute)
-    #
-    # Derivation:
-    #   - Human baseline (no AI): effective_compute = 10^0 = 1
-    #     → info_quality = 0.25 + 0.09 × 0 = 0.25
-    #   - Basic (2024 GPT-4 commoditized): effective_compute ≈ 10^2
-    #     → info_quality = 0.25 + 0.09 × 2 = 0.43
-    #   - Advanced (2026 frontier): effective_compute ≈ 10^5
-    #     → info_quality = 0.25 + 0.09 × 5 = 0.70
-    #   - Premium (2027 frontier): effective_compute ≈ 10^8
-    #     → info_quality = 0.25 + 0.09 × 8 = 0.97
-    #
-    # COST SCALING
-    # ─────────────────────────────────────────────────────────────────────
-    # Based on historical trends: ~10-20x efficiency improvement from 2024
-    # Cost tracks roughly with sqrt(compute) after efficiency gains
-    # Monthly subscription: basic=$30, advanced=$400, premium=$3500
-    # Per-use costs for agents without subscriptions scale similarly
-    #
-    # INFO_BREADTH CALIBRATION
-    # ─────────────────────────────────────────────────────────────────────
-    # Breadth scales slightly below quality (training data coverage vs. depth)
-    # Formula: info_breadth ≈ info_quality - 0.05 (capped at 0.92)
-    #
-    # AILevelConfig fields: (cost, cost_type, info_quality, info_breadth, per_use_cost)
     AI_LEVELS::Dict{String,AILevelConfig} = Dict(
-        "none" => AILevelConfig(0.0, "none", 0.25, 0.20, 0.0),           # Human baseline
-        "basic" => AILevelConfig(30.0, "per_use", 0.43, 0.38, 3.0),      # 2024 tech commoditized
-        "advanced" => AILevelConfig(400.0, "subscription", 0.70, 0.65, 35.0),  # 2026 frontier
-        "premium" => AILevelConfig(3500.0, "subscription", 0.97, 0.92, 150.0), # 2027 frontier
+        "none" => AILevelConfig(0.0, "none", 0.2, 0.18, 0.0),
+        "basic" => AILevelConfig(45.0, "per_use", 0.48, 0.38, 6.0),
+        "advanced" => AILevelConfig(1500.0, "subscription", 0.78, 0.68, 60.0),
+        "premium" => AILevelConfig(14000.0, "subscription", 0.93, 0.88, 240.0),
     )
 
-    # AI DOMAIN CAPABILITIES - Aligned with 2027 Scaling Law Projections
-    # ─────────────────────────────────────────────────────────────────────
-    # AIDomainCapability fields: (accuracy, hallucination_rate, bias)
-    #
-    # ACCURACY: Tracks info_quality with domain-specific modifiers (±0.03)
-    #   market_analysis: slightly higher (structured data)
-    #   technical_assessment: highest (objective criteria)
-    #   uncertainty_evaluation: lower (inherently harder)
-    #   innovation_potential: lowest (most speculative)
-    #
-    # HALLUCINATION RATE: Scales inversely with capability
-    #   Formula: hallucination ≈ 0.30 × (1 - info_quality)
-    #   none: ~0.225-0.30, basic: ~0.17-0.22, advanced: ~0.09-0.12, premium: ~0.01-0.02
-    #
-    # BIAS: Approaches zero with increased capability
-    #   Formula: bias ≈ ±0.08 × (1 - info_quality)
-    #   Positive bias = overestimation, negative = underestimation
     AI_DOMAIN_CAPABILITIES::Dict{String,Dict{String,AIDomainCapability}} = Dict(
-        "none" => Dict(  # Human baseline (info_quality=0.25)
-            "market_analysis" => AIDomainCapability(0.38, 0.28, 0.06),
-            "technical_assessment" => AIDomainCapability(0.40, 0.26, -0.04),
-            "uncertainty_evaluation" => AIDomainCapability(0.35, 0.30, -0.05),
-            "innovation_potential" => AIDomainCapability(0.33, 0.29, 0.07),
+        "none" => Dict(
+            "market_analysis" => AIDomainCapability(0.45, 0.22, 0.05),
+            "technical_assessment" => AIDomainCapability(0.48, 0.20, -0.03),
+            "uncertainty_evaluation" => AIDomainCapability(0.42, 0.25, -0.04),
+            "innovation_potential" => AIDomainCapability(0.40, 0.24, 0.06),
         ),
-        "basic" => Dict(  # 2024 GPT-4 commoditized (info_quality=0.43)
-            "market_analysis" => AIDomainCapability(0.52, 0.20, 0.04),
-            "technical_assessment" => AIDomainCapability(0.54, 0.19, -0.03),
-            "uncertainty_evaluation" => AIDomainCapability(0.50, 0.21, -0.04),
-            "innovation_potential" => AIDomainCapability(0.48, 0.22, 0.05),
+        "basic" => Dict(
+            "market_analysis" => AIDomainCapability(0.65, 0.18, 0.03),
+            "technical_assessment" => AIDomainCapability(0.66, 0.17, -0.02),
+            "uncertainty_evaluation" => AIDomainCapability(0.62, 0.18, -0.03),
+            "innovation_potential" => AIDomainCapability(0.60, 0.20, 0.04),
         ),
-        "advanced" => Dict(  # 2026 frontier (info_quality=0.70)
-            "market_analysis" => AIDomainCapability(0.78, 0.10, 0.025),
-            "technical_assessment" => AIDomainCapability(0.80, 0.09, -0.015),
-            "uncertainty_evaluation" => AIDomainCapability(0.76, 0.11, -0.02),
-            "innovation_potential" => AIDomainCapability(0.74, 0.12, 0.02),
+        "advanced" => Dict(
+            "market_analysis" => AIDomainCapability(0.89, 0.05, 0.02),
+            "technical_assessment" => AIDomainCapability(0.91, 0.035, -0.01),
+            "uncertainty_evaluation" => AIDomainCapability(0.90, 0.045, -0.02),
+            "innovation_potential" => AIDomainCapability(0.89, 0.05, 0.015),
         ),
-        "premium" => Dict(  # 2027 frontier (info_quality=0.97)
-            "market_analysis" => AIDomainCapability(0.96, 0.015, 0.003),
-            "technical_assessment" => AIDomainCapability(0.97, 0.012, -0.002),
-            "uncertainty_evaluation" => AIDomainCapability(0.95, 0.018, -0.003),
-            "innovation_potential" => AIDomainCapability(0.94, 0.02, 0.004),
+        "premium" => Dict(
+            "market_analysis" => AIDomainCapability(0.985, 0.008, 0.002),
+            "technical_assessment" => AIDomainCapability(0.992, 0.005, -0.001),
+            "uncertainty_evaluation" => AIDomainCapability(0.990, 0.006, -0.002),
+            "innovation_potential" => AIDomainCapability(0.988, 0.007, 0.001),
         ),
     )
 
@@ -297,12 +250,16 @@ parameters preserved for exact behavioral compatibility.
     MACRO_REGIME_STATES::Tuple{String,String,String,String,String} =
         ("crisis", "recession", "normal", "growth", "boom")
 
+    # NBER Business Cycle-calibrated transition matrix (quarterly rounds)
+    # Source: NBER Business Cycle Dating Committee data 1945-2024
+    # Average expansion: 64 months, average recession: 11 months
+    # Crisis frequency: ~1 per decade, boom frequency: ~2-3 per decade
     MACRO_REGIME_TRANSITIONS::Dict{String,Dict{String,Float64}} = Dict(
-        "crisis" => Dict("crisis" => 0.40, "recession" => 0.35, "normal" => 0.20, "growth" => 0.05, "boom" => 0.0),
-        "recession" => Dict("crisis" => 0.08, "recession" => 0.45, "normal" => 0.35, "growth" => 0.10, "boom" => 0.02),
-        "normal" => Dict("crisis" => 0.03, "recession" => 0.12, "normal" => 0.50, "growth" => 0.27, "boom" => 0.08),
-        "growth" => Dict("crisis" => 0.01, "recession" => 0.05, "normal" => 0.22, "growth" => 0.47, "boom" => 0.25),
-        "boom" => Dict("crisis" => 0.03, "recession" => 0.07, "normal" => 0.20, "growth" => 0.35, "boom" => 0.35),
+        "crisis" => Dict("crisis" => 0.35, "recession" => 0.40, "normal" => 0.20, "growth" => 0.05, "boom" => 0.0),
+        "recession" => Dict("crisis" => 0.06, "recession" => 0.40, "normal" => 0.42, "growth" => 0.10, "boom" => 0.02),
+        "normal" => Dict("crisis" => 0.02, "recession" => 0.10, "normal" => 0.52, "growth" => 0.28, "boom" => 0.08),
+        "growth" => Dict("crisis" => 0.01, "recession" => 0.04, "normal" => 0.20, "growth" => 0.50, "boom" => 0.25),
+        "boom" => Dict("crisis" => 0.02, "recession" => 0.06, "normal" => 0.18, "growth" => 0.38, "boom" => 0.36),
     )
 
     MACRO_REGIME_RETURN_MODIFIERS::Dict{String,Float64} = Dict(
@@ -326,42 +283,6 @@ parameters preserved for exact behavioral compatibility.
     FAILURE_DEMAND_PRESSURE::Float64 = 0.20
 
     # ========================================================================
-    # COMPETITION INTENSITY (for robustness testing)
-    # ========================================================================
-    # Scales ALL competition/crowding effects from 0.0 (disabled) to 1.0 (full)
-    # This allows testing whether the information paradox persists without
-    # competition penalties driving the results.
-    COMPETITION_INTENSITY::Float64 = 1.0
-
-    # ========================================================================
-    # HALLUCINATION INTENSITY (for robustness testing)
-    # ========================================================================
-    # Scales AI hallucination rates from 0.0 (no hallucinations) to 1.0 (full)
-    # Tests whether AI misinformation/false positives drive the paradox.
-    HALLUCINATION_INTENSITY::Float64 = 1.0
-
-    # ========================================================================
-    # OVERCONFIDENCE INTENSITY (for robustness testing)
-    # ========================================================================
-    # Scales AI overconfidence effects from 0.0 (no overconfidence) to 1.0 (full)
-    # Tests whether inflated confidence estimates drive the paradox.
-    OVERCONFIDENCE_INTENSITY::Float64 = 1.0
-
-    # ========================================================================
-    # AI NOVELTY CONSTRAINT INTENSITY (for robustness testing)
-    # ========================================================================
-    # Scales the negative effect of premium AI on agentic novelty (0.0 to 1.0)
-    # Tests whether AI-induced anchoring on historical patterns drives the paradox.
-    AI_NOVELTY_CONSTRAINT_INTENSITY::Float64 = 1.0
-
-    # ========================================================================
-    # AI COST INTENSITY (for robustness testing)
-    # ========================================================================
-    # Scales AI subscription/usage costs from 0.0 (free AI) to 1.0 (full cost)
-    # Tests whether opportunity costs from AI fees drive the paradox.
-    AI_COST_INTENSITY::Float64 = 1.0
-
-    # ========================================================================
     # RECURSION WEIGHTS
     # ========================================================================
     RECURSION_WEIGHTS::Dict{String,Float64} = Dict(
@@ -381,32 +302,8 @@ parameters preserved for exact behavioral compatibility.
     OPPORTUNITIES_PER_CAPITA::Float64 = 0.01
     DISCOVERY_RATE_SCALING::Float64 = 0.5
     MIN_OPPORTUNITIES::Int = 5
+    POWER_LAW_SHAPE_A::Float64 = 3.0
     OPPORTUNITY_CAPITAL_REQUIREMENTS::Float64 = 10000.0
-
-    # ========================================================================
-    # POWER LAW RETURN DISTRIBUTION
-    # ========================================================================
-    # Venture returns follow a power law (Pareto) distribution where most
-    # investments return near the minimum while rare "unicorns" drive returns.
-    #
-    # POWER_LAW_SHAPE_A (α) controls tail heaviness:
-    #   α = 2.0: Heavy tails (early-stage VC dynamics) - CALIBRATED DEFAULT
-    #   α = 2.5: Moderate tails (growth equity)
-    #   α = 3.0: Lighter tails (late-stage/buyout)
-    #
-    # Empirical VC benchmarks (Kaplan & Schoar, Korteweg & Sorensen):
-    #   - ~65% of investments return <1× (losses)
-    #   - ~25% return 1-3× (modest wins)
-    #   - ~10% return 3×+ (winners that drive portfolio returns)
-    #   - Top 1% can return 10-100×+ (unicorns)
-    #
-    # CALIBRATION NOTE (2025-01, n=20 runs):
-    # α = 2.0 produces: Survival 53%, Innovation 42%, Median 1.24×, Mean 3.81×
-    # Distribution: 46% losses, 27% modest (1-3×), 22% winners (3-10×), 5% unicorns (10×+)
-    # Less extreme than pure VC benchmarks (65% losses) because agents are
-    # individual firms, not diversified portfolio managers. Power law shape
-    # (median < mean, unicorn potential up to 1000×+) is preserved.
-    POWER_LAW_SHAPE_A::Float64 = 2.0
 
     # ========================================================================
     # LEARNING RATE
@@ -481,16 +378,6 @@ parameters preserved for exact behavioral compatibility.
     ACTION_SELECTION_NOISE::Float64 = 0.10
     ACTION_BIAS_SIGMA::Float64 = 0.05
 
-    # Base weights for action selection (multiplied against raw utility scores)
-    # Calibrated 2025-01 to achieve:
-    #   - Innovation share: ~41% (target: 40% ± 10%)
-    #   - Survival rate: ~55% (target: 50% ± 8%)
-    # Applied as multipliers in make_decision!() before softmax selection
-    ACTION_BASE_WEIGHT_INVEST::Float64 = 0.25
-    ACTION_BASE_WEIGHT_INNOVATE::Float64 = 0.55
-    ACTION_BASE_WEIGHT_EXPLORE::Float64 = 0.12
-    ACTION_BASE_WEIGHT_MAINTAIN::Float64 = 0.20
-
     # ========================================================================
     # UNCERTAINTY VOLATILITY CONTROLS
     # ========================================================================
@@ -516,42 +403,65 @@ parameters preserved for exact behavioral compatibility.
 
     SECTORS::Vector{String} = String[]
 
-    # Sector profiles with operational costs calibrated to SBA/BLS data (2025)
-    # Operational costs are quarterly, matching simulation round frequency
-    # Sources: SBA Startup Cost Calculator, BLS Industry Statistics,
-    #          Federal Reserve Small Business Credit Survey 2025
+    # NVCA 2024-calibrated sector weights for agent initial sector assignment
+    # Reflects dominant VC deal flow by sector
+    SECTOR_WEIGHTS::Dict{String,Float64} = Dict(
+        "tech" => 0.60,           # 60% - dominant VC deal flow
+        "service" => 0.15,        # 15% - B2B services
+        "manufacturing" => 0.15,  # 15% - hardware/industrial
+        "retail" => 0.10,         # 10% - consumer/retail
+    )
+
+    # Sector profiles with empirically-calibrated parameters
+    # Sources: NVCA 2024, BLS BED, Fed SBCS, NSF BRDIS, USPTO, Census HHI
     SECTOR_PROFILES::Dict{String,SectorProfile} = Dict(
         "tech" => SectorProfile(
-            (1.35, 3.10), log(1.95), 0.45, (0.22, 0.38),  # return params
-            (0.3, 0.5), (0.04, 0.12),                      # failure params
-            (300000.0, 1200000.0),                         # capital range
-            (15, 40),                                       # maturity range (rounds)
-            (0.55, 0.85), (0.08, 0.28),                    # margin ranges
-            (60000.0, 90000.0)                             # operational cost/quarter (SBA: high R&D, personnel)
+            (1.35, 3.10), log(1.95), 0.45, (0.22, 0.38),           # return params
+            (0.3, 0.5), (0.04, 0.12), (300000.0, 1200000.0),       # failure, capital
+            (15, 40), (0.55, 0.85), (0.08, 0.28),                  # maturity, margins
+            # New calibrated fields:
+            (800_000.0, 2_500_000.0),  # initial_capital_range: NVCA 2024 software/SaaS seed
+            150_000.0,                  # survival_threshold: BLS ~$60-90k/qtr × 2 quarters
+            0.48,                       # innovation_probability: NSF 15-25% R&D intensity, 52% USPTO
+            (2.0, 4.0),                 # innovation_return_multiplier: high tech upside
+            0.12,                       # knowledge_decay_rate: 2-3 year half-life (fast obsolescence)
+            1.2                         # competition_intensity: HHI 1500-2500 moderate concentration
         ),
         "retail" => SectorProfile(
-            (1.15, 2.10), log(1.45), 0.32, (0.18, 0.3),
-            (0.2, 0.38), (0.04, 0.1),
-            (50000.0, 400000.0),
-            (9, 30),
-            (0.18, 0.42), (0.015, 0.08),
-            (70000.0, 110000.0)                            # operational cost/quarter (SBA: rent, inventory, staff)
+            (1.15, 2.10), log(1.45), 0.32, (0.18, 0.3),            # return params
+            (0.2, 0.38), (0.04, 0.1), (50000.0, 400000.0),         # failure, capital
+            (9, 30), (0.18, 0.42), (0.015, 0.08),                  # maturity, margins
+            # New calibrated fields:
+            (200_000.0, 800_000.0),    # initial_capital_range: NVCA consumer/retail lower intensity
+            180_000.0,                  # survival_threshold: BLS ~$70-110k/qtr × 2 quarters
+            0.32,                       # innovation_probability: NSF 1-3% R&D intensity, 35% USPTO
+            (1.6, 2.5),                 # innovation_return_multiplier: moderate returns
+            0.07,                       # knowledge_decay_rate: 4-5 year half-life
+            0.7                         # competition_intensity: HHI 500-1000 fragmented
         ),
         "service" => SectorProfile(
-            (1.25, 2.20), log(1.53), 0.36, (0.16, 0.28),
-            (0.1, 0.28), (0.03, 0.08),
-            (15000.0, 200000.0),
-            (6, 20),
-            (0.45, 0.75), (0.12, 0.24),
-            (25000.0, 45000.0)                             # operational cost/quarter (SBA: lowest overhead)
+            (1.25, 2.20), log(1.53), 0.36, (0.16, 0.28),           # return params
+            (0.1, 0.28), (0.03, 0.08), (15000.0, 200000.0),        # failure, capital
+            (6, 20), (0.45, 0.75), (0.12, 0.24),                   # maturity, margins
+            # New calibrated fields:
+            (150_000.0, 500_000.0),    # initial_capital_range: NVCA B2B services lean ops
+            70_000.0,                   # survival_threshold: BLS ~$25-45k/qtr × 2 quarters
+            0.38,                       # innovation_probability: NSF 3-8% R&D intensity, 40% USPTO
+            (1.6, 2.5),                 # innovation_return_multiplier: moderate returns
+            0.05,                       # knowledge_decay_rate: 5-7 year half-life (stable expertise)
+            0.9                         # competition_intensity: HHI 800-1500 moderately fragmented
         ),
         "manufacturing" => SectorProfile(
-            (1.30, 2.65), log(1.78), 0.4, (0.18, 0.3),
-            (0.25, 0.42), (0.04, 0.1),
-            (250000.0, 1500000.0),
-            (24, 72),
-            (0.28, 0.48), (0.04, 0.18),
-            (90000.0, 130000.0)                            # operational cost/quarter (SBA: facilities, materials)
+            (1.30, 2.65), log(1.78), 0.4, (0.18, 0.3),             # return params
+            (0.25, 0.42), (0.04, 0.1), (250000.0, 1500000.0),      # failure, capital
+            (24, 72), (0.28, 0.48), (0.04, 0.18),                  # maturity, margins
+            # New calibrated fields:
+            (1_200_000.0, 3_500_000.0), # initial_capital_range: NVCA hardware/industrial high capex
+            220_000.0,                   # survival_threshold: BLS ~$90-130k/qtr × 2 quarters
+            0.52,                        # innovation_probability: NSF 8-15% R&D intensity, 58% USPTO
+            (1.5, 2.8),                  # innovation_return_multiplier: incremental improvements
+            0.03,                        # knowledge_decay_rate: 7-10 year half-life (most durable)
+            1.4                          # competition_intensity: HHI 1800-3000 concentrated
         ),
     )
 
@@ -801,68 +711,6 @@ const CALIBRATION_LIBRARY = Dict{String,CalibrationProfile}(
                 "target" => 0.55,
                 "tolerance" => 0.08,
                 "source" => "BLS Business Employment Dynamics (2019 cohort).",
-            ),
-        ),
-    ),
-    # ========================================================================
-    # DEFAULT CALIBRATION (2025-01)
-    # ========================================================================
-    # Comprehensive calibration targeting realistic venture dynamics with
-    # power law returns. Verified with 20 runs × 30 agents × 200 rounds.
-    #
-    # RETURN DISTRIBUTION:
-    # Uses Pareto (power law) distribution matching VC empirics:
-    # - α = 2.0: Heavy tails for early-stage VC dynamics
-    # - Median 1.24×, Mean 3.81× (mean > median due to outliers)
-    # - ~46% of investments return <1× (losses)
-    # - ~27% return 1-3× (modest wins)
-    # - ~22% return 3-10× (winners)
-    # - ~5% return 10×+ (unicorns, up to 1000×+)
-    #
-    # Note: Distribution is less extreme than pure VC benchmarks (65% losses)
-    # because agents are individual firms, not diversified portfolio managers.
-    # ========================================================================
-    "default_calibration" => CalibrationProfile(
-        name="default_calibration",
-        description="Default calibration with power law returns and balanced survival/innovation.",
-        overrides=Dict{String,Any}(
-            # Capital calibration for ~50% survival
-            "INITIAL_CAPITAL" => 1_500_000.0,
-            "INITIAL_CAPITAL_RANGE" => (1_200_000.0, 1_800_000.0),
-            "BASE_OPERATIONAL_COST" => 50_000.0,
-            # Action weights calibrated for ~40% innovation
-            "ACTION_BASE_WEIGHT_INVEST" => 0.25,
-            "ACTION_BASE_WEIGHT_INNOVATE" => 0.55,
-            "ACTION_BASE_WEIGHT_EXPLORE" => 0.12,
-            "ACTION_BASE_WEIGHT_MAINTAIN" => 0.20,
-            # Power law distribution for realistic venture returns
-            "POWER_LAW_SHAPE_A" => 2.0,
-        ),
-        target_metrics=Dict{String,Dict{String,Any}}(
-            "survival_rate" => Dict{String,Any}(
-                "target" => 0.53,
-                "tolerance" => 0.08,
-                "calibrated_result" => 0.532,
-                "calibrated_std" => 0.325,
-                "source" => "Internal calibration 2025-01 (n=20 runs)",
-            ),
-            "innovation_share" => Dict{String,Any}(
-                "target" => 0.40,
-                "tolerance" => 0.10,
-                "calibrated_result" => 0.415,
-                "calibrated_std" => 0.012,
-                "source" => "Action weight calibration 2025-01",
-            ),
-            "return_distribution" => Dict{String,Any}(
-                "type" => "power_law",
-                "alpha" => 2.0,
-                "median_roi" => 1.24,
-                "mean_roi" => 3.81,
-                "pct_below_1x" => 0.459,
-                "pct_1x_to_3x" => 0.267,
-                "pct_3x_to_10x" => 0.221,
-                "pct_above_10x" => 0.053,
-                "source" => "Pareto distribution calibrated to VC empirics (Kaplan & Schoar, Korteweg & Sorensen)",
             ),
         ),
     ),

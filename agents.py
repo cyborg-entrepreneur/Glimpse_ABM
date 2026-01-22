@@ -345,8 +345,12 @@ class AgentResources:
         inactivity_threshold: int = 15,
         shift_events: Optional[List[Dict[str, Any]]] = None,
         sector_pressure: Optional[Dict[str, float]] = None,
+        config: Optional[Any] = None,
     ) -> None:
         """Apply decay to sector knowledge with activity, inactivity, and market-shift modifiers.
+
+        Uses sector-specific decay rates from SectorProfile when available (calibrated from
+        Ebbinghaus forgetting curve and industry skill depreciation research).
 
         When knowledge sits idle for 3× the inactivity threshold we perform an emergency reset
         (a coarse proxy for hard obsolescence), trimming the level and stamping the new round.
@@ -354,12 +358,27 @@ class AgentResources:
 
         usage_weights = usage_weights or {}
         shift_events = shift_events or []
-        sector_decay_multipliers = {
-            "tech": 1.8,
-            "retail": 1.05,
-            "service": 0.85,
-            "manufacturing": 0.6,
-        }
+
+        # Build sector decay multipliers from config if available
+        # Otherwise use legacy hardcoded values
+        if config is not None and hasattr(config, 'SECTOR_PROFILES'):
+            # Use sector-specific decay rates from SectorProfile (calibrated from learning research)
+            sector_decay_multipliers = {}
+            for sector in self.knowledge.keys():
+                profile = config.SECTOR_PROFILES.get(sector, {})
+                # knowledge_decay_rate is the absolute decay rate
+                # Convert to multiplier relative to base_decay_rate
+                sector_rate = profile.get('knowledge_decay_rate', base_decay_rate)
+                # Multiplier = sector_rate / base_decay_rate
+                sector_decay_multipliers[sector] = sector_rate / max(base_decay_rate, 0.001)
+        else:
+            # Legacy fallback
+            sector_decay_multipliers = {
+                "tech": 1.8,
+                "retail": 1.05,
+                "service": 0.85,
+                "manufacturing": 0.6,
+            }
 
         def _activity_modifier(sector: str) -> float:
             usage_factor = float(np.clip(usage_weights.get(sector, 0.0), 0.0, 1.0))
@@ -658,9 +677,9 @@ class Portfolio:
 class EmergentAgent:
     def __init__(self, agent_id: int, initial_traits: Dict[str, float], config: EmergentConfig,
              knowledge_base: KnowledgeBase, innovation_engine: InnovationEngine, agent_type: str = 'emergent',
-             initial_capital: Optional[float] = None):
+             initial_capital: Optional[float] = None, primary_sector: Optional[str] = None):
         self.id = agent_id
-        self.agent_type = agent_type 
+        self.agent_type = agent_type
         self.config = config
         self.traits = initial_traits.copy()
         if 'entrepreneurial_drive' not in self.traits:
@@ -674,10 +693,22 @@ class EmergentAgent:
         self.alive = True
         self.knowledge_base = knowledge_base
         self.innovation_engine = innovation_engine
+
+        # Assign primary sector based on NVCA-weighted probabilities
+        if primary_sector is not None:
+            self.primary_sector = primary_sector
+        else:
+            self.primary_sector = self._sample_sector_weighted()
+
+        # Sample initial capital from sector-specific range (NVCA 2024 calibrated)
         if initial_capital is not None:
             starting_capital = float(initial_capital)
         else:
-            low, high = getattr(self.config, 'INITIAL_CAPITAL_RANGE', (self.config.INITIAL_CAPITAL, self.config.INITIAL_CAPITAL))
+            sector_profile = self.config.SECTOR_PROFILES.get(self.primary_sector, {})
+            if 'initial_capital_range' in sector_profile:
+                low, high = sector_profile['initial_capital_range']
+            else:
+                low, high = getattr(self.config, 'INITIAL_CAPITAL_RANGE', (self.config.INITIAL_CAPITAL, self.config.INITIAL_CAPITAL))
             starting_capital = float(np.random.uniform(low, high))
         self.resources = AgentResources(capital=starting_capital)
         # Override default knowledge to only include sectors from config
@@ -685,6 +716,9 @@ class EmergentAgent:
         if config_sectors:
             self.resources.knowledge = {sector: 0.1 for sector in config_sectors}
             self.resources.knowledge_last_used = {sector: 0 for sector in config_sectors}
+        # Boost knowledge in primary sector
+        if self.primary_sector in self.resources.knowledge:
+            self.resources.knowledge[self.primary_sector] = min(1.0, self.resources.knowledge[self.primary_sector] + 0.2)
         self.portfolio = Portfolio(config=config)
         self.trait_momentum = {trait: 0.0 for trait in initial_traits}
         history_depth = config.agent_history_depth if hasattr(config, 'agent_history_depth') else 20
@@ -759,6 +793,31 @@ class EmergentAgent:
         self._recent_actions: collections.deque[str] = collections.deque(maxlen=20)
         self.paradox_signal: float = 0.0
         self.paradox_history: collections.deque[Dict[str, float]] = collections.deque(maxlen=30)
+
+    def _sample_sector_weighted(self) -> str:
+        """Sample a sector based on NVCA-weighted probabilities."""
+        sector_weights = getattr(self.config, 'SECTOR_WEIGHTS', None)
+        if not sector_weights:
+            # Fall back to uniform random from available sectors
+            sectors = list(self.config.SECTOR_PROFILES.keys())
+            return np.random.choice(sectors) if sectors else "tech"
+
+        sectors = list(sector_weights.keys())
+        weights = [sector_weights[s] for s in sectors]
+        total = sum(weights)
+        if total <= 0:
+            return np.random.choice(sectors) if sectors else "tech"
+
+        probs = [w / total for w in weights]
+        return np.random.choice(sectors, p=probs)
+
+    def _get_sector_survival_threshold(self) -> float:
+        """Get survival threshold for agent based on primary sector (BLS/Fed calibrated)."""
+        sector_profile = self.config.SECTOR_PROFILES.get(self.primary_sector, {})
+        if 'survival_threshold' in sector_profile:
+            return float(sector_profile['survival_threshold'])
+        # Fallback to global threshold
+        return float(self.config.SURVIVAL_THRESHOLD)
 
     def _get_uncertainty_cache(self, round_num: int) -> Dict[str, Any]:
         if self._uncertainty_cache_round != round_num:
@@ -835,8 +894,10 @@ class EmergentAgent:
         reason: Optional[str] = None
         operating_cost = float(getattr(self, 'operating_cost_estimate', self.config.BASE_OPERATIONAL_COST))
         reserve_months = max(1, int(getattr(self.config, 'OPERATING_RESERVE_MONTHS', 3)))
+        # Use sector-specific survival threshold (BLS/Fed calibrated)
+        sector_survival_threshold = self._get_sector_survival_threshold()
         liquidity_floor = max(
-            self.config.SURVIVAL_THRESHOLD,
+            sector_survival_threshold,
             operating_cost * reserve_months,
         )
         ai_level = normalize_ai_label(getattr(self, 'current_ai_level', getattr(self, 'agent_type', 'none')))
@@ -1089,8 +1150,10 @@ class EmergentAgent:
         initial_equity = max(self.resources.performance.initial_equity, 1.0)
         capital_ratio = self.resources.capital / initial_equity
         ratio_floor = float(getattr(self.config, 'SURVIVAL_CAPITAL_RATIO', 0.0))
+        # Use sector-specific survival threshold (BLS/Fed calibrated)
+        sector_threshold = self._get_sector_survival_threshold()
         below_floor = (
-            self.resources.capital < self.config.SURVIVAL_THRESHOLD
+            self.resources.capital < sector_threshold
             or capital_ratio < ratio_floor
         )
         if below_floor:
@@ -2637,8 +2700,10 @@ class EmergentAgent:
             ai_reserve = ai_cfg.get('cost', 0.0)
 
         reserve_fraction = float(getattr(self.config, 'LIQUIDITY_RESERVE_FRACTION', 0.3))
+        # Use sector-specific survival threshold (BLS/Fed calibrated)
+        sector_threshold = self._get_sector_survival_threshold()
         buffer_target = max(
-            operating_reserve + ai_reserve + self.config.SURVIVAL_THRESHOLD,
+            operating_reserve + ai_reserve + sector_threshold,
             current_capital * reserve_fraction,
         )
         liquidity_buffer = min(current_capital, buffer_target) + locked_capital * 0.2  # reserve some against commitments

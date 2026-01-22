@@ -86,7 +86,7 @@ end
 """
 Sample a random combination signature from history.
 """
-function sample_signature(tracker::CombinationTracker; lookback::Int=100, rng::Random.AbstractRNG=Random.default_rng())::Union{String,Nothing}
+function sample_signature(tracker::CombinationTracker; lookback::Int=100, rng::AbstractRNG=Random.default_rng())::Union{String,Nothing}
     if isempty(tracker.combination_history)
         return nothing
     end
@@ -154,17 +154,29 @@ function InnovationEngine(config::EmergentConfig, knowledge_base::KnowledgeBase,
 end
 
 """
+Stable sigmoid function.
+"""
+function stable_sigmoid(x::Float64)::Float64
+    if x >= 0
+        return 1.0 / (1.0 + exp(-x))
+    else
+        exp_x = exp(x)
+        return exp_x / (1.0 + exp_x)
+    end
+end
+
+"""
 Attempt to create an innovation.
 """
 function attempt_innovation!(
     engine::InnovationEngine,
-    agent::Any,  # EmergentAgent - using Any to avoid circular dependency
+    agent::EmergentAgent,
     market_conditions::Dict{String,Any},
     round::Int;
     ai_level::String="none",
     uncertainty_perception::Union{Dict{String,Any},Nothing}=nothing,
     decision_perception::Union{Dict{String,Any},Nothing}=nothing,
-    rng::Random.AbstractRNG=Random.default_rng()
+    rng::AbstractRNG=Random.default_rng()
 )::Union{Innovation,Nothing}
     # Get accessible knowledge
     accessible_knowledge = get_accessible_knowledge(
@@ -179,16 +191,19 @@ function attempt_innovation!(
         return nothing
     end
 
-    # Calculate innovation probability
-    base_prob = engine.config.INNOVATION_PROBABILITY
+    # Calculate innovation probability using sector-specific rate (NSF BRDIS/USPTO calibrated)
+    sector_profile = get(engine.config.SECTOR_PROFILES, agent.primary_sector, nothing)
+    base_prob = if !isnothing(sector_profile) && hasproperty(sector_profile, :innovation_probability)
+        sector_profile.innovation_probability
+    else
+        engine.config.INNOVATION_PROBABILITY
+    end
     competence_score = (
         get(agent.traits, "innovativeness", 0.5) * 0.6 +
-        get(agent.resources.capabilities, "innovation", 0.1) * 0.4
+        get(agent.capabilities, "innovation", 0.1) * 0.4
     )
 
-    # REMOVED: Hardcoded ai_bonus_map that gave direct tier-based bonuses
-    # Previously: ai_bonus_map = Dict("none" => 0.0, "basic" => 0.12, "advanced" => 0.25, "premium" => 0.35)
-    # Now AI bonus emerges purely from agent's learned trust and reliability estimates
+    ai_bonus_map = Dict("none" => 0.0, "basic" => 0.12, "advanced" => 0.25, "premium" => 0.35)
     avg_trust = 0.5
     dynamic_bonus = 0.0
     clarity_signal = 0.0
@@ -199,7 +214,7 @@ function attempt_innovation!(
         clarity_signal = ((stable_sigmoid(1.0 - ignorance) + stable_sigmoid(1.0 - indeterminism)) / 2.0) - 0.5
     end
 
-    # AI learning profile adjustments - dynamic bonus based on LEARNED trust and reliability (emergent)
+    # AI learning profile adjustments
     if ai_level != "none" && !isnothing(agent.ai_learning)
         learning_profile = agent.ai_learning
         trust_values = [
@@ -219,8 +234,8 @@ function attempt_innovation!(
         dynamic_bonus = (avg_trust - 0.5) * 0.2 + reliability * 0.25 + clarity_signal * 0.15
     end
 
-    # AI bonus now purely from emergent learning, no hardcoded tier bonuses
-    ai_bonus = clamp(dynamic_bonus, -0.2, 0.3)
+    structural_bonus = get(ai_bonus_map, ai_level, 0.0) * max(0.0, clarity_signal + 0.5)
+    ai_bonus = clamp(structural_bonus + dynamic_bonus, -0.2, 0.3)
 
     human_ingenuity_bonus = (
         get(agent.traits, "exploration_tendency", 0.5) * 0.15 +
@@ -251,7 +266,7 @@ function attempt_innovation!(
     end
 
     # Determine innovation type
-    experience_units = Float64(agent.resources.experience_units)
+    experience_units = get(agent.experience, "units", 0.0)
     innovation_type = determine_innovation_type(
         engine,
         accessible_knowledge,
@@ -266,21 +281,19 @@ function attempt_innovation!(
     n_components = get_component_count(innovation_type; rng=rng)
 
     # Check for reuse
-    reuse_prob = engine.config.INNOVATION_REUSE_PROBABILITY
-    lookback = engine.config.INNOVATION_REUSE_LOOKBACK
+    reuse_prob = get(engine.config, :INNOVATION_REUSE_PROBABILITY, 0.0)
+    lookback = get(engine.config, :INNOVATION_REUSE_LOOKBACK, 100)
     selected_knowledge = nothing
     reuse_signature = nothing
 
-    # FIXED: Remove hardcoded tier_reuse_shift - let effect emerge through info_breadth
-    # Previously had direct tier shifts (none=+0.05, premium=-0.08)
-    # Now reuse probability emerges from info_breadth: broader info access → more novel
-    # combinations available → lower tendency to reuse existing combinations
-    ai_cfg = get(engine.config.AI_LEVELS, ai_level, get(engine.config.AI_LEVELS, "none", Dict()))
-    info_breadth = Float64(ai_cfg.info_breadth)
-    # Higher info_breadth reduces reuse (access to broader knowledge enables novel combinations)
-    reuse_shift = -info_breadth * 0.12
+    tier_reuse_shift = Dict(
+        "none" => 0.05,
+        "basic" => 0.07,
+        "advanced" => -0.03,
+        "premium" => -0.08
+    )
 
-    effective_reuse_prob = clamp(reuse_prob + reuse_shift, 0.02, 0.75)
+    effective_reuse_prob = clamp(reuse_prob + get(tier_reuse_shift, ai_level, 0.0), 0.02, 0.75)
 
     if reuse_prob > 0 && rand(rng) < effective_reuse_prob
         reuse_signature = sample_signature(engine.combination_tracker; lookback=lookback, rng=rng)
@@ -359,7 +372,7 @@ function determine_innovation_type(
     market_conditions::Dict{String,Any};
     ai_assisted::Bool=false,
     experience_units::Float64=0.0,
-    rng::Random.AbstractRNG=Random.default_rng()
+    rng::AbstractRNG=Random.default_rng()
 )::String
     base_probabilities = Dict{String,Float64}(
         "incremental" => 0.4 + max(experience_units, 0) * 0.01,
@@ -392,7 +405,7 @@ end
 """
 Get the number of knowledge components for an innovation type.
 """
-function get_component_count(innovation_type::String; rng::Random.AbstractRNG=Random.default_rng())::Int
+function get_component_count(innovation_type::String; rng::AbstractRNG=Random.default_rng())::Int
     if innovation_type == "incremental"
         return rand(rng) < 0.7 ? 2 : 3
     elseif innovation_type == "architectural"
@@ -415,7 +428,7 @@ function select_knowledge_combination(
     agent_traits::Dict{String,Float64},
     ai_learning_profile::Union{AILearningProfile,Nothing},
     ai_level::String;
-    rng::Random.AbstractRNG=Random.default_rng()
+    rng::AbstractRNG=Random.default_rng()
 )::Union{Vector{Knowledge},Nothing}
     if isempty(accessible_knowledge) || length(accessible_knowledge) < n_components
         return nothing
@@ -492,7 +505,7 @@ function select_knowledge_combination(
         end
         weights ./= total_weight
 
-        choice_pos = weighted_choice(collect(1:length(remaining_indices)), weights; rng=rng)
+        choice_pos = weighted_choice(1:length(remaining_indices), weights; rng=rng)
         next_idx = remaining_indices[choice_pos]
         deleteat!(remaining_indices, choice_pos)
 
@@ -550,7 +563,7 @@ Determine the sector for an innovation.
 """
 function determine_innovation_sector(
     engine::InnovationEngine,
-    agent::Any,  # EmergentAgent - using Any to avoid circular dependency
+    agent::EmergentAgent,
     selected_knowledge::Vector{Knowledge}
 )::String
     # Use knowledge base domain-to-sector mapping
@@ -579,12 +592,12 @@ function create_innovation(
     engine::InnovationEngine,
     knowledge_pieces::Vector{Knowledge},
     innovation_type::String,
-    agent::Any,  # EmergentAgent - using Any to avoid circular dependency
+    agent::EmergentAgent,
     round::Int;
     ai_assisted::Bool=false,
     ai_domains_used::Vector{String}=String[],
     sector::Union{String,Nothing}=nothing,
-    rng::Random.AbstractRNG=Random.default_rng()
+    rng::AbstractRNG=Random.default_rng()
 )::Innovation
     knowledge_levels = [k.level for k in knowledge_pieces]
     base_quality = mean(knowledge_levels) * 0.7 + rand(rng) * 0.2 + 0.2
@@ -645,7 +658,7 @@ function evaluate_innovation_success!(
     innovation::Innovation,
     market_conditions::Dict{String,Any},
     market_innovations::Vector{Innovation};
-    rng::Random.AbstractRNG=Random.default_rng()
+    rng::AbstractRNG=Random.default_rng()
 )::Tuple{Bool,Float64,Float64}
     potential = calculate_potential(innovation, market_conditions)
 
@@ -663,9 +676,18 @@ function evaluate_innovation_success!(
            inn.sector == innovation.sector
     ]
 
+    # Get sector-specific competition intensity (Census HHI-calibrated)
+    sector_profile = get(engine.config.SECTOR_PROFILES, innovation.sector, nothing)
+    sector_competition_intensity = if !isnothing(sector_profile) && hasproperty(sector_profile, :competition_intensity)
+        sector_profile.competition_intensity
+    else
+        1.0  # Default intensity
+    end
+
     competition_factor = if !isempty(competing_innovations)
         competitor_strength = mean([c.quality * c.novelty for c in competing_innovations])
-        1 - min(0.5, competitor_strength)
+        # Apply sector-specific intensity to competition effects
+        1 - min(0.5, competitor_strength * sector_competition_intensity)
     else
         1.0
     end
@@ -700,8 +722,15 @@ function evaluate_innovation_success!(
 
         impact = clamp(impact * (1.0 + (novelty - 0.5) * 0.25), 0.05, 2.5)
 
-        base_multiple = 1.25 + engine.config.INNOVATION_SUCCESS_BASE_RETURN
-        mult_range = engine.config.INNOVATION_SUCCESS_RETURN_MULTIPLIER
+        base_multiple = 1.25 + get(engine.config, :INNOVATION_SUCCESS_BASE_RETURN, 0.25)
+
+        # Use sector-specific innovation return multiplier (R&D intensity calibrated)
+        sector_profile = get(engine.config.SECTOR_PROFILES, innovation.sector, nothing)
+        mult_range = if !isnothing(sector_profile) && hasproperty(sector_profile, :innovation_return_multiplier)
+            sector_profile.innovation_return_multiplier
+        else
+            get(engine.config, :INNOVATION_SUCCESS_RETURN_MULTIPLIER, (1.8, 3.0))
+        end
 
         low, high = if isa(mult_range, Tuple) && length(mult_range) >= 2
             Float64(mult_range[1]), Float64(mult_range[2])
@@ -718,7 +747,7 @@ function evaluate_innovation_success!(
         novelty_bonus = 1.0 + (novelty - 0.5) * 0.55
         cash_multiple = clamp((base_multiple + impact * impact_gain) * scarcity_bonus * novelty_bonus, 1.1, 8.5)
     else
-        recovery_ratio = engine.config.INNOVATION_FAIL_RECOVERY_RATIO
+        recovery_ratio = get(engine.config, :INNOVATION_FAIL_RECOVERY_RATIO, 0.15)
         # Linear interpolation for recovery floor
         novelty_clamped = clamp(innovation.novelty, 0.05, 0.95)
         recovery_floor = 0.78 - (novelty_clamped - 0.05) / (0.95 - 0.05) * (0.78 - 0.42)

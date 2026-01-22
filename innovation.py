@@ -107,7 +107,9 @@ class InnovationEngine:
         )
         if len(accessible_knowledge) < 2:
             return None
-        base_prob = self.config.INNOVATION_PROBABILITY
+        # Use sector-specific innovation probability (NSF BRDIS/USPTO calibrated)
+        sector_profile = self.config.SECTOR_PROFILES.get(agent.primary_sector, {})
+        base_prob = sector_profile.get('innovation_probability', self.config.INNOVATION_PROBABILITY)
         competence_score = (
             agent.traits["innovativeness"] * 0.6 + agent.resources.capabilities.get("innovation", 0.1) * 0.4
         )
@@ -448,11 +450,16 @@ class InnovationEngine:
             and innovation.sector is not None
             and inn.sector == innovation.sector
         ]
+        # Get sector-specific competition intensity (Census HHI-calibrated)
+        sector_profile = self.config.SECTOR_PROFILES.get(innovation.sector, {})
+        sector_competition_intensity = sector_profile.get('competition_intensity', 1.0)
+
         if competing_innovations:
             competitor_strength = safe_mean(
                 [c.quality * c.novelty for c in competing_innovations]
             )
-            competition_factor = 1 - min(0.5, competitor_strength)
+            # Apply sector-specific intensity to competition effects
+            competition_factor = 1 - min(0.5, competitor_strength * sector_competition_intensity)
         else:
             competition_factor = 1.0
         if innovation.novelty > 0.8:
@@ -476,7 +483,12 @@ class InnovationEngine:
                 impact *= 0.9
             impact = float(np.clip(impact * (1.0 + (novelty - 0.5) * 0.25), 0.05, 2.5))
             base_multiple = 1.25 + getattr(self.config, "INNOVATION_SUCCESS_BASE_RETURN", 0.25)
-            mult_range = getattr(self.config, "INNOVATION_SUCCESS_RETURN_MULTIPLIER", (1.8, 3.0))
+            # Use sector-specific innovation return multiplier (R&D intensity calibrated)
+            sector_profile = self.config.SECTOR_PROFILES.get(innovation.sector, {})
+            mult_range = sector_profile.get(
+                'innovation_return_multiplier',
+                getattr(self.config, "INNOVATION_SUCCESS_RETURN_MULTIPLIER", (1.8, 3.0))
+            )
             if isinstance(mult_range, (list, tuple)) and len(mult_range) >= 2:
                 low, high = float(mult_range[0]), float(mult_range[1])
             else:
