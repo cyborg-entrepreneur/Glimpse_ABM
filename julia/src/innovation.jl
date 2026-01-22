@@ -154,23 +154,11 @@ function InnovationEngine(config::EmergentConfig, knowledge_base::KnowledgeBase,
 end
 
 """
-Stable sigmoid function.
-"""
-function stable_sigmoid(x::Float64)::Float64
-    if x >= 0
-        return 1.0 / (1.0 + exp(-x))
-    else
-        exp_x = exp(x)
-        return exp_x / (1.0 + exp_x)
-    end
-end
-
-"""
 Attempt to create an innovation.
 """
 function attempt_innovation!(
     engine::InnovationEngine,
-    agent::EmergentAgent,
+    agent::Any,  # EmergentAgent - using Any to avoid circular dependency
     market_conditions::Dict{String,Any},
     round::Int;
     ai_level::String="none",
@@ -563,7 +551,7 @@ Determine the sector for an innovation.
 """
 function determine_innovation_sector(
     engine::InnovationEngine,
-    agent::EmergentAgent,
+    agent::Any,  # EmergentAgent - using Any to avoid circular dependency
     selected_knowledge::Vector{Knowledge}
 )::String
     # Use knowledge base domain-to-sector mapping
@@ -592,7 +580,7 @@ function create_innovation(
     engine::InnovationEngine,
     knowledge_pieces::Vector{Knowledge},
     innovation_type::String,
-    agent::EmergentAgent,
+    agent::Any,  # EmergentAgent - using Any to avoid circular dependency
     round::Int;
     ai_assisted::Bool=false,
     ai_domains_used::Vector{String}=String[],

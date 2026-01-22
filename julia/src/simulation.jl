@@ -116,7 +116,7 @@ function EmergentSimulation(;
                 break
             end
         end
-        agent = EmergentAgent(i, config; rng=rng, initial_ai_level=initial_tier)
+        agent = EmergentAgent(i, config; rng=rng, fixed_ai_level=initial_tier)
         push!(agents, agent)
     end
 
@@ -1150,7 +1150,7 @@ function EnhancedSimulation(;
                 break
             end
         end
-        agent = EmergentAgent(i, config; rng=rng, initial_ai_level=initial_tier)
+        agent = EmergentAgent(i, config; rng=rng, fixed_ai_level=initial_tier)
         push!(agents, agent)
     end
 

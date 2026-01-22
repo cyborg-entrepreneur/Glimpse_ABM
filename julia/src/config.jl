@@ -101,6 +101,7 @@ parameters preserved for exact behavioral compatibility.
     SURVIVAL_CAPITAL_RATIO::Float64 = 0.38
     INSOLVENCY_GRACE_ROUNDS::Int = 7
     RANDOM_SEED::Int = 42
+    USE_NUMPY_RNG::Bool = false  # Use NumpyRNG for cross-language reproducibility
 
     BASE_OPERATIONAL_COST::Float64 = 50000.0
     COMPETITION_COST_MULTIPLIER::Float64 = 150.0

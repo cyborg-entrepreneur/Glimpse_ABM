@@ -60,6 +60,7 @@ mutable struct EmergentAgent
     id::Int
     resources::AgentResources
     config::EmergentConfig
+    operating_cost_estimate::Float64  # Estimated operating cost per round
 
     # Primary sector (assigned at creation based on NVCA sector weights)
     primary_sector::String
@@ -137,10 +138,19 @@ function EmergentAgent(
     # Boost knowledge in primary sector
     resources.knowledge[sector] = min(1.0, get(resources.knowledge, sector, 0.1) + 0.2)
 
+    # Initialize operating cost estimate from sector profile
+    sector_profile = get(config.SECTOR_PROFILES, sector, nothing)
+    initial_cost_estimate = if !isnothing(sector_profile) && hasproperty(sector_profile, :operational_cost_range)
+        (sector_profile.operational_cost_range[1] + sector_profile.operational_cost_range[2]) / 2.0
+    else
+        config.BASE_OPERATIONAL_COST
+    end
+
     return EmergentAgent(
         id,
         resources,
         config,
+        initial_cost_estimate,  # operating_cost_estimate
         sector,  # primary_sector
         traits,
         get(traits, "uncertainty_tolerance", 0.5),
@@ -546,7 +556,8 @@ Process matured investments and return outcomes.
 function process_matured_investments!(
     agent::EmergentAgent,
     market::MarketEnvironment,
-    round::Int
+    round::Int;
+    market_conditions::Union{Dict{String,Any},Nothing} = nothing
 )::Vector{Dict{String,Any}}
     if !agent.alive
         return Dict{String,Any}[]
@@ -555,7 +566,8 @@ function process_matured_investments!(
     matured_outcomes = Dict{String,Any}[]
     remaining_investments = Dict{String,Any}[]
 
-    market_conditions = get_market_conditions(market)
+    # Use provided market_conditions or fetch from market
+    market_conditions = isnothing(market_conditions) ? get_market_conditions(market) : market_conditions
 
     for investment in agent.active_investments
         if investment["maturity_round"] <= round
@@ -703,24 +715,6 @@ end
 
 # Note: stable_sigmoid is defined in innovation.jl
 
-"""
-Fast mean for collections, returns 0.0 for empty.
-"""
-function fast_mean(vals)::Float64
-    if isempty(vals)
-        return 0.0
-    end
-    s = 0.0
-    n = 0
-    for v in vals
-        if !ismissing(v) && isfinite(v)
-            s += v
-            n += 1
-        end
-    end
-    return n > 0 ? s / n : 0.0
-end
-
 # ============================================================================
 # AI PERFORMANCE METRICS
 # ============================================================================
@@ -734,9 +728,9 @@ function compute_ai_performance_metrics(agent::EmergentAgent)::Dict{String,Any}
 
     # Basic ROI metrics
     overall_roic = compute_roic(perf)
-    invest_roic = compute_roic(perf; action="invest")
-    innovate_roic = compute_roic(perf; action="innovate")
-    explore_roic = compute_roic(perf; action="explore")
+    invest_roic = compute_roic(perf, "invest")
+    innovate_roic = compute_roic(perf, "innovate")
+    explore_roic = compute_roic(perf, "explore")
 
     metrics["overall_roic"] = overall_roic
     metrics["invest_roic"] = invest_roic
@@ -1043,7 +1037,7 @@ function calculate_investment_utility(
 
     # Performance adjustments
     perf = agent.resources.performance
-    invest_roic = compute_roic(perf; action="invest")
+    invest_roic = compute_roic(perf, "invest")
 
     # Locked capital
     locked = sum(inv["amount"] for inv in agent.active_investments; init=0.0)
@@ -1104,7 +1098,7 @@ function calculate_innovation_utility(
     rd_deployed = get(agent.resources.performance.deployed_by_action, "innovate", 0.0)
     rd_burden = clamp(rd_deployed / max(agent.resources.performance.initial_equity, 1.0), 0.0, 2.0)
 
-    innovate_roic = compute_roic(agent.resources.performance; action="innovate")
+    innovate_roic = compute_roic(agent.resources.performance, "innovate")
     loss_ratio = max(0.0, -innovate_roic)
 
     risk_tolerance = Float64(get(agent.traits, "uncertainty_tolerance", 0.5))
@@ -1161,7 +1155,7 @@ function calculate_exploration_utility(
         recursion_penalty += 0.12 * max(0.0, recursive_unc - 0.5)
     end
 
-    explore_roic = compute_roic(agent.resources.performance; action="explore")
+    explore_roic = compute_roic(agent.resources.performance, "explore")
     momentum_bonus = clamp(explore_roic, -0.5, 0.5) * 0.2
 
     risk_tolerance = Float64(get(agent.traits, "uncertainty_tolerance", 0.5))
@@ -1204,7 +1198,14 @@ function calculate_maintain_utility(
     buffer_pressure = stable_sigmoid(2.0 - capital_buffer_in_rounds)
 
     # Diversification (use active investments as proxy)
-    n_sectors = length(unique(get(inv, "opportunity", Opportunity()).sector for inv in agent.active_investments))
+    sectors_in_portfolio = String[]
+    for inv in agent.active_investments
+        opp = get(inv, "opportunity", nothing)
+        if !isnothing(opp) && !isnothing(opp.sector)
+            push!(sectors_in_portfolio, opp.sector)
+        end
+    end
+    n_sectors = length(unique(sectors_in_portfolio))
     diversification = min(1.0, n_sectors / 4.0)
 
     practical_unc = Float64(get(get(perception, "practical_indeterminism", Dict()), "level", 0.5))
@@ -1238,9 +1239,11 @@ function evaluate_opportunity_basic(
     opportunity::Opportunity,
     market_conditions::Dict{String,Any}
 )::Float64
-    # Expected profit margin
-    expected_margin = opportunity.expected_return - 1.0
-    uncertainty_adjusted = expected_margin * (1.0 - opportunity.uncertainty * 0.5)
+    # Expected profit margin (using latent return potential)
+    expected_margin = opportunity.latent_return_potential - 1.0
+    # Use complexity as a proxy for uncertainty
+    uncertainty = opportunity.complexity
+    uncertainty_adjusted = expected_margin * (1.0 - uncertainty * 0.5)
 
     score = uncertainty_adjusted * (1.0 + get(agent.traits, "uncertainty_tolerance", 0.5))
 
@@ -1280,9 +1283,9 @@ function apply_uncertainty_adjustments(
     adjusted *= social_bonus
 
     # Creator bonus
-    if opportunity.creator_id != -1
+    if !isnothing(opportunity.created_by)
         adjusted *= 1.1
-        if opportunity.creator_id == agent.id
+        if opportunity.created_by == agent.id
             adjusted *= 1.2
         end
     end
@@ -1355,7 +1358,9 @@ function make_decision!(
     round_num::Int;
     uncertainty_env::Union{KnightianUncertaintyEnvironment,Nothing} = nothing,
     neighbor_agents::Vector{EmergentAgent} = EmergentAgent[],
-    ai_level_override::Union{String,Nothing} = nothing
+    ai_level_override::Union{String,Nothing} = nothing,
+    innovation_engine::Union{InnovationEngine,Nothing} = nothing,
+    info_system::Union{InformationSystem,Nothing} = nothing
 )::Dict{String,Any}
     if !agent.alive
         return Dict{String,Any}(

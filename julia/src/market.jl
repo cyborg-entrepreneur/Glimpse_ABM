@@ -452,7 +452,7 @@ function apply_branch_feedback!(market::MarketEnvironment, branch_name::String, 
     end
 
     profile = params["profile"]
-    rate = get(market.config.BRANCH_FEEDBACK_RATE, 0.02)
+    rate = market.config.BRANCH_FEEDBACK_RATE
     feedback = clamp(mean_roi, -1.0, 1.0) * rate
 
     # Adjust log_mu based on ROI
@@ -567,7 +567,7 @@ function get_demand_adjustments(market::MarketEnvironment, sector::String)::Dict
     end
 
     # Crowding calculations
-    crowd_threshold = get(market.config.RETURN_DEMAND_CROWDING_THRESHOLD, 0.35)
+    crowd_threshold = market.config.RETURN_DEMAND_CROWDING_THRESHOLD
     flow_share = 0.0
     if haskey(market.crowding_metrics, "share_invest")
         flow_share = get(market.crowding_metrics, "share_invest", 0.25)
@@ -576,13 +576,13 @@ function get_demand_adjustments(market::MarketEnvironment, sector::String)::Dict
     crowd_excess = max(0.0, flow_share - crowd_threshold)
     crowd_relief = max(0.0, crowd_threshold - flow_share)
 
-    penalty_strength = get(market.config.RETURN_DEMAND_CROWDING_PENALTY, 0.4)
+    penalty_strength = market.config.RETURN_DEMAND_CROWDING_PENALTY
 
     # Convex crowding penalty and relief
     return_penalty = 1.0 - penalty_strength * crowd_excess^2
     return_penalty *= 1.0 + 0.35 * crowd_relief^2
 
-    failure_pressure = 1.0 + get(market.config.FAILURE_DEMAND_PRESSURE, 0.25) * crowd_excess^2
+    failure_pressure = 1.0 + market.config.FAILURE_DEMAND_PRESSURE * crowd_excess^2
     failure_pressure *= 1.0 - 0.2 * crowd_relief^2
 
     # Supply/demand adjustments
@@ -722,7 +722,7 @@ function update_macro_regime!(
     end
 
     # Crowding effects
-    crowd_threshold = get(market.config.RETURN_DEMAND_CROWDING_THRESHOLD, 0.35)
+    crowd_threshold = market.config.RETURN_DEMAND_CROWDING_THRESHOLD
     if crowding > crowd_threshold
         penalty = 0.05 * (crowding - crowd_threshold)
         if haskey(idx_map, "recession")
@@ -1200,8 +1200,9 @@ function spawn_opportunity_from_innovation!(
     cash_multiple::Float64
 )
     sector = isnothing(innovation.sector) ? "tech" : innovation.sector
-    scarcity = clamp(innovation.scarcity, 0.0, 1.0)
-    novelty = clamp(innovation.novelty, 0.0, 1.0)
+    # Handle potential Nothing values with defaults
+    scarcity = clamp(something(innovation.scarcity, 0.5), 0.0, 1.0)
+    novelty = clamp(something(innovation.novelty, 0.5), 0.0, 1.0)
 
     scarcity_scale = 0.85 + scarcity * 0.7
     novelty_scale = 0.9 + novelty * 0.6
@@ -1231,7 +1232,7 @@ function spawn_opportunity_from_innovation!(
         complexity=clamp(0.3 + innovation.quality * 0.3, 0.3, 1.0),
         discovered=false,
         discovery_round=market.current_round,
-        creator_id=innovation.creator_id,
+        created_by=innovation.creator_id,
         config=market.config,
         sector=branch_name,
         capital_requirements=capital_req,

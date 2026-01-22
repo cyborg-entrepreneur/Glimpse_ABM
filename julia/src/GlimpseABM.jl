@@ -24,6 +24,7 @@ License: MIT
 module GlimpseABM
 
 using Random
+using Random: AbstractRNG  # Explicitly import to avoid ambiguity with RandomNumbers
 using Statistics
 using LinearAlgebra
 using Distributions
@@ -33,6 +34,9 @@ using Dates
 # Core configuration and models
 include("config.jl")
 include("models.jl")
+
+# Utilities (loaded early for stable_sigmoid and other helpers)
+include("utils.jl")
 
 # Knowledge and information systems
 include("knowledge.jl")
@@ -47,8 +51,7 @@ include("uncertainty.jl")
 include("agents.jl")
 include("simulation.jl")
 
-# Utilities
-include("utils.jl")
+# I/O utilities
 include("io.jl")
 
 # NumPy-compatible RNG for cross-language reproducibility
