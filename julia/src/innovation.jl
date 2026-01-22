@@ -274,14 +274,16 @@ function attempt_innovation!(
     selected_knowledge = nothing
     reuse_signature = nothing
 
-    tier_reuse_shift = Dict(
-        "none" => 0.05,
-        "basic" => 0.07,
-        "advanced" => -0.03,
-        "premium" => -0.08
-    )
-
-    effective_reuse_prob = clamp(reuse_prob + get(tier_reuse_shift, ai_level, 0.0), 0.02, 0.75)
+    # FIXED: Remove hardcoded tier_reuse_shift - let effect emerge through info_breadth
+    # Previously had direct tier shifts (none=+0.05, premium=-0.08)
+    # Now reuse probability emerges from info_breadth: broader info access → more novel
+    # combinations available → lower tendency to reuse existing combinations
+    ai_levels = get(engine.config, :AI_LEVELS, Dict())
+    ai_cfg = get(ai_levels, ai_level, get(ai_levels, "none", Dict()))
+    info_breadth = Float64(get(ai_cfg, "info_breadth", get(ai_cfg, :info_breadth, 0.0)))
+    # Higher info_breadth reduces reuse (access to broader knowledge enables novel combinations)
+    reuse_shift = -info_breadth * 0.12
+    effective_reuse_prob = clamp(reuse_prob + reuse_shift, 0.02, 0.75)
 
     if reuse_prob > 0 && rand(rng) < effective_reuse_prob
         reuse_signature = sample_signature(engine.combination_tracker; lookback=lookback, rng=rng)

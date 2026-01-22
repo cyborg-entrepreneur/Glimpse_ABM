@@ -868,7 +868,11 @@ class KnightianUncertaintyEnvironment:
         invest_hhi = action_summary.get("invest_hhi", 0.0)
         premium_share = float(ai_shares[3]) if ai_shares.size else 0.0
         tier_reuse_map = action_summary.get("tier_reuse_pressure", {})
-        premium_reuse = float(tier_reuse_map.get("premium", 0.0))
+        # FIXED: Use average reuse across all tiers instead of singling out premium
+        # Previously: premium_reuse = float(tier_reuse_map.get("premium", 0.0))
+        # This created artificial bias against premium tier
+        reuse_values = [float(v) for v in tier_reuse_map.values() if v is not None]
+        avg_reuse = float(np.mean(reuse_values)) if reuse_values else 0.0
         knowledge_overlap = float(action_summary.get("sector_hhi", 0.0))
         agent_count = max(1, getattr(self.config, "N_AGENTS", 1))
         alive_agents = getattr(self, "_last_alive_agents", agent_count)
@@ -890,7 +894,7 @@ class KnightianUncertaintyEnvironment:
                 crowding_component * scale
                 + vol_w * volatility
                 + herd_w * ai_herding_intensity
-                + premium_reuse_w * premium_reuse,
+                + premium_reuse_w * avg_reuse,  # FIXED: tier-agnostic reuse
                 0.0,
                 1.0,
             )
