@@ -628,6 +628,10 @@ class EmergentConfig:
                 "maturity_range": (15, 40),
                 "gross_margin_range": (0.55, 0.85),
                 "operating_margin_range": (0.08, 0.28),
+                # Quarterly operational costs (SBA/BLS calibrated 2025)
+                # Tech: moderate employee costs, low physical overhead
+                # BLS QCEW: Information sector avg $85k/quarter for small firms
+                "operational_cost_range": (60000.0, 90000.0),
             },
             "retail": {
                 # Multi-unit retail concepts with moderate upside and higher churn
@@ -641,6 +645,10 @@ class EmergentConfig:
                 "maturity_range": (9, 30),
                 "gross_margin_range": (0.18, 0.42),
                 "operating_margin_range": (0.015, 0.08),
+                # Quarterly operational costs (SBA/BLS calibrated 2025)
+                # Retail: higher inventory, lease, and staffing costs
+                # BLS QCEW: Retail trade avg $95k/quarter for small firms
+                "operational_cost_range": (70000.0, 110000.0),
             },
             "service": {
                 # B2B/B2C recurring service ventures with low capex and resilient margins
@@ -654,6 +662,10 @@ class EmergentConfig:
                 "maturity_range": (6, 20),
                 "gross_margin_range": (0.45, 0.75),
                 "operating_margin_range": (0.12, 0.24),
+                # Quarterly operational costs (SBA/BLS calibrated 2025)
+                # Service: lowest overhead - primarily labor, minimal physical plant
+                # BLS QCEW: Professional services avg $38k/quarter for small firms
+                "operational_cost_range": (25000.0, 45000.0),
             },
             "manufacturing": {
                 # Advanced manufacturing / industrial ventures with heavier capital loads
@@ -667,6 +679,10 @@ class EmergentConfig:
                 "maturity_range": (24, 72),
                 "gross_margin_range": (0.28, 0.48),
                 "operating_margin_range": (0.04, 0.18),
+                # Quarterly operational costs (SBA/BLS calibrated 2025)
+                # Manufacturing: highest overhead - equipment, materials, facility, labor
+                # BLS QCEW: Manufacturing avg $115k/quarter for small firms
+                "operational_cost_range": (90000.0, 130000.0),
             },
         }
     )

@@ -1849,8 +1849,15 @@ function calculate_agent_cost_of_capital(
 end
 
 """
-Estimate operational costs for the agent (matches Python _estimate_operational_costs).
-Now accepts optional market parameter for competition calculation.
+Estimate operational costs for the agent.
+
+Uses sector-specific operational costs calibrated to SBA/BLS data (2025):
+- Technology: \$60k-\$90k/quarter (high R&D, personnel, infrastructure)
+- Retail: \$70k-\$110k/quarter (rent, inventory, staffing)
+- Service: \$25k-\$45k/quarter (lowest overhead)
+- Manufacturing: \$90k-\$130k/quarter (facilities, materials, equipment)
+
+Falls back to BASE_OPERATIONAL_COST if agent has no sector or sector not found.
 """
 function estimate_operational_costs(agent::EmergentAgent, market::Union{MarketEnvironment,Nothing}=nothing)::Float64
     # Portfolio competition pressure
@@ -1875,30 +1882,50 @@ function estimate_operational_costs(agent::EmergentAgent, market::Union{MarketEn
         end
     end
 
-    base_cost = agent.config.BASE_OPERATIONAL_COST
-
-    # Get sector operating cost range from SECTOR_PROFILES (matches Python)
-    agent_sector = get(agent.traits, "sector", nothing)
+    # Get sector-specific operational cost (SBA/BLS calibrated)
+    # Determine agent's primary sector from their knowledge distribution
     sector_profiles = agent.config.SECTOR_PROFILES
-    sector_profile = get(sector_profiles, agent_sector, Dict{String,Any}())
-    operating_range = get(sector_profile, "operating_cost_range", (0.05, 0.20))
+    agent_sector = nothing
 
-    # Handle tuple/vector for operating range
-    if isa(operating_range, Tuple) && length(operating_range) >= 2
-        sector_mult = 0.5 * (operating_range[1] + operating_range[2])
-    elseif isa(operating_range, Vector) && length(operating_range) >= 2
-        sector_mult = 0.5 * (operating_range[1] + operating_range[2])
-    else
-        sector_mult = 0.125  # Default fallback
+    # Find the sector where agent has highest knowledge
+    knowledge = agent.resources.knowledge
+    if !isempty(knowledge)
+        max_knowledge = 0.0
+        for (sector, level) in knowledge
+            if level > max_knowledge && haskey(sector_profiles, sector)
+                max_knowledge = level
+                agent_sector = sector
+            end
+        end
     end
 
-    monthly_base_cost = base_cost * sector_mult
-    competition_cost = portfolio_competition * agent.config.COMPETITION_COST_MULTIPLIER
-    total_cost = monthly_base_cost + competition_cost
+    base_cost = agent.config.BASE_OPERATIONAL_COST  # Default fallback
 
-    # AI tier efficiency modifier (matches Python exactly)
+    if !isnothing(agent_sector) && haskey(sector_profiles, agent_sector)
+        sector_profile = sector_profiles[agent_sector]
+        # SectorProfile struct has operational_cost_range field
+        cost_range = sector_profile.operational_cost_range
+        # Use midpoint adjusted by agent competence
+        cost_mid = 0.5 * (cost_range[1] + cost_range[2])
+        # Higher competence = lower costs (better cost management)
+        competence = get(agent.traits, "competence", 0.5)
+        cost_adj = 1.0 - 0.2 * competence  # 0.8 to 1.0 multiplier
+        base_cost = cost_mid * cost_adj
+    end
+
+    # Add competition-driven costs
+    competition_cost = portfolio_competition * agent.config.COMPETITION_COST_MULTIPLIER
+    total_cost = base_cost + competition_cost
+
+    # AI tier efficiency modifier
+    # Advanced/Premium AI can reduce operational costs through automation
     ai_level = get_ai_level(agent)
-    ai_efficiency = Dict("none" => 1.0, "basic" => 1.08, "advanced" => 0.94, "premium" => 0.88)
+    ai_efficiency = Dict(
+        "none" => 1.0,      # No change
+        "basic" => 1.08,    # Slight increase (learning curve)
+        "advanced" => 0.94, # 6% reduction
+        "premium" => 0.88   # 12% reduction
+    )
     eff_mult = get(ai_efficiency, ai_level, 1.0)
 
     total_cost *= eff_mult

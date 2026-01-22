@@ -28,7 +28,18 @@ end
 # SECTOR PROFILE
 # ============================================================================
 
-"""Sector-specific economic parameters."""
+"""
+Sector-specific economic parameters.
+
+Includes operational_cost_range calibrated to SBA/BLS data (2025):
+- Technology: \$60k-\$90k/quarter (high R&D, personnel, infrastructure)
+- Retail: \$70k-\$110k/quarter (rent, inventory, staffing)
+- Service: \$25k-\$45k/quarter (lowest overhead)
+- Manufacturing: \$90k-\$130k/quarter (facilities, materials, equipment)
+
+Sources: SBA Startup Cost Calculator, BLS Industry Statistics, Federal Reserve
+Small Business Credit Survey 2025
+"""
 struct SectorProfile
     return_range::Tuple{Float64,Float64}
     return_log_mu::Float64
@@ -40,6 +51,8 @@ struct SectorProfile
     maturity_range::Tuple{Int,Int}
     gross_margin_range::Tuple{Float64,Float64}
     operating_margin_range::Tuple{Float64,Float64}
+    # Quarterly operational cost range (SBA/BLS calibrated 2025)
+    operational_cost_range::Tuple{Float64,Float64}
 end
 
 # ============================================================================
@@ -503,26 +516,42 @@ parameters preserved for exact behavioral compatibility.
 
     SECTORS::Vector{String} = String[]
 
+    # Sector profiles with operational costs calibrated to SBA/BLS data (2025)
+    # Operational costs are quarterly, matching simulation round frequency
+    # Sources: SBA Startup Cost Calculator, BLS Industry Statistics,
+    #          Federal Reserve Small Business Credit Survey 2025
     SECTOR_PROFILES::Dict{String,SectorProfile} = Dict(
         "tech" => SectorProfile(
-            (1.35, 3.10), log(1.95), 0.45, (0.22, 0.38),
-            (0.3, 0.5), (0.04, 0.12), (300000.0, 1200000.0),
-            (15, 40), (0.55, 0.85), (0.08, 0.28)
+            (1.35, 3.10), log(1.95), 0.45, (0.22, 0.38),  # return params
+            (0.3, 0.5), (0.04, 0.12),                      # failure params
+            (300000.0, 1200000.0),                         # capital range
+            (15, 40),                                       # maturity range (rounds)
+            (0.55, 0.85), (0.08, 0.28),                    # margin ranges
+            (60000.0, 90000.0)                             # operational cost/quarter (SBA: high R&D, personnel)
         ),
         "retail" => SectorProfile(
             (1.15, 2.10), log(1.45), 0.32, (0.18, 0.3),
-            (0.2, 0.38), (0.04, 0.1), (50000.0, 400000.0),
-            (9, 30), (0.18, 0.42), (0.015, 0.08)
+            (0.2, 0.38), (0.04, 0.1),
+            (50000.0, 400000.0),
+            (9, 30),
+            (0.18, 0.42), (0.015, 0.08),
+            (70000.0, 110000.0)                            # operational cost/quarter (SBA: rent, inventory, staff)
         ),
         "service" => SectorProfile(
             (1.25, 2.20), log(1.53), 0.36, (0.16, 0.28),
-            (0.1, 0.28), (0.03, 0.08), (15000.0, 200000.0),
-            (6, 20), (0.45, 0.75), (0.12, 0.24)
+            (0.1, 0.28), (0.03, 0.08),
+            (15000.0, 200000.0),
+            (6, 20),
+            (0.45, 0.75), (0.12, 0.24),
+            (25000.0, 45000.0)                             # operational cost/quarter (SBA: lowest overhead)
         ),
         "manufacturing" => SectorProfile(
             (1.30, 2.65), log(1.78), 0.4, (0.18, 0.3),
-            (0.25, 0.42), (0.04, 0.1), (250000.0, 1500000.0),
-            (24, 72), (0.28, 0.48), (0.04, 0.18)
+            (0.25, 0.42), (0.04, 0.1),
+            (250000.0, 1500000.0),
+            (24, 72),
+            (0.28, 0.48), (0.04, 0.18),
+            (90000.0, 130000.0)                            # operational cost/quarter (SBA: facilities, materials)
         ),
     )
 

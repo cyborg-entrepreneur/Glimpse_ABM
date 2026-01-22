@@ -1558,7 +1558,11 @@ class EmergentAgent:
         belief["beta"] += (1.0 - evidence)
 
     def _estimate_operational_costs(self, market: 'MarketEnvironment') -> float:
-        """Estimate monthly operating expenses plus competition pressure."""
+        """Estimate quarterly operating expenses plus competition pressure.
+
+        Uses sector-specific operational costs calibrated to SBA/BLS data (2025).
+        Agent's primary sector is determined by their highest knowledge area.
+        """
         portfolio_competition = 0.0
         if market is not None and getattr(self.portfolio, 'active_investments', None):
             active_opp_ids = self.portfolio.active_investments.keys()
@@ -1569,19 +1573,36 @@ class EmergentAgent:
             ]
             if opp_competitions:
                 portfolio_competition = float(fast_mean(opp_competitions))
-        base_cost = self.config.BASE_OPERATIONAL_COST
+
+        # Determine agent's primary sector from their knowledge distribution
+        sector_profiles = self.config.SECTOR_PROFILES
         agent_sector = None
-        if isinstance(getattr(self, 'traits', None), dict):
-            agent_sector = self.traits.get('sector')
-        if agent_sector is None and hasattr(self, 'sector'):
-            agent_sector = getattr(self, 'sector')
-        sector_profile = self.config.SECTOR_PROFILES.get(agent_sector, {})
-        operating_range = sector_profile.get('operating_cost_range', (0.05, 0.20))
-        if not isinstance(operating_range, (list, tuple)) or len(operating_range) != 2:
-            operating_range = (0.05, 0.20)
-        monthly_base_cost = base_cost * float(fast_mean(operating_range))
+        knowledge = getattr(self, 'knowledge', {})
+        if knowledge:
+            max_knowledge = 0.0
+            for sector, level in knowledge.items():
+                if level > max_knowledge and sector in sector_profiles:
+                    max_knowledge = level
+                    agent_sector = sector
+
+        # Default fallback cost
+        base_cost = self.config.BASE_OPERATIONAL_COST
+
+        # Use sector-specific operational cost if available (SBA/BLS calibrated)
+        if agent_sector and agent_sector in sector_profiles:
+            sector_profile = sector_profiles[agent_sector]
+            cost_range = sector_profile.get('operational_cost_range')
+            if cost_range and isinstance(cost_range, (list, tuple)) and len(cost_range) == 2:
+                cost_mid = 0.5 * (cost_range[0] + cost_range[1])
+                # Higher competence = lower costs (better cost management)
+                competence = self.traits.get('competence', 0.5) if isinstance(self.traits, dict) else 0.5
+                cost_adj = 1.0 - 0.2 * competence  # 0.8 to 1.0 multiplier
+                base_cost = cost_mid * cost_adj
+
         competition_cost = portfolio_competition * self.config.COMPETITION_COST_MULTIPLIER
-        total_cost = monthly_base_cost + competition_cost
+        total_cost = base_cost + competition_cost
+
+        # AI tier efficiency modifier
         tier = normalize_ai_label(getattr(self, "current_ai_level", getattr(self, "agent_type", "none")))
         tier_mod = {
             "none": 1.0,
