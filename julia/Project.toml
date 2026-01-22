@@ -15,6 +15,8 @@ Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 ArgParse = "c7e460c6-2fb9-53a9-8c5b-16f535851c63"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
+RandomNumbers = "e6cf234a-135c-5ec9-84dd-332b85af5143"
 
 [weakdeps]
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"

@@ -60,19 +60,30 @@ for tier in ["none", "basic", "advanced", "premium"]
             push!(tier_results["mean_capital"], get(final, "mean_capital", 0.0))
             push!(tier_results["median_capital"], get(final, "median_capital", 0.0))
             push!(tier_results["std_capital"], get(final, "std_capital", 0.0))
-            push!(tier_results["mean_roic_invest"], get(final, "mean_roic_invest", 0.0))
-            push!(tier_results["mean_roic_innovate"], get(final, "mean_roic_innovate", 0.0))
-            
+
+            # Calculate CUMULATIVE ROIC from agent performance tracking (matches Python)
+            # This is the correct metric - total returned / total deployed across all rounds
+            invest_deployed = sum(get(a.resources.performance.deployed_by_action, "invest", 0.0) for a in sim.agents)
+            invest_returned = sum(get(a.resources.performance.returned_by_action, "invest", 0.0) for a in sim.agents)
+            cumulative_roic_invest = invest_deployed > 0 ? (invest_returned / invest_deployed - 1.0) : 0.0
+
+            innovate_deployed = sum(get(a.resources.performance.deployed_by_action, "innovate", 0.0) for a in sim.agents)
+            innovate_returned = sum(get(a.resources.performance.returned_by_action, "innovate", 0.0) for a in sim.agents)
+            cumulative_roic_innovate = innovate_deployed > 0 ? (innovate_returned / innovate_deployed - 1.0) : 0.0
+
+            push!(tier_results["mean_roic_invest"], cumulative_roic_invest)
+            push!(tier_results["mean_roic_innovate"], cumulative_roic_innovate)
+
             # Sum innovations across all rounds
             total_innov = sum(get(r, "innovation_successes", 0) for r in sim.history)
             push!(tier_results["total_innovations"], Float64(total_innov))
-            
+
             # Average action shares across rounds
             inv_share = mean(get(r, "action_share_invest", 0.0) for r in sim.history)
             innov_share = mean(get(r, "action_share_innovate", 0.0) for r in sim.history)
             exp_share = mean(get(r, "action_share_explore", 0.0) for r in sim.history)
             maint_share = mean(get(r, "action_share_maintain", 0.0) for r in sim.history)
-            
+
             push!(tier_results["invest_share"], inv_share)
             push!(tier_results["innovate_share"], innov_share)
             push!(tier_results["explore_share"], exp_share)
@@ -104,7 +115,7 @@ for tier in ["none", "basic", "advanced", "premium"]
     @printf("  Action Shares: invest=%.1f%%, innovate=%.1f%%, explore=%.1f%%, maintain=%.1f%%\n",
             mean(r["invest_share"])*100, mean(r["innovate_share"])*100,
             mean(r["explore_share"])*100, mean(r["maintain_share"])*100)
-    @printf("  ROIC: invest=%.2f, innovate=%.2f\n",
+    @printf("  Cumulative ROIC: invest=%.2f, innovate=%.2f\n",
             mean(r["mean_roic_invest"]), mean(r["mean_roic_innovate"]))
 end
 
@@ -127,8 +138,8 @@ open("/Users/davidtownsend/Downloads/10_Glimpse-ABM-Project/glimpse_abm/julia/sm
         println(f, "innovate_share: $(mean(r["innovate_share"]))")
         println(f, "explore_share: $(mean(r["explore_share"]))")
         println(f, "maintain_share: $(mean(r["maintain_share"]))")
-        println(f, "mean_roic_invest: $(mean(r["mean_roic_invest"]))")
-        println(f, "mean_roic_innovate: $(mean(r["mean_roic_innovate"]))")
+        println(f, "cumulative_roic_invest: $(mean(r["mean_roic_invest"]))")
+        println(f, "cumulative_roic_innovate: $(mean(r["mean_roic_innovate"]))")
         println(f, "")
     end
 end
