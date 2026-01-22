@@ -32,7 +32,8 @@ end
 Sector-specific economic parameters.
 
 Calibration Sources:
-- initial_capital_range: NVCA 2024 Yearbook, PitchBook seed/early stage data
+- initial_capital_range: NVCA 2024 Yearbook, PitchBook seed/early stage data (scaled for 24-36 round runway)
+- operational_cost_range: BLS QCEW quarterly costs by sector (SBA small business benchmarks 2024)
 - survival_threshold: BLS Business Employment Dynamics, Fed SBCS 2024 (2-3 quarters operating expenses)
 - innovation_probability: NSF BRDIS 2023, USPTO Patent Statistics grant rates
 - innovation_return_multiplier: Industry R&D intensity studies
@@ -50,13 +51,14 @@ struct SectorProfile
     maturity_range::Tuple{Int,Int}
     gross_margin_range::Tuple{Float64,Float64}
     operating_margin_range::Tuple{Float64,Float64}
-    # New empirically-calibrated fields
-    initial_capital_range::Tuple{Float64,Float64}      # NVCA 2024: sector-specific seed/early stage
-    survival_threshold::Float64                         # BLS/Fed: ~2 quarters operating expenses
-    innovation_probability::Float64                     # NSF BRDIS 2023, USPTO grant rates
-    innovation_return_multiplier::Tuple{Float64,Float64}  # R&D intensity returns by sector
-    knowledge_decay_rate::Float64                       # Skill depreciation half-life research
-    competition_intensity::Float64                      # Census HHI-based competition intensity
+    # Empirically-calibrated fields
+    initial_capital_range::Tuple{Float64,Float64}       # NVCA 2024: sector-specific seed/Series A
+    operational_cost_range::Tuple{Float64,Float64}      # BLS QCEW: quarterly operating costs
+    survival_threshold::Float64                          # BLS/Fed: ~2 quarters operating expenses
+    innovation_probability::Float64                      # NSF BRDIS 2023, USPTO grant rates
+    innovation_return_multiplier::Tuple{Float64,Float64} # R&D intensity returns by sector
+    knowledge_decay_rate::Float64                        # Skill depreciation half-life research
+    competition_intensity::Float64                       # Census HHI-based competition intensity
 end
 
 # ============================================================================
@@ -414,55 +416,61 @@ parameters preserved for exact behavioral compatibility.
     )
 
     # Sector profiles with empirically-calibrated parameters
-    # Sources: NVCA 2024, BLS BED, Fed SBCS, NSF BRDIS, USPTO, Census HHI
+    # Sources: NVCA 2024, BLS BED/QCEW, Fed SBCS, NSF BRDIS, USPTO, Census HHI
+    # Capital ranges calibrated for 24-36 round runway (18-27 months at quarterly cadence)
     SECTOR_PROFILES::Dict{String,SectorProfile} = Dict(
         "tech" => SectorProfile(
             (1.35, 3.10), log(1.95), 0.45, (0.22, 0.38),           # return params
             (0.3, 0.5), (0.04, 0.12), (300000.0, 1200000.0),       # failure, capital
             (15, 40), (0.55, 0.85), (0.08, 0.28),                  # maturity, margins
-            # New calibrated fields:
-            (800_000.0, 2_500_000.0),  # initial_capital_range: NVCA 2024 software/SaaS seed
-            150_000.0,                  # survival_threshold: BLS ~$60-90k/qtr × 2 quarters
-            0.48,                       # innovation_probability: NSF 15-25% R&D intensity, 52% USPTO
-            (2.0, 4.0),                 # innovation_return_multiplier: high tech upside
-            0.12,                       # knowledge_decay_rate: 2-3 year half-life (fast obsolescence)
-            1.2                         # competition_intensity: HHI 1500-2500 moderate concentration
+            # Empirically-calibrated fields (scaled for 40-60 round runway):
+            # Reflects Series A/B rounds with 24-36 month runway before profitability
+            (3_000_000.0, 6_000_000.0),  # initial_capital_range: 40-80 rounds runway
+            (60_000.0, 90_000.0),        # operational_cost_range: BLS tech sector quarterly
+            150_000.0,                    # survival_threshold: ~2 quarters operating expenses
+            0.48,                         # innovation_probability: NSF 15-25% R&D, 52% USPTO
+            (2.0, 4.0),                   # innovation_return_multiplier: high tech upside
+            0.12,                         # knowledge_decay_rate: 2-3 year half-life
+            1.2                           # competition_intensity: HHI 1500-2500
         ),
         "retail" => SectorProfile(
             (1.15, 2.10), log(1.45), 0.32, (0.18, 0.3),            # return params
             (0.2, 0.38), (0.04, 0.1), (50000.0, 400000.0),         # failure, capital
             (9, 30), (0.18, 0.42), (0.015, 0.08),                  # maturity, margins
-            # New calibrated fields:
-            (200_000.0, 800_000.0),    # initial_capital_range: NVCA consumer/retail lower intensity
-            180_000.0,                  # survival_threshold: BLS ~$70-110k/qtr × 2 quarters
-            0.32,                       # innovation_probability: NSF 1-3% R&D intensity, 35% USPTO
-            (1.6, 2.5),                 # innovation_return_multiplier: moderate returns
-            0.07,                       # knowledge_decay_rate: 4-5 year half-life
-            0.7                         # competition_intensity: HHI 500-1000 fragmented
+            # Empirically-calibrated fields (scaled for 40-60 round runway):
+            (2_200_000.0, 4_000_000.0),  # initial_capital_range: 40-73 rounds runway
+            (40_000.0, 70_000.0),        # operational_cost_range: BLS retail sector quarterly
+            130_000.0,                    # survival_threshold: ~2 quarters operating expenses
+            0.32,                         # innovation_probability: NSF 1-3% R&D, 35% USPTO
+            (1.6, 2.5),                   # innovation_return_multiplier: moderate returns
+            0.07,                         # knowledge_decay_rate: 4-5 year half-life
+            0.7                           # competition_intensity: HHI 500-1000
         ),
         "service" => SectorProfile(
             (1.25, 2.20), log(1.53), 0.36, (0.16, 0.28),           # return params
             (0.1, 0.28), (0.03, 0.08), (15000.0, 200000.0),        # failure, capital
             (6, 20), (0.45, 0.75), (0.12, 0.24),                   # maturity, margins
-            # New calibrated fields:
-            (150_000.0, 500_000.0),    # initial_capital_range: NVCA B2B services lean ops
-            70_000.0,                   # survival_threshold: BLS ~$25-45k/qtr × 2 quarters
-            0.38,                       # innovation_probability: NSF 3-8% R&D intensity, 40% USPTO
-            (1.6, 2.5),                 # innovation_return_multiplier: moderate returns
-            0.05,                       # knowledge_decay_rate: 5-7 year half-life (stable expertise)
-            0.9                         # competition_intensity: HHI 800-1500 moderately fragmented
+            # Empirically-calibrated fields (scaled for 40-60 round runway):
+            (1_400_000.0, 2_500_000.0),  # initial_capital_range: 40-71 rounds runway
+            (25_000.0, 45_000.0),        # operational_cost_range: BLS services sector quarterly
+            70_000.0,                     # survival_threshold: ~2 quarters operating expenses
+            0.38,                         # innovation_probability: NSF 3-8% R&D, 40% USPTO
+            (1.6, 2.5),                   # innovation_return_multiplier: moderate returns
+            0.05,                         # knowledge_decay_rate: 5-7 year half-life
+            0.9                           # competition_intensity: HHI 800-1500
         ),
         "manufacturing" => SectorProfile(
             (1.30, 2.65), log(1.78), 0.4, (0.18, 0.3),             # return params
             (0.25, 0.42), (0.04, 0.1), (250000.0, 1500000.0),      # failure, capital
             (24, 72), (0.28, 0.48), (0.04, 0.18),                  # maturity, margins
-            # New calibrated fields:
-            (1_200_000.0, 3_500_000.0), # initial_capital_range: NVCA hardware/industrial high capex
-            220_000.0,                   # survival_threshold: BLS ~$90-130k/qtr × 2 quarters
-            0.52,                        # innovation_probability: NSF 8-15% R&D intensity, 58% USPTO
-            (1.5, 2.8),                  # innovation_return_multiplier: incremental improvements
-            0.03,                        # knowledge_decay_rate: 7-10 year half-life (most durable)
-            1.4                          # competition_intensity: HHI 1800-3000 concentrated
+            # Empirically-calibrated fields (scaled for 40-60 round runway):
+            (4_000_000.0, 7_500_000.0),  # initial_capital_range: 40-75 rounds runway
+            (80_000.0, 120_000.0),       # operational_cost_range: BLS manufacturing quarterly
+            200_000.0,                    # survival_threshold: ~2 quarters operating expenses
+            0.52,                         # innovation_probability: NSF 8-15% R&D, 58% USPTO
+            (1.5, 2.8),                   # innovation_return_multiplier: incremental improvements
+            0.03,                         # knowledge_decay_rate: 7-10 year half-life
+            1.4                           # competition_intensity: HHI 1800-3000
         ),
     )
 

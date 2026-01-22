@@ -612,14 +612,22 @@ function process_matured_investments!(
 end
 
 """
-Apply operational costs for the round.
+Apply operational costs for the round using sector-specific costs.
 """
 function apply_operational_costs!(agent::EmergentAgent, round::Int)
     if !agent.alive
         return
     end
 
-    cost = agent.config.BASE_OPERATIONAL_COST
+    # Use sector-specific operational cost from SECTOR_PROFILES
+    sector_profile = get(agent.config.SECTOR_PROFILES, agent.primary_sector, nothing)
+    cost = if !isnothing(sector_profile) && hasproperty(sector_profile, :operational_cost_range)
+        # Use agent's stored estimate (mid-range from sector profile)
+        agent.operating_cost_estimate
+    else
+        agent.config.BASE_OPERATIONAL_COST
+    end
+
     current = get_capital(agent)
     set_capital!(agent, current - cost)
 end
