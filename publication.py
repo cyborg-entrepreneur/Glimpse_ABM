@@ -946,6 +946,9 @@ class PublicationFigureGenerator:
 
         output_path = self.output_dir / filename
         fig.savefig(output_path)
+        # Also save PNG for PDF embedding
+        png_path = output_path.with_suffix('.png')
+        fig.savefig(png_path, dpi=self.FIGURE_DPI)
         plt.close()
         self.figures_generated.append(filename)
         return output_path
@@ -1019,6 +1022,9 @@ class PublicationFigureGenerator:
 
         output_path = self.output_dir / filename
         fig.savefig(output_path)
+        # Also save PNG for PDF embedding compatibility
+        png_path = output_path.with_suffix('.png')
+        fig.savefig(png_path, dpi=self.FIGURE_DPI)
         plt.close()
         self.figures_generated.append(filename)
         return output_path
@@ -1074,6 +1080,9 @@ class PublicationFigureGenerator:
 
         output_path = self.output_dir / filename
         fig.savefig(output_path)
+        # Also save PNG for PDF embedding compatibility
+        png_path = output_path.with_suffix('.png')
+        fig.savefig(png_path, dpi=self.FIGURE_DPI)
         plt.close()
         self.figures_generated.append(filename)
         return output_path
@@ -1131,6 +1140,9 @@ class PublicationFigureGenerator:
 
         output_path = self.output_dir / filename
         fig.savefig(output_path)
+        # Also save PNG for PDF embedding compatibility
+        png_path = output_path.with_suffix('.png')
+        fig.savefig(png_path, dpi=self.FIGURE_DPI)
         plt.close()
         self.figures_generated.append(filename)
         return output_path
@@ -1196,6 +1208,9 @@ class PublicationFigureGenerator:
 
         output_path = self.output_dir / filename
         fig.savefig(output_path)
+        # Also save PNG for PDF embedding compatibility
+        png_path = output_path.with_suffix('.png')
+        fig.savefig(png_path, dpi=self.FIGURE_DPI)
         plt.close()
         self.figures_generated.append(filename)
         return output_path
@@ -1369,9 +1384,9 @@ All analyses employ appropriate statistical methods for the data structure:
         return results
 
     def _compile_latex(self, tex_path: Path) -> Optional[Path]:
-        """Compile LaTeX to PDF."""
+        """Compile LaTeX to PDF, with fpdf fallback."""
         try:
-            # Try pdflatex
+            # Try pdflatex first
             result = subprocess.run(
                 ['pdflatex', '-interaction=nonstopmode', tex_path.name],
                 cwd=self.output_dir,
@@ -1389,18 +1404,139 @@ All analyses employ appropriate statistical methods for the data structure:
 
             pdf_path = self.output_dir / tex_path.with_suffix('.pdf').name
             if pdf_path.exists():
-                print(f"PDF generated: {pdf_path}")
+                print(f"PDF generated via pdflatex: {pdf_path}")
                 return pdf_path
             else:
-                print("PDF compilation may have failed. Check .log file for details.")
-                return None
+                print("PDF compilation may have failed. Trying fpdf fallback...")
+                return self._generate_pdf_fallback()
 
         except FileNotFoundError:
-            print("pdflatex not found. LaTeX files generated but not compiled.")
-            print(f"To compile manually: cd {self.output_dir} && pdflatex {tex_path.name}")
-            return None
+            print("pdflatex not found. Using fpdf fallback...")
+            return self._generate_pdf_fallback()
         except subprocess.TimeoutExpired:
-            print("LaTeX compilation timed out.")
+            print("LaTeX compilation timed out. Using fpdf fallback...")
+            return self._generate_pdf_fallback()
+
+    def _generate_pdf_fallback(self) -> Optional[Path]:
+        """Generate PDF using fpdf when pdflatex is unavailable."""
+        try:
+            from fpdf import FPDF
+        except ImportError:
+            print("fpdf not available. Install with: pip install fpdf2")
+            return None
+
+        try:
+            pdf = FPDF()
+            pdf.set_auto_page_break(auto=True, margin=15)
+
+            # Title page
+            pdf.add_page()
+            pdf.set_font('Helvetica', 'B', 24)
+            pdf.cell(0, 40, '', ln=True)  # Spacing
+            pdf.multi_cell(0, 12, 'Glimpse ABM Analysis Report', align='C')
+            pdf.set_font('Helvetica', '', 14)
+            pdf.cell(0, 20, '', ln=True)
+            pdf.multi_cell(0, 8, 'AI Effects on Entrepreneurial Decision-Making\nUnder Knightian Uncertainty', align='C')
+            pdf.cell(0, 30, '', ln=True)
+            pdf.set_font('Helvetica', 'I', 11)
+            pdf.multi_cell(0, 6, f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")}', align='C')
+
+            # Methods section
+            pdf.add_page()
+            pdf.set_font('Helvetica', 'B', 16)
+            pdf.cell(0, 10, '1. Methods', ln=True)
+            pdf.set_font('Helvetica', '', 11)
+            pdf.multi_cell(0, 6, '''
+The Glimpse Agent-Based Model simulates entrepreneurial agents making investment and innovation decisions under varying levels of AI augmentation. Agents are assigned to one of four AI tiers: None, Basic, Advanced, or Premium.
+
+Uncertainty Dimensions (Townsend et al., 2025):
+- Actor Ignorance: Information gaps and knowledge deficits
+- Practical Indeterminism: Execution uncertainty and timing criticality
+- Agentic Novelty: Unpredictability from genuine innovation
+- Competitive Recursion: Strategic interdependence effects
+
+Statistical Methods:
+- Non-parametric tests (Kruskal-Wallis, Mann-Whitney U)
+- Effect sizes (Cohen's d) with bootstrap confidence intervals
+- Multiple comparison corrections (Benjamini-Hochberg FDR)
+- Run-level clustering for proper inference
+''')
+
+            # Results section with figures
+            pdf.add_page()
+            pdf.set_font('Helvetica', 'B', 16)
+            pdf.cell(0, 10, '2. Results', ln=True)
+            pdf.set_font('Helvetica', '', 11)
+
+            # Add figures
+            figures_dir = self.output_dir / 'figures'
+            if figures_dir.exists():
+                figure_files = sorted(figures_dir.glob('*.pdf')) + sorted(figures_dir.glob('*.png'))
+                for fig_path in figure_files:
+                    try:
+                        # Convert PDF figures to include (fpdf can handle PNG directly)
+                        if fig_path.suffix == '.png':
+                            pdf.add_page()
+                            pdf.set_font('Helvetica', 'B', 12)
+                            title = fig_path.stem.replace('_', ' ').replace('figure ', '').title()
+                            pdf.cell(0, 10, f'Figure: {title}', ln=True)
+                            # Center the image
+                            pdf.image(str(fig_path), x=15, w=180)
+                        elif fig_path.suffix == '.pdf':
+                            # Note: fpdf2 can handle PDF images with pdf.image()
+                            pdf.add_page()
+                            pdf.set_font('Helvetica', 'B', 12)
+                            title = fig_path.stem.replace('_', ' ').replace('figure ', '').title()
+                            pdf.cell(0, 10, f'Figure: {title}', ln=True)
+                            pdf.set_font('Helvetica', 'I', 10)
+                            pdf.cell(0, 8, f'(See separate file: {fig_path.name})', ln=True)
+                    except Exception as e:
+                        pdf.set_font('Helvetica', 'I', 10)
+                        pdf.cell(0, 8, f'[Figure {fig_path.name} - see separate file]', ln=True)
+
+            # Read and include table summaries
+            tables_dir = self.output_dir / 'tables'
+            if tables_dir.exists():
+                pdf.add_page()
+                pdf.set_font('Helvetica', 'B', 16)
+                pdf.cell(0, 10, '3. Statistical Tables', ln=True)
+                pdf.set_font('Helvetica', '', 10)
+
+                for tex_file in sorted(tables_dir.glob('*.tex')):
+                    pdf.set_font('Helvetica', 'B', 11)
+                    title = tex_file.stem.replace('table_', '').replace('_', ' ').title()
+                    pdf.cell(0, 8, f'Table: {title}', ln=True)
+                    pdf.set_font('Helvetica', 'I', 9)
+                    pdf.cell(0, 6, f'(LaTeX source: {tex_file.name})', ln=True)
+                    pdf.cell(0, 4, '', ln=True)
+
+            # Include CSV summary data
+            summary_csv = self.output_dir / 'uncertainty_transformation_summary.csv'
+            if summary_csv.exists():
+                pdf.add_page()
+                pdf.set_font('Helvetica', 'B', 16)
+                pdf.cell(0, 10, '4. Uncertainty Transformation Summary', ln=True)
+
+                try:
+                    import pandas as pd
+                    df = pd.read_csv(summary_csv)
+                    pdf.set_font('Courier', '', 8)
+                    # Print as formatted text
+                    text = df.to_string(index=False)
+                    for line in text.split('\n')[:50]:  # Limit lines
+                        pdf.cell(0, 4, line[:120], ln=True)  # Limit width
+                except Exception:
+                    pdf.set_font('Helvetica', 'I', 10)
+                    pdf.cell(0, 6, f'See: {summary_csv.name}', ln=True)
+
+            # Save PDF
+            pdf_path = self.output_dir / 'analysis_report.pdf'
+            pdf.output(str(pdf_path))
+            print(f"PDF generated via fpdf: {pdf_path}")
+            return pdf_path
+
+        except Exception as e:
+            print(f"fpdf PDF generation failed: {e}")
             return None
 
 
