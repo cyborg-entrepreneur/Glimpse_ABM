@@ -100,6 +100,7 @@ export reinforce_agent_resources!
 
 # Exports - Simulation
 export EmergentSimulation
+export EnhancedSimulation
 export EmergentAgent
 export VectorizedAgentState
 export MarketEnvironment

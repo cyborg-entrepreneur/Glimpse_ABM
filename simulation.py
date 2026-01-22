@@ -146,6 +146,7 @@ class EmergentSimulation:
         self.round_log_interval = max(1, int(getattr(config, 'round_log_interval', 1)))
         self.enable_round_logging = bool(getattr(config, 'enable_round_logging', True))
         self._previous_uncertainty_levels = None
+        self._baseline_uncertainty_levels = None  # Tracks round 1 levels for cumulative delta
         self.round_log_path = os.path.join(self.data_paths['base'], 'run_log.jsonl')
         if self.enable_round_logging:
             with open(self.round_log_path, 'w', encoding='utf-8') as _log_file:
@@ -449,6 +450,68 @@ class EmergentSimulation:
             })
 
         if uncertainty_state:
+            # Extract current levels
+            actor_level = float(uncertainty_state.get('actor_ignorance', {}).get('level', 0.0))
+            practical_level = float(uncertainty_state.get('practical_indeterminism', {}).get('level', 0.0))
+            agentic_level = float(uncertainty_state.get('agentic_novelty', {}).get('level', 0.0))
+            competitive_level = float(uncertainty_state.get('competitive_recursion', {}).get('level', 0.0))
+
+            # Store baseline on first round with uncertainty data
+            if self._baseline_uncertainty_levels is None:
+                self._baseline_uncertainty_levels = {
+                    'actor_ignorance': actor_level,
+                    'practical_indeterminism': practical_level,
+                    'agentic_novelty': agentic_level,
+                    'competitive_recursion': competitive_level,
+                }
+
+            # Get previous levels (default to current if first round)
+            prev = self._previous_uncertainty_levels or {}
+            prev_actor = prev.get('actor_ignorance_level', actor_level)
+            prev_practical = prev.get('practical_indeterminism_level', practical_level)
+            prev_agentic = prev.get('agentic_novelty_level', agentic_level)
+            prev_competitive = prev.get('competitive_recursion_level', competitive_level)
+
+            # Get baseline levels
+            base = self._baseline_uncertainty_levels
+            base_actor = base.get('actor_ignorance', actor_level)
+            base_practical = base.get('practical_indeterminism', practical_level)
+            base_agentic = base.get('agentic_novelty', agentic_level)
+            base_competitive = base.get('competitive_recursion', competitive_level)
+
+            # Compute delta (round-over-round change)
+            delta_actor = actor_level - prev_actor
+            delta_practical = practical_level - prev_practical
+            delta_agentic = agentic_level - prev_agentic
+            delta_competitive = competitive_level - prev_competitive
+
+            # Compute cumulative delta (change from baseline)
+            cumulative_delta_actor = actor_level - base_actor
+            cumulative_delta_practical = practical_level - base_practical
+            cumulative_delta_agentic = agentic_level - base_agentic
+            cumulative_delta_competitive = competitive_level - base_competitive
+
+            # Compute portfolio composition (shares)
+            uncertainty_total = actor_level + practical_level + agentic_level + competitive_level
+            total_safe = max(uncertainty_total, 0.001)  # Avoid division by zero
+            share_actor = actor_level / total_safe
+            share_practical = practical_level / total_safe
+            share_agentic = agentic_level / total_safe
+            share_competitive = competitive_level / total_safe
+
+            # Compute HHI (Herfindahl-Hirschman Index) - concentration measure
+            uncertainty_hhi = share_actor**2 + share_practical**2 + share_agentic**2 + share_competitive**2
+
+            # Compute entropy - diversity measure (avoid log(0))
+            eps = 1e-10
+            uncertainty_entropy = -(
+                share_actor * math.log(share_actor + eps) +
+                share_practical * math.log(share_practical + eps) +
+                share_agentic * math.log(share_agentic + eps) +
+                share_competitive * math.log(share_competitive + eps)
+            )
+
+            # Per-agent perception std calculations
             ignorance_vals = [
                 action.get('perc_actor_ignorance_level')
                 for action in flattened_decisions
@@ -477,20 +540,43 @@ class EmergentSimulation:
             flat_uncertainty = {
                 'run_id': self.run_id,
                 'round': round_num,
-                'actor_ignorance_level': uncertainty_state.get('actor_ignorance', {}).get('level', 0),
-                'practical_indeterminism_level': uncertainty_state.get('practical_indeterminism', {}).get('level', 0),
-                'agentic_novelty_level': uncertainty_state.get('agentic_novelty', {}).get('level', 0),
-                'competitive_recursion_level': uncertainty_state.get('competitive_recursion', {}).get('level', 0),
+                # Current levels
+                'actor_ignorance_level': actor_level,
+                'practical_indeterminism_level': practical_level,
+                'agentic_novelty_level': agentic_level,
+                'competitive_recursion_level': competitive_level,
+                # Per-agent perception standard deviations
                 'actor_ignorance_std': ignorance_std,
                 'practical_indeterminism_std': indeterminism_std,
                 'agentic_novelty_std': novelty_std,
                 'competitive_recursion_std': recursion_std,
-                # Ensure AI deltas always present
+                # Round-over-round deltas (transformation rate)
+                'delta_actor_ignorance': delta_actor,
+                'delta_practical_indeterminism': delta_practical,
+                'delta_agentic_novelty': delta_agentic,
+                'delta_competitive_recursion': delta_competitive,
+                # Cumulative change from baseline (total transformation)
+                'cumulative_delta_actor': cumulative_delta_actor,
+                'cumulative_delta_practical': cumulative_delta_practical,
+                'cumulative_delta_agentic': cumulative_delta_agentic,
+                'cumulative_delta_competitive': cumulative_delta_competitive,
+                # Portfolio composition
+                'uncertainty_total': uncertainty_total,
+                'share_actor_ignorance': share_actor,
+                'share_practical_indeterminism': share_practical,
+                'share_agentic_novelty': share_agentic,
+                'share_competitive_recursion': share_competitive,
+                # Concentration and diversity measures
+                'uncertainty_hhi': uncertainty_hhi,
+                'uncertainty_entropy': uncertainty_entropy,
+                # AI deltas (counterfactual effect)
                 'ai_ignorance_delta': uncertainty_state.get('actor_ignorance', {}).get('ai_delta', 0.0),
                 'ai_indeterminism_delta': uncertainty_state.get('practical_indeterminism', {}).get('ai_delta', 0.0),
                 'ai_agentic_novelty_delta': uncertainty_state.get('agentic_novelty', {}).get('ai_delta', 0.0),
                 'ai_recursion_delta': uncertainty_state.get('competitive_recursion', {}).get('ai_delta', 0.0),
             }
+
+            # Add additional uncertainty state details
             component_scarcity = uncertainty_state.get('agentic_novelty', {}).get('component_scarcity')
             if component_scarcity is not None:
                 flat_uncertainty['agentic_component_scarcity'] = component_scarcity
@@ -528,22 +614,15 @@ class EmergentSimulation:
             if isinstance(tier_novelty, dict):
                 for tier_name, tier_value in tier_novelty.items():
                     flat_uncertainty[f'agentic_novelty_{tier_name}'] = tier_value
-            # Inject AI deltas from uncertainty state if present
-            flat_uncertainty['ai_ignorance_delta'] = uncertainty_state.get('actor_ignorance', {}).get('ai_delta', 0.0)
-            flat_uncertainty['ai_indeterminism_delta'] = uncertainty_state.get('practical_indeterminism', {}).get('ai_delta', 0.0)
-            flat_uncertainty['ai_agentic_novelty_delta'] = uncertainty_state.get('agentic_novelty', {}).get('ai_delta', 0.0)
-            flat_uncertainty['ai_recursion_delta'] = uncertainty_state.get('competitive_recursion', {}).get('ai_delta', 0.0)
-            prev = getattr(self, "_previous_uncertainty_levels", None) or {}
-            flat_uncertainty['actor_ignorance_delta'] = flat_uncertainty['actor_ignorance_level'] - prev.get('actor_ignorance_level', flat_uncertainty['actor_ignorance_level'])
-            flat_uncertainty['practical_indeterminism_delta'] = flat_uncertainty['practical_indeterminism_level'] - prev.get('practical_indeterminism_level', flat_uncertainty['practical_indeterminism_level'])
-            flat_uncertainty['agentic_novelty_delta'] = flat_uncertainty['agentic_novelty_level'] - prev.get('agentic_novelty_level', flat_uncertainty['agentic_novelty_level'])
-            flat_uncertainty['competitive_recursion_delta'] = flat_uncertainty['competitive_recursion_level'] - prev.get('competitive_recursion_level', flat_uncertainty['competitive_recursion_level'])
+
             self.data_buffer['uncertainty'].append(flat_uncertainty)
+
+            # Update previous levels for next round
             self._previous_uncertainty_levels = {
-                'actor_ignorance_level': flat_uncertainty['actor_ignorance_level'],
-                'practical_indeterminism_level': flat_uncertainty['practical_indeterminism_level'],
-                'agentic_novelty_level': flat_uncertainty['agentic_novelty_level'],
-                'competitive_recursion_level': flat_uncertainty['competitive_recursion_level'],
+                'actor_ignorance_level': actor_level,
+                'practical_indeterminism_level': practical_level,
+                'agentic_novelty_level': agentic_level,
+                'competitive_recursion_level': competitive_level,
             }
 
         if innovations:

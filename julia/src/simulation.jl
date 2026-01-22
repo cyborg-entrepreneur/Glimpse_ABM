@@ -34,6 +34,9 @@ mutable struct EmergentSimulation
     output_dir::String
     rng::Random.AbstractRNG
     start_time::DateTime
+    # Uncertainty transformation tracking
+    previous_uncertainty_levels::Dict{String,Float64}
+    baseline_uncertainty_levels::Dict{String,Float64}
 end
 
 """
@@ -130,7 +133,9 @@ function EmergentSimulation(;
         run_id,
         output_dir,
         rng,
-        now()
+        now(),
+        Dict{String,Float64}(),  # previous_uncertainty_levels
+        Dict{String,Float64}()   # baseline_uncertainty_levels
     )
 end
 
@@ -472,10 +477,69 @@ function compile_round_stats(
     n_failure = n_matured - n_success
 
     # Uncertainty levels
-    actor_ignorance = get(get(uncertainty_state, "actor_ignorance", Dict()), "level", 0.0)
-    practical_indet = get(get(uncertainty_state, "practical_indeterminism", Dict()), "level", 0.0)
-    agentic_novelty = get(get(uncertainty_state, "agentic_novelty", Dict()), "level", 0.0)
-    competitive_rec = get(get(uncertainty_state, "competitive_recursion", Dict()), "level", 0.0)
+    actor_ignorance = Float64(get(get(uncertainty_state, "actor_ignorance", Dict()), "level", 0.0))
+    practical_indet = Float64(get(get(uncertainty_state, "practical_indeterminism", Dict()), "level", 0.0))
+    agentic_novelty = Float64(get(get(uncertainty_state, "agentic_novelty", Dict()), "level", 0.0))
+    competitive_rec = Float64(get(get(uncertainty_state, "competitive_recursion", Dict()), "level", 0.0))
+
+    # --- Uncertainty Transformation Metrics ---
+    # Store baseline on first round (or first round with uncertainty data)
+    if isempty(sim.baseline_uncertainty_levels)
+        sim.baseline_uncertainty_levels["actor_ignorance"] = actor_ignorance
+        sim.baseline_uncertainty_levels["practical_indeterminism"] = practical_indet
+        sim.baseline_uncertainty_levels["agentic_novelty"] = agentic_novelty
+        sim.baseline_uncertainty_levels["competitive_recursion"] = competitive_rec
+    end
+
+    # Get previous levels (default to current if first round)
+    prev_actor = get(sim.previous_uncertainty_levels, "actor_ignorance", actor_ignorance)
+    prev_practical = get(sim.previous_uncertainty_levels, "practical_indeterminism", practical_indet)
+    prev_agentic = get(sim.previous_uncertainty_levels, "agentic_novelty", agentic_novelty)
+    prev_competitive = get(sim.previous_uncertainty_levels, "competitive_recursion", competitive_rec)
+
+    # Get baseline levels
+    base_actor = get(sim.baseline_uncertainty_levels, "actor_ignorance", actor_ignorance)
+    base_practical = get(sim.baseline_uncertainty_levels, "practical_indeterminism", practical_indet)
+    base_agentic = get(sim.baseline_uncertainty_levels, "agentic_novelty", agentic_novelty)
+    base_competitive = get(sim.baseline_uncertainty_levels, "competitive_recursion", competitive_rec)
+
+    # Compute delta (round-over-round change)
+    delta_actor = actor_ignorance - prev_actor
+    delta_practical = practical_indet - prev_practical
+    delta_agentic = agentic_novelty - prev_agentic
+    delta_competitive = competitive_rec - prev_competitive
+
+    # Compute cumulative delta (change from baseline)
+    cumulative_delta_actor = actor_ignorance - base_actor
+    cumulative_delta_practical = practical_indet - base_practical
+    cumulative_delta_agentic = agentic_novelty - base_agentic
+    cumulative_delta_competitive = competitive_rec - base_competitive
+
+    # Compute portfolio composition (shares)
+    uncertainty_total = actor_ignorance + practical_indet + agentic_novelty + competitive_rec
+    total_safe = max(uncertainty_total, 0.001)  # Avoid division by zero
+    share_actor = actor_ignorance / total_safe
+    share_practical = practical_indet / total_safe
+    share_agentic = agentic_novelty / total_safe
+    share_competitive = competitive_rec / total_safe
+
+    # Compute HHI (Herfindahl-Hirschman Index) - concentration measure
+    uncertainty_hhi = share_actor^2 + share_practical^2 + share_agentic^2 + share_competitive^2
+
+    # Compute entropy - diversity measure (avoid log(0))
+    eps = 1e-10
+    uncertainty_entropy = -(
+        share_actor * log(share_actor + eps) +
+        share_practical * log(share_practical + eps) +
+        share_agentic * log(share_agentic + eps) +
+        share_competitive * log(share_competitive + eps)
+    )
+
+    # Update previous levels for next round
+    sim.previous_uncertainty_levels["actor_ignorance"] = actor_ignorance
+    sim.previous_uncertainty_levels["practical_indeterminism"] = practical_indet
+    sim.previous_uncertainty_levels["agentic_novelty"] = agentic_novelty
+    sim.previous_uncertainty_levels["competitive_recursion"] = competitive_rec
 
     # Mean AI trust
     trust_values = [Float64(get(a.traits, "ai_trust", 0.5)) for a in alive_agents]
@@ -545,6 +609,22 @@ function compile_round_stats(
         "practical_indeterminism" => practical_indet,
         "agentic_novelty" => agentic_novelty,
         "competitive_recursion" => competitive_rec,
+        # Uncertainty transformation metrics
+        "delta_actor_ignorance" => delta_actor,
+        "delta_practical_indeterminism" => delta_practical,
+        "delta_agentic_novelty" => delta_agentic,
+        "delta_competitive_recursion" => delta_competitive,
+        "cumulative_delta_actor" => cumulative_delta_actor,
+        "cumulative_delta_practical" => cumulative_delta_practical,
+        "cumulative_delta_agentic" => cumulative_delta_agentic,
+        "cumulative_delta_competitive" => cumulative_delta_competitive,
+        "uncertainty_total" => uncertainty_total,
+        "share_actor_ignorance" => share_actor,
+        "share_practical_indeterminism" => share_practical,
+        "share_agentic_novelty" => share_agentic,
+        "share_competitive_recursion" => share_competitive,
+        "uncertainty_hhi" => uncertainty_hhi,
+        "uncertainty_entropy" => uncertainty_entropy,
         # Agent counts
         "alive_agents" => n_alive,
         "dead_agents" => n_total - n_alive
@@ -999,6 +1079,7 @@ mutable struct EnhancedSimulation
     start_time::DateTime
     last_uncertainty_state::Union{Dict{String,Any},Nothing}
     previous_uncertainty_levels::Dict{String,Float64}
+    baseline_uncertainty_levels::Dict{String,Float64}  # Tracks round 1 levels for cumulative delta
 end
 
 """
@@ -1103,8 +1184,8 @@ function EnhancedSimulation(;
     data_paths = setup_data_directories(output_dir, run_id)
 
     # Create data buffer
-    buffer_interval = get(config.parameters, "buffer_flush_interval", 10)
-    write_intermediate = get(config.parameters, "write_intermediate_batches", true)
+    buffer_interval = getfield(config, :buffer_flush_interval)
+    write_intermediate = getfield(config, :write_intermediate_batches)
     data_buffer = DataBuffer(; flush_interval=buffer_interval, write_intermediate=write_intermediate)
 
     return EnhancedSimulation(
@@ -1125,7 +1206,8 @@ function EnhancedSimulation(;
         rng,
         now(),
         nothing,
-        Dict{String,Float64}()
+        Dict{String,Float64}(),
+        Dict{String,Float64}()  # baseline_uncertainty_levels - populated on round 1
     )
 end
 
@@ -1511,17 +1593,101 @@ function record_round_to_buffer!(
         push!(sim.data_buffer.market, market_record)
     end
 
-    # Buffer uncertainty state
+    # Buffer uncertainty state with transformation metrics
     if !isempty(uncertainty_state)
+        # Extract current levels
+        actor_level = Float64(get(get(uncertainty_state, "actor_ignorance", Dict()), "level", 0.0))
+        practical_level = Float64(get(get(uncertainty_state, "practical_indeterminism", Dict()), "level", 0.0))
+        agentic_level = Float64(get(get(uncertainty_state, "agentic_novelty", Dict()), "level", 0.0))
+        competitive_level = Float64(get(get(uncertainty_state, "competitive_recursion", Dict()), "level", 0.0))
+
+        # Store baseline on round 1 (or first round with uncertainty data)
+        if isempty(sim.baseline_uncertainty_levels)
+            sim.baseline_uncertainty_levels["actor_ignorance"] = actor_level
+            sim.baseline_uncertainty_levels["practical_indeterminism"] = practical_level
+            sim.baseline_uncertainty_levels["agentic_novelty"] = agentic_level
+            sim.baseline_uncertainty_levels["competitive_recursion"] = competitive_level
+        end
+
+        # Get previous levels (default to current if first round)
+        prev_actor = get(sim.previous_uncertainty_levels, "actor_ignorance", actor_level)
+        prev_practical = get(sim.previous_uncertainty_levels, "practical_indeterminism", practical_level)
+        prev_agentic = get(sim.previous_uncertainty_levels, "agentic_novelty", agentic_level)
+        prev_competitive = get(sim.previous_uncertainty_levels, "competitive_recursion", competitive_level)
+
+        # Get baseline levels
+        base_actor = get(sim.baseline_uncertainty_levels, "actor_ignorance", actor_level)
+        base_practical = get(sim.baseline_uncertainty_levels, "practical_indeterminism", practical_level)
+        base_agentic = get(sim.baseline_uncertainty_levels, "agentic_novelty", agentic_level)
+        base_competitive = get(sim.baseline_uncertainty_levels, "competitive_recursion", competitive_level)
+
+        # Compute delta (round-over-round change)
+        delta_actor = actor_level - prev_actor
+        delta_practical = practical_level - prev_practical
+        delta_agentic = agentic_level - prev_agentic
+        delta_competitive = competitive_level - prev_competitive
+
+        # Compute cumulative delta (change from baseline)
+        cumulative_delta_actor = actor_level - base_actor
+        cumulative_delta_practical = practical_level - base_practical
+        cumulative_delta_agentic = agentic_level - base_agentic
+        cumulative_delta_competitive = competitive_level - base_competitive
+
+        # Compute portfolio composition (shares)
+        uncertainty_total = actor_level + practical_level + agentic_level + competitive_level
+        total_safe = max(uncertainty_total, 0.001)  # Avoid division by zero
+        share_actor = actor_level / total_safe
+        share_practical = practical_level / total_safe
+        share_agentic = agentic_level / total_safe
+        share_competitive = competitive_level / total_safe
+
+        # Compute HHI (Herfindahl-Hirschman Index) - concentration measure
+        uncertainty_hhi = share_actor^2 + share_practical^2 + share_agentic^2 + share_competitive^2
+
+        # Compute entropy - diversity measure (avoid log(0))
+        eps = 1e-10
+        uncertainty_entropy = -(
+            share_actor * log(share_actor + eps) +
+            share_practical * log(share_practical + eps) +
+            share_agentic * log(share_agentic + eps) +
+            share_competitive * log(share_competitive + eps)
+        )
+
         flat_uncertainty = Dict{String,Any}(
             "run_id" => sim.run_id,
             "round" => round,
-            "actor_ignorance_level" => get(get(uncertainty_state, "actor_ignorance", Dict()), "level", 0.0),
-            "practical_indeterminism_level" => get(get(uncertainty_state, "practical_indeterminism", Dict()), "level", 0.0),
-            "agentic_novelty_level" => get(get(uncertainty_state, "agentic_novelty", Dict()), "level", 0.0),
-            "competitive_recursion_level" => get(get(uncertainty_state, "competitive_recursion", Dict()), "level", 0.0)
+            # Current levels
+            "actor_ignorance_level" => actor_level,
+            "practical_indeterminism_level" => practical_level,
+            "agentic_novelty_level" => agentic_level,
+            "competitive_recursion_level" => competitive_level,
+            # Round-over-round deltas (transformation rate)
+            "delta_actor_ignorance" => delta_actor,
+            "delta_practical_indeterminism" => delta_practical,
+            "delta_agentic_novelty" => delta_agentic,
+            "delta_competitive_recursion" => delta_competitive,
+            # Cumulative change from baseline (total transformation)
+            "cumulative_delta_actor" => cumulative_delta_actor,
+            "cumulative_delta_practical" => cumulative_delta_practical,
+            "cumulative_delta_agentic" => cumulative_delta_agentic,
+            "cumulative_delta_competitive" => cumulative_delta_competitive,
+            # Portfolio composition
+            "uncertainty_total" => uncertainty_total,
+            "share_actor_ignorance" => share_actor,
+            "share_practical_indeterminism" => share_practical,
+            "share_agentic_novelty" => share_agentic,
+            "share_competitive_recursion" => share_competitive,
+            # Concentration and diversity measures
+            "uncertainty_hhi" => uncertainty_hhi,
+            "uncertainty_entropy" => uncertainty_entropy
         )
         push!(sim.data_buffer.uncertainty, flat_uncertainty)
+
+        # Update previous levels for next round
+        sim.previous_uncertainty_levels["actor_ignorance"] = actor_level
+        sim.previous_uncertainty_levels["practical_indeterminism"] = practical_level
+        sim.previous_uncertainty_levels["agentic_novelty"] = agentic_level
+        sim.previous_uncertainty_levels["competitive_recursion"] = competitive_level
     end
 
     # Buffer innovations

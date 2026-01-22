@@ -727,35 +727,32 @@ function measure_uncertainty_state!(
     hallucination_rate = length(env.ai_uncertainty_signals["hallucination_events"]) / max(1, env._ai_signal_history)
     knowledge_gap_term = 1.0 - clamp(knowledge_norm, 0.0, 1.0)
 
-    # REMOVED: Direct ai_ignorance_reduction based on info_quality
-    # Previously: ai_ignorance_reduction = avg_ai_info_quality * 0.25
-    # This was "putting finger on the scale" by assuming premium AI directly reduces
-    # ignorance. Instead, we let ignorance effects emerge from whether AI actually
-    # helps agents fill knowledge gaps (via accuracy, hallucination rates, etc.)
-    # The AI's effect on ignorance should emerge from the mechanics, not be assumed.
-    ai_ignorance_reduction = 0.0
+    # ACTOR IGNORANCE: Linear additive formula (consistent with other dimensions)
+    # Base level + weighted drivers that can accumulate or decline
+    # Theoretical rationale: Ignorance can spike during paradigm shifts or collapse
+    # with learning breakthroughs - sigmoid would artificially constrain these dynamics
 
-    # Raw actor ignorance with AI reduction
-    raw_actor = (
-        0.7 * knowledge_gap_term +
-        0.45 * gap_pressure +
-        0.35 * gap_coverage +
-        0.35 * hallucination_rate -
-        ai_ignorance_reduction -
-        0.18 * share_explore +
-        0.05 * share_maintain
+    actor_level = clamp(
+        0.25 +                              # base level
+        0.28 * knowledge_gap_term +         # knowledge gaps increase ignorance
+        0.18 * gap_pressure +               # pressure from gaps
+        0.12 * gap_coverage +               # breadth of gaps
+        0.15 * hallucination_rate -         # AI hallucinations increase ignorance
+        0.10 * share_explore +              # exploration reduces ignorance
+        0.03 * share_maintain,              # maintaining slightly increases (not learning)
+        0.0, 1.0
     )
-    actor_level = clamp(stable_sigmoid(raw_actor - 0.35), 0.01, 0.99)
 
     # Baseline (no AI) actor ignorance
-    raw_actor_no_ai = (
-        0.7 * knowledge_gap_term +
-        0.45 * gap_pressure +
-        0.35 * gap_coverage -
-        0.18 * share_explore +
-        0.05 * share_maintain
+    actor_level_no_ai = clamp(
+        0.25 +
+        0.28 * knowledge_gap_term +
+        0.18 * gap_pressure +
+        0.12 * gap_coverage -
+        0.10 * share_explore +
+        0.03 * share_maintain,
+        0.0, 1.0
     )
-    actor_level_no_ai = clamp(stable_sigmoid(raw_actor_no_ai - 0.35), 0.01, 0.99)
     ai_effects["ai_ignorance_delta"] = actor_level - actor_level_no_ai
 
     _update_short_term!(env, "actor_ignorance", actor_level)
@@ -915,26 +912,9 @@ function measure_uncertainty_state!(
     innovation_momentum = clamp(innovation_intensity + new_possibility_rate, 0.0, 1.0)
     reuse_pressure = 0.6 * combo_hhi_avg + 0.4 * sector_hhi_avg
 
-    novelty_pressure = (
-        0.32 * combo_rate +
-        0.24 * new_possibility_rate +
-        0.20 * niche_rate +
-        0.18 * adoption_rate +
-        0.15 * innovation_intensity +
-        0.12 * disruption_avg +
-        0.12 * scarcity_signal +
-        0.10 * sector_diversity
-    )
-
-    reuse_drag = (
-        0.40 * reuse_pressure +
-        0.12 * max(0.35 - new_possibility_rate, 0.0) +
-        0.10 * max(0.45 - scarcity_signal, 0.0) +
-        0.08 * max(0.4 - combo_rate, 0.0)
-    )
-
-    raw_novelty = novelty_pressure - reuse_drag
-    novelty_level = clamp(stable_sigmoid(2.1 * (raw_novelty - 0.05)), 0.05, 0.95)
+    # AGENTIC NOVELTY: Linear additive formula (consistent with other dimensions)
+    # Theoretical rationale: Novelty can collapse (combinatorial exhaustion) or
+    # explode (paradigm shifts) - sigmoid would artificially prevent these valid extremes
 
     novelty_diagnostics = Dict{String,Any}(
         "combo_rate" => combo_rate,
@@ -951,21 +931,35 @@ function measure_uncertainty_state!(
 
     # AI quality component
     ai_quality = clamp(ai_usage_pressure, 0.0, 1.0)
-    # REMOVED: Hardcoded tier-specific novelty effects
-    # Previously premium AI was penalized here, but this contradicted the actual mechanics
-    # where premium AI has LOWER reuse probability (tier_reuse_shift = -0.08).
-    # Now we let the novelty effects emerge from actual agent behavior (measured via
-    # tier_reuse_pressure) rather than assuming them.
-    ai_novelty_effect = 0.0
-
     ai_novelty_uplift = Float64(getfield_default(env.config, :AI_NOVELTY_UPLIFT, 0.08))
+
+    # Linear additive: drivers that increase novelty potential minus drags
     agentic_level = clamp(
-        0.25 + 0.38 * novelty_level + 0.25 * (combo_rate + reuse_pressure * 0.4) + 0.25 * scarcity_signal + 0.1 * disruption_avg + ai_novelty_uplift * ai_quality + ai_novelty_effect,
+        0.25 +                                  # base level
+        0.18 * combo_rate +                     # new combinations increase novelty
+        0.15 * new_possibility_rate +           # rate of new possibilities
+        0.12 * niche_rate +                     # niche discovery
+        0.10 * adoption_rate +                  # adoption of innovations
+        0.10 * innovation_intensity +           # innovation activity
+        0.08 * disruption_avg +                 # disruption potential
+        0.10 * scarcity_signal +                # component scarcity (novel combos harder)
+        0.08 * sector_diversity -               # diversity enables novelty
+        0.20 * reuse_pressure +                 # reuse reduces novelty (but kept positive for balance)
+        ai_novelty_uplift * ai_quality,         # AI effect on novelty
         0.0, 1.0
     )
 
     agentic_level_no_ai = clamp(
-        0.25 + 0.35 * novelty_level + 0.25 * (combo_rate + reuse_pressure * 0.4) + 0.25 * scarcity_signal + 0.1 * disruption_avg,
+        0.25 +
+        0.18 * combo_rate +
+        0.15 * new_possibility_rate +
+        0.12 * niche_rate +
+        0.10 * adoption_rate +
+        0.10 * innovation_intensity +
+        0.08 * disruption_avg +
+        0.10 * scarcity_signal +
+        0.08 * sector_diversity -
+        0.20 * reuse_pressure,
         0.0, 1.0
     )
 
