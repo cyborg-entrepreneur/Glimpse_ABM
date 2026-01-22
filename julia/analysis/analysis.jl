@@ -44,6 +44,11 @@ export InformationParadoxAnalyzer, run_paradox_analysis
 export analyze_temporal_reversal, analyze_herding_dynamics, analyze_none_advantages
 # Advanced analysis
 export run_advanced_analysis, run_complete_analysis
+# Rigorous analysis (run-level clustering, unconditional/conditional separation)
+export run_level_summary_stats, run_level_statistical_tests
+export compute_survival_summary_unconditional, compute_capital_summary_unconditional
+export get_construct_operationalization, AnalysisMode
+export UNCONDITIONAL, CONDITIONAL_ON_SURVIVAL
 
 # ============================================================================
 # AI LEVEL NORMALIZATION
@@ -917,7 +922,7 @@ end
 # ============================================================================
 
 """
-Export research tables for AMJ-style publication.
+Export research tables for publication.
 """
 function export_research_tables(framework::AnalysisFramework; output_dir::Union{String,Nothing}=nothing)::Dict{String,String}
     exported = Dict{String,String}()
@@ -2092,6 +2097,567 @@ function run_complete_analysis(results_dir::String)::Dict{String,Any}
     println("="^70)
 
     return all_results
+end
+
+# ============================================================================
+# RIGOROUS ANALYSIS: RUN-LEVEL CLUSTERING
+# ============================================================================
+
+"""
+Analysis mode enum for unconditional vs conditional analyses.
+
+Per methodological best practices for computational experiments:
+- UNCONDITIONAL: Primary analysis including all agents (dead agents have capital=0)
+- CONDITIONAL_ON_SURVIVAL: Secondary/descriptive analysis, surviving agents only
+"""
+@enum AnalysisMode begin
+    UNCONDITIONAL = 1
+    CONDITIONAL_ON_SURVIVAL = 2
+end
+
+"""
+Compute run-level summary statistics for proper inference with clustered data.
+
+When AI tier is assigned at agent level within a run, agents interact and outcomes
+are not independent. This function aggregates to run-level summaries where each
+run is treated as the unit of analysis, following best practices for clustered data.
+
+Returns a DataFrame where each row is one simulation run with:
+- run_id: Unique run identifier
+- ai_tier: The AI tier for this run (in fixed-tier designs)
+- n_agents: Number of agents in the run
+- survival_rate: Proportion of agents surviving
+- mean_capital: Mean final capital (all agents, dead=0)
+- median_capital: Median final capital
+- total_successes: Total investment successes
+- total_failures: Total investment failures
+- mean_innovations: Mean innovations per agent
+"""
+function run_level_summary_stats(
+    agent_df::DataFrame;
+    run_col::Symbol = :run_id,
+    tier_col::Symbol = :primary_ai_level,
+    mode::AnalysisMode = UNCONDITIONAL
+)::DataFrame
+    if isempty(agent_df) || !hasproperty(agent_df, run_col)
+        return DataFrame()
+    end
+
+    results = DataFrame(
+        run_id = String[],
+        ai_tier = String[],
+        n_agents = Int[],
+        survival_rate = Float64[],
+        mean_capital = Float64[],
+        median_capital = Float64[],
+        std_capital = Float64[],
+        total_successes = Int[],
+        total_failures = Int[],
+        mean_innovations = Float64[],
+        analysis_mode = String[]
+    )
+
+    for run_id in unique(agent_df[!, run_col])
+        run_data = filter(row -> row[run_col] == run_id, agent_df)
+
+        if nrow(run_data) == 0
+            continue
+        end
+
+        # Determine AI tier for this run (mode in fixed-tier, or "mixed" otherwise)
+        ai_tier = if hasproperty(run_data, tier_col)
+            tiers = unique(run_data[!, tier_col])
+            length(tiers) == 1 ? string(tiers[1]) : "mixed"
+        else
+            "unknown"
+        end
+
+        n_agents = nrow(run_data)
+
+        # Survival rate (always computed on all agents)
+        survival_rate = if hasproperty(run_data, :survived)
+            mean(run_data.survived .== 1)
+        elseif hasproperty(run_data, :alive)
+            mean(run_data.alive .== true)
+        else
+            NaN
+        end
+
+        # Capital analysis based on mode
+        if mode == UNCONDITIONAL
+            # All agents - dead agents have their final capital (often 0)
+            capitals = if hasproperty(run_data, :final_capital)
+                Float64.(collect(skipmissing(run_data.final_capital)))
+            elseif hasproperty(run_data, :capital)
+                Float64.(collect(skipmissing(run_data.capital)))
+            else
+                Float64[]
+            end
+        else  # CONDITIONAL_ON_SURVIVAL
+            # Only surviving agents
+            survivors = if hasproperty(run_data, :survived)
+                filter(row -> row.survived == 1, run_data)
+            elseif hasproperty(run_data, :alive)
+                filter(row -> row.alive == true, run_data)
+            else
+                run_data
+            end
+            capitals = if hasproperty(survivors, :final_capital)
+                Float64.(collect(skipmissing(survivors.final_capital)))
+            elseif hasproperty(survivors, :capital)
+                Float64.(collect(skipmissing(survivors.capital)))
+            else
+                Float64[]
+            end
+        end
+
+        mean_capital = isempty(capitals) ? 0.0 : mean(capitals)
+        median_capital = isempty(capitals) ? 0.0 : median(capitals)
+        std_capital = length(capitals) > 1 ? std(capitals) : 0.0
+
+        # Success/failure counts
+        total_successes = hasproperty(run_data, :success_count) ?
+            sum(skipmissing(run_data.success_count)) : 0
+        total_failures = hasproperty(run_data, :failure_count) ?
+            sum(skipmissing(run_data.failure_count)) : 0
+
+        # Innovations
+        mean_innovations = hasproperty(run_data, :innovation_count) ?
+            mean(skipmissing(run_data.innovation_count)) : 0.0
+
+        push!(results, (
+            run_id = string(run_id),
+            ai_tier = ai_tier,
+            n_agents = n_agents,
+            survival_rate = survival_rate,
+            mean_capital = mean_capital,
+            median_capital = median_capital,
+            std_capital = std_capital,
+            total_successes = Int(total_successes),
+            total_failures = Int(total_failures),
+            mean_innovations = mean_innovations,
+            analysis_mode = mode == UNCONDITIONAL ? "unconditional" : "conditional_on_survival"
+        ))
+    end
+
+    return results
+end
+
+"""
+Run statistical tests at the run level for proper inference.
+
+Since agents within a run interact, we aggregate to run-level summaries and
+test differences across AI tiers using runs as the unit of analysis.
+This avoids inflated significance from treating non-independent agents as
+independent observations.
+"""
+function run_level_statistical_tests(
+    run_summary::DataFrame;
+    tier_col::Symbol = :ai_tier,
+    outcomes::Vector{Symbol} = [:survival_rate, :mean_capital]
+)::Dict{String,Any}
+    results = Dict{String,Any}(
+        "unit_of_analysis" => "run",
+        "clustering_note" => "Tests performed at run level to account for within-run agent dependence",
+        "tests" => Dict{String,Any}()
+    )
+
+    if isempty(run_summary) || !hasproperty(run_summary, tier_col)
+        results["status"] = "insufficient_data"
+        return results
+    end
+
+    tiers = unique(run_summary[!, tier_col])
+    tiers = filter(t -> t != "mixed" && t != "unknown", tiers)
+
+    if length(tiers) < 2
+        results["status"] = "insufficient_tiers"
+        return results
+    end
+
+    for outcome in outcomes
+        if !hasproperty(run_summary, outcome)
+            continue
+        end
+
+        outcome_results = Dict{String,Any}()
+
+        # Collect data by tier
+        tier_data = Dict{String,Vector{Float64}}()
+        for tier in tiers
+            tier_runs = filter(row -> row[tier_col] == tier, run_summary)
+            values = Float64.(collect(skipmissing(tier_runs[!, outcome])))
+            values = filter(isfinite, values)
+            if !isempty(values)
+                tier_data[string(tier)] = values
+            end
+        end
+
+        if length(tier_data) < 2
+            outcome_results["status"] = "insufficient_data_per_tier"
+            results["tests"][string(outcome)] = outcome_results
+            continue
+        end
+
+        # Kruskal-Wallis across tiers (run-level)
+        tier_vectors = collect(values(tier_data))
+        if all(length(v) >= 2 for v in tier_vectors)
+            try
+                # Import from Causal module
+                kw = GlimpseABM.Causal.kruskal_wallis(tier_vectors)
+                outcome_results["kruskal_wallis"] = Dict(
+                    "H" => kw.statistic,
+                    "p_value" => kw.p_value,
+                    "effect_size_eta_squared" => kw.effect_size,
+                    "n_runs_per_tier" => Dict(k => length(v) for (k, v) in tier_data),
+                    "interpretation" => kw.p_value < 0.05 ?
+                        "Significant difference across AI tiers at run level" :
+                        "No significant difference across AI tiers at run level"
+                )
+            catch e
+                outcome_results["kruskal_wallis_error"] = string(e)
+            end
+        end
+
+        # Pairwise comparisons with effect sizes
+        pairwise = Dict{String,Any}()
+        tier_names = collect(keys(tier_data))
+        for i in 1:length(tier_names)
+            for j in (i+1):length(tier_names)
+                t1, t2 = tier_names[i], tier_names[j]
+                v1, v2 = tier_data[t1], tier_data[t2]
+
+                if length(v1) >= 2 && length(v2) >= 2
+                    pair_key = "$(t1)_vs_$(t2)"
+                    try
+                        # Mann-Whitney U
+                        mw = GlimpseABM.Causal.mann_whitney_u(v1, v2)
+                        # Cohen's d
+                        cd = GlimpseABM.Causal.cohens_d(v1, v2)
+                        # Cliff's delta
+                        cliff = GlimpseABM.Causal.cliffs_delta(v1, v2)
+
+                        pairwise[pair_key] = Dict(
+                            "mann_whitney_U" => mw.U,
+                            "mann_whitney_p" => mw.p_value,
+                            "cohens_d" => cd.value,
+                            "cohens_d_ci" => (cd.ci_lower, cd.ci_upper),
+                            "cohens_d_interpretation" => cd.interpretation,
+                            "cliffs_delta" => cliff.value,
+                            "cliffs_delta_interpretation" => cliff.interpretation,
+                            "n_runs" => (length(v1), length(v2)),
+                            "means" => (mean(v1), mean(v2))
+                        )
+                    catch e
+                        pairwise[pair_key] = Dict("error" => string(e))
+                    end
+                end
+            end
+        end
+        outcome_results["pairwise_comparisons"] = pairwise
+
+        results["tests"][string(outcome)] = outcome_results
+    end
+
+    results["status"] = "completed"
+    return results
+end
+
+# ============================================================================
+# RIGOROUS ANALYSIS: UNCONDITIONAL VS CONDITIONAL
+# ============================================================================
+
+"""
+Compute survival summary - UNCONDITIONAL (Primary Analysis).
+
+Present unconditional analyses as primary to avoid post-treatment conditioning bias.
+This includes ALL agents regardless of survival status.
+"""
+function compute_survival_summary_unconditional(
+    agent_df::DataFrame;
+    tier_col::Symbol = :primary_ai_level
+)::DataFrame
+    results = DataFrame(
+        ai_tier = String[],
+        n_total = Int[],
+        n_survived = Int[],
+        survival_rate = Float64[],
+        se = Float64[],
+        ci_lower = Float64[],
+        ci_upper = Float64[],
+        analysis_type = String[]
+    )
+
+    if isempty(agent_df)
+        return results
+    end
+
+    # Ensure we have survival indicator
+    if !hasproperty(agent_df, :survived) && !hasproperty(agent_df, :alive)
+        return results
+    end
+
+    survival_col = hasproperty(agent_df, :survived) ? :survived : :alive
+
+    for tier in unique(agent_df[!, tier_col])
+        tier_df = filter(row -> row[tier_col] == tier, agent_df)
+        n = nrow(tier_df)
+
+        if n == 0
+            continue
+        end
+
+        survived = if survival_col == :survived
+            sum(tier_df.survived .== 1)
+        else
+            sum(tier_df.alive .== true)
+        end
+
+        rate = survived / n
+
+        # Wilson score interval
+        z = 1.96
+        denominator = 1 + z^2/n
+        center = (rate + z^2/(2*n)) / denominator
+        spread = z * sqrt((rate*(1-rate) + z^2/(4*n))/n) / denominator
+        ci_lower = max(0, center - spread)
+        ci_upper = min(1, center + spread)
+        se = spread / z
+
+        push!(results, (
+            ai_tier = string(tier),
+            n_total = n,
+            n_survived = survived,
+            survival_rate = rate,
+            se = se,
+            ci_lower = ci_lower,
+            ci_upper = ci_upper,
+            analysis_type = "unconditional_primary"
+        ))
+    end
+
+    return sort(results, :ai_tier)
+end
+
+"""
+Compute capital summary with explicit mode selection.
+
+Analysis modes to avoid post-treatment conditioning bias:
+- UNCONDITIONAL (primary): All agents, dead agents have capital=0 or their final value
+- CONDITIONAL_ON_SURVIVAL (secondary): Only surviving agents, clearly labeled
+"""
+function compute_capital_summary_unconditional(
+    agent_df::DataFrame;
+    tier_col::Symbol = :primary_ai_level,
+    mode::AnalysisMode = UNCONDITIONAL
+)::DataFrame
+    results = DataFrame(
+        ai_tier = String[],
+        n_agents = Int[],
+        mean_capital = Float64[],
+        median_capital = Float64[],
+        std_capital = Float64[],
+        min_capital = Float64[],
+        max_capital = Float64[],
+        analysis_type = String[]
+    )
+
+    if isempty(agent_df)
+        return results
+    end
+
+    capital_col = hasproperty(agent_df, :final_capital) ? :final_capital : :capital
+    if !hasproperty(agent_df, capital_col)
+        return results
+    end
+
+    for tier in unique(agent_df[!, tier_col])
+        tier_df = filter(row -> row[tier_col] == tier, agent_df)
+
+        # Apply mode filtering
+        if mode == CONDITIONAL_ON_SURVIVAL
+            if hasproperty(tier_df, :survived)
+                tier_df = filter(row -> row.survived == 1, tier_df)
+            elseif hasproperty(tier_df, :alive)
+                tier_df = filter(row -> row.alive == true, tier_df)
+            end
+        end
+
+        n = nrow(tier_df)
+        if n == 0
+            continue
+        end
+
+        capitals = Float64.(collect(skipmissing(tier_df[!, capital_col])))
+        capitals = filter(isfinite, capitals)
+
+        if isempty(capitals)
+            continue
+        end
+
+        push!(results, (
+            ai_tier = string(tier),
+            n_agents = n,
+            mean_capital = mean(capitals),
+            median_capital = median(capitals),
+            std_capital = length(capitals) > 1 ? std(capitals) : 0.0,
+            min_capital = minimum(capitals),
+            max_capital = maximum(capitals),
+            analysis_type = mode == UNCONDITIONAL ?
+                "unconditional_primary" : "conditional_on_survival_secondary"
+        ))
+    end
+
+    return sort(results, :ai_tier)
+end
+
+# ============================================================================
+# CONSTRUCT OPERATIONALIZATION TABLE
+# ============================================================================
+
+"""
+Get the Knightian uncertainty construct operationalization table.
+
+Provides a tight construct-to-code-to-measure mapping for each Knightian
+uncertainty component, supporting transparent validation of theoretical claims.
+
+Returns a Dict with the operationalization for each construct:
+- Construct name
+- Micro-mechanism in the model
+- Key parameters controlling it
+- Observable measures
+- Expected effect of AI tier
+"""
+function get_construct_operationalization()::Dict{String,Dict{String,Any}}
+    return Dict{String,Dict{String,Any}}(
+        "actor_ignorance" => Dict{String,Any}(
+            "construct" => "Actor Ignorance",
+            "definition" => "Information gaps about current market states, opportunity quality, and competitive dynamics",
+            "micro_mechanism" => "Agents have imperfect signals about opportunity expected returns and sector conditions. " *
+                                 "AI tiers provide progressively more accurate information through domain capabilities " *
+                                 "(info_quality parameter in AI_DOMAIN_CAPABILITIES).",
+            "key_parameters" => [
+                "AI_DOMAIN_CAPABILITIES[tier].info_quality - Information accuracy by AI tier",
+                "OPPORTUNITY_UNCERTAINTY_RANGE - Base uncertainty in opportunity signals",
+                "RETURN_NOISE_SCALE - Noise in realized vs expected returns"
+            ],
+            "observable_measures" => [
+                "uncertainty_state['actor_ignorance']['level'] - Perceived ignorance level (0-1)",
+                "Forecast error: |expected_return - realized_return|",
+                "Investment success rate by AI tier"
+            ],
+            "ai_effect" => "Higher AI tiers reduce actor ignorance through better information quality. " *
+                          "Premium AI has info_quality=0.92 vs none=0.40, reducing forecast errors " *
+                          "and improving investment selection accuracy.",
+            "expected_direction" => "AI ↑ → Actor Ignorance ↓ → Better decisions"
+        ),
+
+        "practical_indeterminism" => Dict{String,Any}(
+            "construct" => "Practical Indeterminism",
+            "definition" => "Unpredictable execution outcomes and path dependencies beyond informational gaps",
+            "micro_mechanism" => "Stochastic elements in opportunity returns (power law distributions), " *
+                                 "market regime transitions, and operational costs create execution uncertainty. " *
+                                 "Investment maturity timing adds temporal uncertainty.",
+            "key_parameters" => [
+                "POWER_LAW_SHAPE_A - Controls return distribution tail thickness",
+                "MACRO_REGIME_TRANSITIONS - Stochastic market state transitions",
+                "SECTOR_PROFILES.maturity_range - Investment timing uncertainty",
+                "RETURN_NOISE_SCALE - Execution noise in returns"
+            ],
+            "observable_measures" => [
+                "uncertainty_state['practical_indeterminism']['level'] - Perceived indeterminism (0-1)",
+                "Return variance within same opportunity type",
+                "Market regime volatility (transition frequency)"
+            ],
+            "ai_effect" => "AI provides execution guidance (exec_quality parameter) that reduces but cannot " *
+                          "eliminate practical indeterminism. Premium exec_quality=0.88 vs none=0.35. " *
+                          "However, fundamental stochasticity persists regardless of AI tier.",
+            "expected_direction" => "AI ↑ → Practical Indeterminism ↓ (partial) → More consistent execution"
+        ),
+
+        "agentic_novelty" => Dict{String,Any}(
+            "construct" => "Agentic Novelty",
+            "definition" => "Genuinely new possibilities emerging from creative entrepreneurial action",
+            "micro_mechanism" => "Innovation system generates novel opportunities through knowledge recombination. " *
+                                 "Agents with higher innovativeness traits and sector knowledge can create " *
+                                 "new opportunities. AI may homogenize exploration reducing novelty generation.",
+            "key_parameters" => [
+                "INNOVATION_PROBABILITY - Base chance of successful innovation",
+                "INNOVATION_SUCCESS_RETURN_MULTIPLIER - Returns from novel combinations",
+                "SECTOR_PROFILES.innovation_probability - Sector-specific innovation rates",
+                "AI_NOVELTY_UPLIFT - How AI affects novelty perception"
+            ],
+            "observable_measures" => [
+                "uncertainty_state['agentic_novelty']['level'] - Novelty in opportunity space (0-1)",
+                "innovation_count per agent",
+                "New opportunity types discovered per round",
+                "Knowledge recombination success rate"
+            ],
+            "ai_effect" => "PARADOXICAL: AI improves innovation execution but may reduce true novelty. " *
+                          "High AI adoption can homogenize strategies, reducing the diversity of " *
+                          "entrepreneurial experiments that generate genuine novelty.",
+            "expected_direction" => "AI ↑ → Agentic Novelty ↓ (through homogenization) → Information Paradox"
+        ),
+
+        "competitive_recursion" => Dict{String,Any}(
+            "construct" => "Competitive Recursion",
+            "definition" => "Strategic interdependence where agent actions affect others' opportunity sets",
+            "micro_mechanism" => "When multiple agents pursue similar opportunities (high crowding), returns diminish. " *
+                                 "AI-using agents may herd toward similar signals, intensifying competition. " *
+                                 "Market HHI tracks concentration of agent strategies.",
+            "key_parameters" => [
+                "RETURN_DEMAND_CROWDING_THRESHOLD - When crowding penalty activates",
+                "RETURN_DEMAND_CROWDING_PENALTY - Return reduction from crowding",
+                "AI_HERDING_DECAY - How quickly AI herding effects dissipate",
+                "COMPETITION_INTENSITY (sector-specific) - Base competitive pressure"
+            ],
+            "observable_measures" => [
+                "uncertainty_state['competitive_recursion']['level'] - Competitive intensity (0-1)",
+                "HHI of opportunity choices (sector concentration)",
+                "Correlation of AI-tier agent decisions",
+                "Return penalty from crowding"
+            ],
+            "ai_effect" => "PARADOXICAL: AI enables better competitive analysis but creates correlated behavior. " *
+                          "When many agents use similar AI, they receive similar signals and make similar " *
+                          "choices, intensifying competitive recursion and crowding penalties.",
+            "expected_direction" => "AI ↑ → Competitive Recursion ↑ (through herding) → Diminished returns"
+        )
+    )
+end
+
+"""
+Print the construct operationalization table in a readable format.
+"""
+function print_construct_operationalization()
+    ops = get_construct_operationalization()
+
+    println("\n" * "="^80)
+    println("KNIGHTIAN UNCERTAINTY CONSTRUCT OPERATIONALIZATION")
+    println("="^80)
+
+    for (key, construct) in sort(collect(ops), by=x->x[1])
+        println("\n" * "-"^80)
+        println("CONSTRUCT: $(construct["construct"])")
+        println("-"^80)
+        println("\nDefinition:")
+        println("  $(construct["definition"])")
+        println("\nMicro-mechanism:")
+        println("  $(construct["micro_mechanism"])")
+        println("\nKey Parameters:")
+        for param in construct["key_parameters"]
+            println("  • $param")
+        end
+        println("\nObservable Measures:")
+        for measure in construct["observable_measures"]
+            println("  • $measure")
+        end
+        println("\nAI Effect:")
+        println("  $(construct["ai_effect"])")
+        println("\nExpected Direction:")
+        println("  $(construct["expected_direction"])")
+    end
+
+    println("\n" * "="^80)
 end
 
 end # module Analysis

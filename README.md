@@ -108,7 +108,7 @@ python3 -m glimpse_abm.cli --task master --runs 5 --results-dir ./results \
 # Smoke test (quick validation)
 python3 -m glimpse_abm.cli --task master --smoke --results-dir ./smoke_test
 
-# Fixed-tier causal analysis (recommended for AMJ submission)
+# Fixed-tier causal analysis (recommended for publication)
 python3 -m glimpse_abm.cli --task fixed --calibration-profile minimal_causal \
   --results-dir ./fixed_tier_results
 ```

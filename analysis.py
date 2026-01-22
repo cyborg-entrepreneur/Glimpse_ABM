@@ -1318,10 +1318,10 @@ class ComprehensiveAnalysisFramework:
         if path:
             exported['ai_uncertainty_survival'] = path
 
-        # Run rigorous statistical analyses for AMJ submission
+        # Run rigorous statistical analyses
         try:
             from .statistical_tests import RigorousStatisticalAnalysis, MixedEffectsAnalysis
-            print("\n📊 Running rigorous statistical analysis for AMJ...")
+            print("\n📊 Running rigorous statistical analysis...")
 
             stat_analysis = RigorousStatisticalAnalysis(
                 agent_df=self.agent_df,

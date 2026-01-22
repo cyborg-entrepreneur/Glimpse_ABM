@@ -282,7 +282,8 @@ function select_action(
     end
 
     capital = get_capital(agent)
-    survival_threshold = agent.config.INITIAL_CAPITAL * agent.config.SURVIVAL_CAPITAL_RATIO
+    # Use sector-specific survival threshold (aligned with check_survival!)
+    survival_threshold = _get_sector_survival_threshold(agent)
 
     # Capital pressure
     capital_ratio = capital / agent.config.INITIAL_CAPITAL
@@ -572,7 +573,12 @@ function process_matured_investments!(
     for investment in agent.active_investments
         if investment["maturity_round"] <= round
             # Investment matures
-            opp = investment["opportunity"]
+            opp = get(investment, "opportunity", nothing)
+            if isnothing(opp)
+                # Skip malformed investment - push to remaining and continue
+                push!(remaining_investments, investment)
+                continue
+            end
             invested_amount = Float64(investment["amount"])
 
             # Calculate realized return
@@ -787,17 +793,21 @@ function estimate_ai_cost(
         return 0.0
     end
 
-    ai_config = get(agent.config.AI_LEVELS, ai_level, agent.config.AI_LEVELS["none"])
-    cost_type = get(ai_config, "cost_type", "none")
+    ai_config = get(agent.config.AI_LEVELS, ai_level, nothing)
+    if isnothing(ai_config)
+        return 0.0
+    end
+
+    cost_type = ai_config.cost_type
 
     if cost_type == "subscription"
-        base_cost = Float64(get(ai_config, "cost", 0.0))
-        per_use = Float64(get(ai_config, "per_use_cost", 0.0))
+        base_cost = Float64(ai_config.cost)
+        per_use = Float64(ai_config.per_use_cost)
         # Amortize subscription over rounds
-        amort_rounds = max(1, get(agent.config.AI_SUBSCRIPTION_AMORTIZATION_ROUNDS, 20))
+        amort_rounds = max(1, agent.config.AI_SUBSCRIPTION_AMORTIZATION_ROUNDS)
         return base_cost / amort_rounds + per_use * max(expected_calls, 0.0)
     elseif cost_type == "per_use"
-        return Float64(get(ai_config, "cost", 0.0)) * max(expected_calls, 0.0)
+        return Float64(ai_config.cost) * max(expected_calls, 0.0)
     end
 
     return 0.0

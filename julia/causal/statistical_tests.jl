@@ -2,9 +2,8 @@
 Rigorous Statistical Testing Framework for GlimpseABM.jl
 
 This module provides publication-quality statistical analyses suitable for
-top-tier management journals like the Academy of Management Journal (AMJ).
-All tests include effect sizes, confidence intervals, assumption checks,
-and multiple comparison corrections.
+top-tier management journals. All tests include effect sizes, confidence
+intervals, assumption checks, and multiple comparison corrections.
 
 Port of: glimpse_abm/statistical_tests.py
 
@@ -1014,7 +1013,7 @@ Run complete statistical analysis suite.
 """
 function run_all_analyses!(analysis::RigorousStatisticalAnalysis)::DataFrame
     println("\n" * "="^70)
-    println("RIGOROUS STATISTICAL ANALYSIS FOR AMJ SUBMISSION")
+    println("RIGOROUS STATISTICAL ANALYSIS")
     println("="^70)
 
     # Hypothesis 1: AI tier effects on performance

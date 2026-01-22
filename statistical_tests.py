@@ -2,9 +2,8 @@
 Rigorous Statistical Testing Framework for Glimpse ABM.
 
 This module provides publication-quality statistical analyses suitable for
-top-tier management journals like the Academy of Management Journal (AMJ).
-All tests include effect sizes, confidence intervals, assumption checks,
-and multiple comparison corrections.
+top-tier management journals. All tests include effect sizes, confidence
+intervals, assumption checks, and multiple comparison corrections.
 
 Theoretical Foundation
 ----------------------
@@ -417,7 +416,7 @@ class RigorousStatisticalAnalysis:
             Publication-ready table of all statistical test results.
         """
         print("\n" + "=" * 70)
-        print("RIGOROUS STATISTICAL ANALYSIS FOR AMJ SUBMISSION")
+        print("RIGOROUS STATISTICAL ANALYSIS")
         print("=" * 70)
 
         # Hypothesis 1: AI tier effects on performance
@@ -945,7 +944,7 @@ class RigorousStatisticalAnalysis:
         Returns
         -------
         pd.DataFrame
-            Table suitable for inclusion in AMJ manuscript.
+            Publication-ready table suitable for inclusion in manuscript.
         """
         rows = [r.to_dict() for r in self.results]
         df = pd.DataFrame(rows)
@@ -1737,8 +1736,8 @@ class CausalIdentificationAnalysis:
     estimates (from emergent selection). It computes Average Treatment Effects
     (ATE) with bootstrap confidence intervals and effect sizes.
 
-    For AMJ reviewers, this addresses the concern that complex ABMs produce
-    causally ambiguous results by:
+    This addresses the concern that complex ABMs produce causally ambiguous
+    results by:
     1. Clearly labeling the identification strategy for each estimate
     2. Providing effect sizes (Cohen's d) with confidence intervals
     3. Computing robustness bounds across parameter variations
