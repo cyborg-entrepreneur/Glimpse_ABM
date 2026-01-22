@@ -24,6 +24,10 @@ export bootstrap_ci, permutation_test
 export mann_whitney_u, survival_analysis
 export EffectSizeResult, ANOVAResult, SurvivalResult
 
+# Run-level analysis functions
+export aggregate_to_run_level, run_level_anova, pairwise_run_tests
+export calculate_icc, bootstrap_run_ci, run_complete_run_level_analysis
+
 # Advanced causal methods
 export CoxRegressionResult, PropensityScoreResult, DiDResult, RDResult
 export kaplan_meier_curves, log_rank_test
@@ -53,6 +57,7 @@ export run_statistical_analysis
 
 # Include statistical tests module
 include("statistical_tests.jl")
+include("run_level_analysis.jl")
 
 # ============================================================================
 # EFFECT SIZE RESULT TYPES
