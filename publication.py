@@ -119,40 +119,70 @@ class LaTeXTableGenerator:
         Parameters
         ----------
         agent_df : pd.DataFrame
-            Agent-level data with columns: ai_tier, final_capital, survived,
-            successful_investments, failed_investments, etc.
+            Agent-level data OR pre-aggregated summary statistics.
+            Handles both raw agent data and descriptive_statistics_amj.csv format.
         """
-        # Group by AI tier
         tier_order = ['none', 'basic', 'advanced', 'premium']
-        available_tiers = [t for t in tier_order if t in agent_df['ai_tier'].unique()]
-
         rows = []
-        for tier in available_tiers:
-            tier_data = agent_df[agent_df['ai_tier'] == tier]
-            n = len(tier_data)
 
-            # Survival rate
-            survived = tier_data['survived'].mean() if 'survived' in tier_data.columns else np.nan
+        # Normalize column names
+        df_cols = {c.lower().replace(' ', '_'): c for c in agent_df.columns}
 
-            # Capital statistics
-            cap_mean = tier_data['final_capital'].mean() if 'final_capital' in tier_data.columns else np.nan
-            cap_sd = tier_data['final_capital'].std() if 'final_capital' in tier_data.columns else np.nan
+        # Check if this is pre-aggregated data (has columns like final_capital_mean)
+        is_preaggregated = 'final_capital_mean' in df_cols or 'final_capital_mean' in agent_df.columns
 
-            # Investment outcomes
-            if 'successful_investments' in tier_data.columns:
-                success_rate = (tier_data['successful_investments'] /
-                               (tier_data['successful_investments'] + tier_data['failed_investments'] + 0.001)).mean()
-            else:
-                success_rate = np.nan
+        if is_preaggregated:
+            # Handle pre-aggregated format from descriptive_statistics_amj.csv
+            tier_col = next((c for c in agent_df.columns if c.lower().replace(' ', '_') == 'ai_tier'), None)
+            if tier_col is None:
+                tier_col = agent_df.columns[0]  # First column is usually the tier
 
-            rows.append({
-                'AI Tier': tier.capitalize(),
-                'N': n,
-                'Survival Rate': survived,
-                'Mean Capital': cap_mean,
-                'SD Capital': cap_sd,
-                'Investment Success': success_rate
-            })
+            for tier in tier_order:
+                tier_data = agent_df[agent_df[tier_col].str.lower() == tier]
+                if len(tier_data) == 0:
+                    continue
+
+                row = tier_data.iloc[0]
+                n = int(row.get('n', row.get('N', 0)))
+                cap_mean = row.get('final_capital_mean', np.nan)
+                cap_sd = row.get('final_capital_sd', np.nan)
+                survived = row.get('survived_mean', np.nan)
+
+                rows.append({
+                    'AI Tier': tier.capitalize(),
+                    'N': n,
+                    'Survival Rate': survived,
+                    'Mean Capital': cap_mean,
+                    'SD Capital': cap_sd,
+                    'Investment Success': np.nan  # Not in summary format
+                })
+        else:
+            # Handle raw agent-level data
+            tier_col = 'ai_tier' if 'ai_tier' in agent_df.columns else agent_df.columns[0]
+            available_tiers = [t for t in tier_order if t in agent_df[tier_col].str.lower().unique()]
+
+            for tier in available_tiers:
+                tier_data = agent_df[agent_df[tier_col].str.lower() == tier]
+                n = len(tier_data)
+
+                survived = tier_data['survived'].mean() if 'survived' in tier_data.columns else np.nan
+                cap_mean = tier_data['final_capital'].mean() if 'final_capital' in tier_data.columns else np.nan
+                cap_sd = tier_data['final_capital'].std() if 'final_capital' in tier_data.columns else np.nan
+
+                if 'successful_investments' in tier_data.columns:
+                    success_rate = (tier_data['successful_investments'] /
+                                   (tier_data['successful_investments'] + tier_data['failed_investments'] + 0.001)).mean()
+                else:
+                    success_rate = np.nan
+
+                rows.append({
+                    'AI Tier': tier.capitalize(),
+                    'N': n,
+                    'Survival Rate': survived,
+                    'Mean Capital': cap_mean,
+                    'SD Capital': cap_sd,
+                    'Investment Success': success_rate
+                })
 
         df = pd.DataFrame(rows)
 
@@ -611,18 +641,24 @@ class UncertaintyTransformationAnalyzer:
             # (using early vs late rounds)
             if 'round' in self.uncertainty_df.columns:
                 max_round = self.uncertainty_df['round'].max()
-                early = self.uncertainty_df['round'] <= max_round * 0.3
-                late = self.uncertainty_df['round'] >= max_round * 0.7
+                early_threshold = max_round * 0.3
+                late_threshold = max_round * 0.7
 
-                early_effect = (
-                    premium[early & (premium.index.isin(premium.index))][level_col].mean() -
-                    no_ai[early & (no_ai.index.isin(no_ai.index))][level_col].mean()
-                ) if level_col in premium.columns else np.nan
+                # Filter each tier separately to avoid broadcasting issues
+                no_ai_early = no_ai[no_ai['round'] <= early_threshold]
+                no_ai_late = no_ai[no_ai['round'] >= late_threshold]
+                premium_early = premium[premium['round'] <= early_threshold]
+                premium_late = premium[premium['round'] >= late_threshold]
 
-                late_effect = (
-                    premium[late & (premium.index.isin(premium.index))][level_col].mean() -
-                    no_ai[late & (no_ai.index.isin(no_ai.index))][level_col].mean()
-                ) if level_col in premium.columns else np.nan
+                if len(premium_early) > 0 and len(no_ai_early) > 0 and level_col in premium.columns:
+                    early_effect = premium_early[level_col].mean() - no_ai_early[level_col].mean()
+                else:
+                    early_effect = np.nan
+
+                if len(premium_late) > 0 and len(no_ai_late) > 0 and level_col in premium.columns:
+                    late_effect = premium_late[level_col].mean() - no_ai_late[level_col].mean()
+                else:
+                    late_effect = np.nan
             else:
                 early_effect = np.nan
                 late_effect = np.nan
@@ -827,34 +863,59 @@ class PublicationFigureGenerator:
     ) -> Path:
         """
         Generate Figure 1: Survival rates by AI tier with confidence intervals.
+        Handles both raw agent data and pre-aggregated summary data.
         """
         fig, ax = plt.subplots(figsize=(8, 6))
 
         tier_order = ['none', 'basic', 'advanced', 'premium']
         survival_stats = []
 
+        # Detect tier column
+        tier_col = None
+        for col in ['ai_tier', 'AI Tier', 'ai_level_used']:
+            if col in agent_df.columns:
+                tier_col = col
+                break
+        if tier_col is None:
+            tier_col = agent_df.columns[0]
+
+        # Check if pre-aggregated (has survived_mean column)
+        is_preaggregated = 'survived_mean' in agent_df.columns
+
         for tier in tier_order:
-            tier_data = agent_df[agent_df['ai_tier'] == tier]
+            tier_data = agent_df[agent_df[tier_col].astype(str).str.lower() == tier]
             if len(tier_data) == 0:
                 continue
 
-            survived = tier_data['survived'].values if 'survived' in tier_data.columns else np.array([])
-            if len(survived) == 0:
-                continue
+            if is_preaggregated:
+                # Pre-aggregated summary data
+                row = tier_data.iloc[0]
+                rate = float(row.get('survived_mean', 0))
+                n = int(row.get('n', row.get('N', 100)))
+                # Use normal approximation for CI since we only have mean
+                se = np.sqrt(rate * (1 - rate) / n) if n > 0 else 0
+                ci_lower = max(0, rate - 1.96 * se)
+                ci_upper = min(1, rate + 1.96 * se)
+            else:
+                # Raw agent-level data
+                survived = tier_data['survived'].values if 'survived' in tier_data.columns else np.array([])
+                if len(survived) == 0:
+                    continue
 
-            rate = survived.mean()
-            # Wilson score interval
-            n = len(survived)
-            z = 1.96
-            denominator = 1 + z**2/n
-            centre = (rate + z**2/(2*n)) / denominator
-            margin = z * np.sqrt((rate*(1-rate) + z**2/(4*n))/n) / denominator
+                rate = survived.mean()
+                n = len(survived)
+                z = 1.96
+                denominator = 1 + z**2/n
+                centre = (rate + z**2/(2*n)) / denominator
+                margin = z * np.sqrt((rate*(1-rate) + z**2/(4*n))/n) / denominator
+                ci_lower = max(0, centre - margin)
+                ci_upper = min(1, centre + margin)
 
             survival_stats.append({
                 'tier': tier,
                 'rate': rate,
-                'ci_lower': max(0, centre - margin),
-                'ci_upper': min(1, centre + margin),
+                'ci_lower': ci_lower,
+                'ci_upper': ci_upper,
                 'n': n
             })
 
@@ -1390,6 +1451,7 @@ class PublicationPipeline:
         """Load data from results directory if not already provided."""
         try:
             import pickle
+            tables_dir = self.results_dir / 'tables'
 
             # Try to load compiled dataframes
             compiled_path = self.results_dir / 'compiled_data.pkl'
@@ -1402,7 +1464,38 @@ class PublicationPipeline:
                     self.matured_df = data.get('matured_df', self.matured_df)
                 return True
 
-            # Try CSV files
+            # Try loading from analysis framework's exported tables
+            # Agent/descriptive stats
+            if self.agent_df is None:
+                desc_path = tables_dir / 'descriptive_statistics_amj.csv'
+                if desc_path.exists():
+                    df = pd.read_csv(desc_path)
+                    # Normalize column names
+                    df.columns = [c.lower().replace(' ', '_') for c in df.columns]
+                    if 'ai_tier' not in df.columns and 'ai tier' in [c.lower() for c in df.columns]:
+                        df = df.rename(columns={c: 'ai_tier' for c in df.columns if c.lower() == 'ai tier'})
+                    self.agent_df = df
+
+            # Uncertainty data
+            if self.uncertainty_df is None:
+                unc_path = tables_dir / 'uncertainty_by_ai.csv'
+                if unc_path.exists():
+                    df = pd.read_csv(unc_path)
+                    # Normalize ai_level_used -> ai_tier
+                    if 'ai_level_used' in df.columns:
+                        df = df.rename(columns={'ai_level_used': 'ai_tier'})
+                    self.uncertainty_df = df
+
+            # Matured outcomes
+            if self.matured_df is None:
+                mat_path = tables_dir / 'matured_outcomes_by_ai.csv'
+                if mat_path.exists():
+                    df = pd.read_csv(mat_path)
+                    if 'ai_level_used' in df.columns:
+                        df = df.rename(columns={'ai_level_used': 'ai_tier'})
+                    self.matured_df = df
+
+            # Try generic CSV files as fallback
             for name, attr in [
                 ('agents', 'agent_df'),
                 ('decisions', 'decision_df'),
@@ -1413,7 +1506,11 @@ class PublicationPipeline:
                 if csv_path.exists() and getattr(self, attr) is None:
                     setattr(self, attr, pd.read_csv(csv_path))
 
-            return self.agent_df is not None
+            loaded_count = sum(1 for df in [self.agent_df, self.uncertainty_df, self.matured_df] if df is not None)
+            if loaded_count > 0:
+                print(f"  Loaded {loaded_count} dataframes from {tables_dir}")
+
+            return self.agent_df is not None or self.uncertainty_df is not None
 
         except Exception as e:
             print(f"Error loading data: {e}")
