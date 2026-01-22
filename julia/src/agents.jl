@@ -390,7 +390,9 @@ function select_action(
 
     composite_uncertainty = (actor_ignorance + practical_indet + agentic_novelty + competitive_rec) / 4
 
-    # Base action scores
+    # Base action scores using configurable weights
+    # Note: innovativeness trait now only affects innovation SUCCESS, not selection
+    # This prevents double-penalty and allows calibration of action shares
     scores = Dict(
         "invest" => 0.0,
         "innovate" => 0.0,
@@ -404,25 +406,26 @@ function select_action(
             agent.uncertainty_response, "practical_indeterminism", practical_indet;
             rng=agent.rng
         )
-        scores["invest"] = 0.4 * invest_factor * capital_ratio * (1.0 - competitive_rec * 0.5)
+        scores["invest"] = agent.config.ACTION_BASE_WEIGHT_INVEST * invest_factor * capital_ratio * (1.0 - competitive_rec * 0.5)
     end
 
     # Innovation score - higher when agentic novelty potential is high
+    # Note: removed innovativeness multiplier here (it affects success probability instead)
     innovate_factor = get_response_factor(
         agent.uncertainty_response, "agentic_novelty", agentic_novelty;
         rng=agent.rng
     )
-    scores["innovate"] = 0.3 * agent.innovativeness * innovate_factor * (1.0 + agentic_novelty * 0.3)
+    scores["innovate"] = agent.config.ACTION_BASE_WEIGHT_INNOVATE * innovate_factor * (1.0 + agentic_novelty * 0.3)
 
     # Exploration score - higher when ignorance is high
     explore_factor = get_response_factor(
         agent.uncertainty_response, "actor_ignorance", actor_ignorance;
         rng=agent.rng
     )
-    scores["explore"] = 0.25 * explore_factor * (1.0 + actor_ignorance * 0.5)
+    scores["explore"] = agent.config.ACTION_BASE_WEIGHT_EXPLORE * explore_factor * (1.0 + actor_ignorance * 0.5)
 
     # Maintain score - higher under high uncertainty or capital pressure
-    maintain_base = 0.2
+    maintain_base = agent.config.ACTION_BASE_WEIGHT_MAINTAIN
     if under_pressure
         maintain_base += 0.3
     end
@@ -2999,12 +3002,12 @@ function make_decision!(
     explore_utility = calculate_exploration_utility(agent, perception; ai_level=ai_level)
     maintain_utility = calculate_maintain_utility(agent, market_conditions, perception; estimated_cost=estimated_cost)
 
-    # Select action
+    # Select action - apply configurable base weights to raw utilities
     utilities = Dict(
-        "invest" => invest_utility,
-        "innovate" => innovate_utility,
-        "explore" => explore_utility,
-        "maintain" => maintain_utility
+        "invest" => invest_utility * agent.config.ACTION_BASE_WEIGHT_INVEST,
+        "innovate" => innovate_utility * agent.config.ACTION_BASE_WEIGHT_INNOVATE,
+        "explore" => explore_utility * agent.config.ACTION_BASE_WEIGHT_EXPLORE,
+        "maintain" => maintain_utility * agent.config.ACTION_BASE_WEIGHT_MAINTAIN
     )
 
     # Can't invest without opportunities

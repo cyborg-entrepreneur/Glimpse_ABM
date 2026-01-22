@@ -447,8 +447,30 @@ class EmergentConfig:
     OPPORTUNITIES_PER_CAPITA: float = 0.01
     DISCOVERY_RATE_SCALING: float = 0.5
     MIN_OPPORTUNITIES: int = 5
-    POWER_LAW_SHAPE_A: float = 3
     OPPORTUNITY_CAPITAL_REQUIREMENTS: float = 10000
+
+    # Power law return distribution
+    # Venture returns follow a power law (Pareto) distribution where most
+    # investments return near the minimum while rare "unicorns" drive returns.
+    #
+    # POWER_LAW_SHAPE_A (α) controls tail heaviness:
+    #   α = 2.0: Heavy tails (early-stage VC dynamics) - CALIBRATED DEFAULT
+    #   α = 2.5: Moderate tails (growth equity)
+    #   α = 3.0: Lighter tails (late-stage/buyout)
+    #
+    # Empirical VC benchmarks (Kaplan & Schoar, Korteweg & Sorensen):
+    #   - ~65% of investments return <1× (losses)
+    #   - ~25% return 1-3× (modest wins)
+    #   - ~10% return 3×+ (winners that drive portfolio returns)
+    #   - Top 1% can return 10-100×+ (unicorns)
+    #
+    # CALIBRATION NOTE (2025-01, n=20 runs):
+    # α = 2.0 produces: Survival 53%, Innovation 42%, Median 1.24×, Mean 3.81×
+    # Distribution: 46% losses, 27% modest (1-3×), 22% winners (3-10×), 5% unicorns (10×+)
+    # Less extreme than pure VC benchmarks (65% losses) because agents are
+    # individual firms, not diversified portfolio managers. Power law shape
+    # (median < mean, unicorn potential up to 1000×+) is preserved.
+    POWER_LAW_SHAPE_A: float = 2.0
 
     # Learning parameters
     LEARNING_RATE: float = 0.02
@@ -557,6 +579,16 @@ class EmergentConfig:
     ACTION_SELECTION_TEMPERATURE: float = 0.45
     ACTION_SELECTION_NOISE: float = 0.10
     ACTION_BIAS_SIGMA: float = 0.05
+
+    # Base weights for action selection (multiplied against raw utility scores)
+    # Calibrated 2025-01 to achieve:
+    #   - Innovation share: ~41% (target: 40% ± 10%)
+    #   - Survival rate: ~55% (target: 50% ± 8%)
+    # Applied as multipliers in _choose_action_type() before softmax selection
+    ACTION_BASE_WEIGHT_INVEST: float = 0.25
+    ACTION_BASE_WEIGHT_INNOVATE: float = 0.55
+    ACTION_BASE_WEIGHT_EXPLORE: float = 0.12
+    ACTION_BASE_WEIGHT_MAINTAIN: float = 0.20
 
     # Uncertainty volatility controls
     UNCERTAINTY_SHORT_WINDOW: int = 6

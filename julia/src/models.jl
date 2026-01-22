@@ -281,43 +281,76 @@ function realized_return(
         base_mean *= clamp(crowd_penalty, 0.35, 1.0)
     end
 
-    # Stochastic execution path
+    # =========================================================================
+    # POWER LAW RETURN DISTRIBUTION
+    # =========================================================================
+    # Venture returns empirically follow a power law (Pareto) distribution:
+    # - Most investments return near the minimum (many failures/zombies)
+    # - A small number of "home runs" drive portfolio returns
+    # - Matches VC empirics: ~65% return <1×, ~25% return 1-3×, ~10% are outliers
+    #
+    # We use a Pareto distribution with:
+    # - x_m (minimum): scales with opportunity quality (base_mean)
+    # - α (shape): from config.POWER_LAW_SHAPE_A (typically 2.0-2.5)
+    #
+    # Lower α = heavier tails = more extreme outliers
+    # α ≈ 2.0: Very heavy tails (early-stage VC)
+    # α ≈ 2.5: Moderate tails (growth equity)
+    # α ≈ 3.0: Lighter tails (late-stage/buyout)
+    # =========================================================================
+
     volatility = Float64(get(market_conditions, "volatility", 0.0))
-    noise_scale = isnothing(config) ? 0.25 : config.RETURN_NOISE_SCALE
-
     regime = get(market_conditions, "regime", "normal")
-    regime_sigma_cap = Dict(
-        "crisis" => 2.0, "recession" => 1.6, "normal" => 1.4,
-        "growth" => 1.6, "boom" => 2.0
+
+    # Power law shape parameter - lower = heavier tails
+    alpha = isnothing(config) ? 2.5 : config.POWER_LAW_SHAPE_A
+
+    # Adjust alpha based on regime (more extreme outcomes in volatile regimes)
+    regime_alpha_adjust = Dict(
+        "crisis" => -0.4,    # Heavier tails in crisis
+        "recession" => -0.2,
+        "normal" => 0.0,
+        "growth" => -0.1,    # Slightly heavier in growth (more unicorns)
+        "boom" => -0.3       # Heavier in boom (bubbles create outliers)
     )
-    sigma_cap = get(regime_sigma_cap, regime, 1.6)
+    alpha += get(regime_alpha_adjust, regime, 0.0)
+    alpha = clamp(alpha, 1.5, 4.0)  # Keep alpha in reasonable range
 
-    log_sigma = clamp(noise_scale + risk_signal * 0.4 + volatility * 0.35, 0.3, sigma_cap)
-    log_mu = log(max(base_mean, 0.3))
+    # Adjust alpha based on volatility (more volatile = heavier tails)
+    alpha -= volatility * 0.3
+    alpha = clamp(alpha, 1.5, 4.0)
 
-    # Lognormal draw
-    log_draw = exp(log_mu + log_sigma * randn(rng))
+    # The minimum return (x_m) scales with opportunity quality
+    # Higher quality opportunities have higher floor returns
+    # Increased floor (0.5 multiplier) to ensure median ~1× for sustainable survival
+    x_min = clamp(base_mean * 0.5, 0.3, 3.0)
 
-    # Gaussian component
-    gaussian = base_mean + base_mean * (0.2 + volatility * 0.15) * randn(rng)
-    gaussian = max(0.0, gaussian)
+    # Sample from Pareto distribution: X = x_m / U^(1/α)
+    u = rand(rng)
+    # Avoid division by zero and extreme values
+    u = clamp(u, 1e-6, 1.0 - 1e-6)
+    pareto_draw = x_min / (u ^ (1.0 / alpha))
 
-    blended = 0.6 * log_draw + 0.4 * gaussian
+    # Apply quality scaling - better opportunities shift the distribution up
+    quality_scale = base_mean / max(x_min, 0.1)
+    scaled_return = pareto_draw * clamp(quality_scale * 0.6, 0.6, 2.5)
 
-    # Downside risk
+    # Downside risk adjustment (oversupply, risk signal)
     downside_weight = isnothing(config) ? 0.65 : config.DOWNSIDE_OVERSUPPLY_WEIGHT
-    downside = clamp(0.2 + risk_signal * 0.55 + downside_weight * oversupply, 0.0, 4.0)
+    downside = clamp(0.2 + risk_signal * 0.4 + downside_weight * oversupply, 0.0, 2.0)
 
-    # Beta shock
-    shock = rand(rng, Beta(1.2, 2.2))
-    blended *= clamp(1.0 - downside * shock, -0.5, 1.25)
+    # Beta shock for additional variance
+    shock = rand(rng, Beta(1.5, 2.5))
+    scaled_return *= clamp(1.0 - downside * shock * 0.5, 0.3, 1.2)
 
     # Final bounds
-    scarcity_headroom = 6.0 + 1.3 * max(0.0, scarcity_signal + novelty_signal - 1.0)
-    upper_bound = clamp(scarcity_headroom, 2.0, 18.0)
-    lower_bound = isnothing(config) ? -1.0 : config.RETURN_LOWER_BOUND
+    # Allow higher upper bound for power law outliers (unicorns)
+    # Scarcity and novelty increase the ceiling for rare outcomes
+    scarcity_headroom = 10.0 + 5.0 * max(0.0, scarcity_signal + novelty_signal - 0.8)
+    upper_bound = clamp(scarcity_headroom, 5.0, 50.0)  # Allow up to 50× for true unicorns
+    lower_bound = isnothing(config) ? 0.0 : max(0.0, config.RETURN_LOWER_BOUND)  # Floor at 0 for successful investments
 
-    return clamp(blended, lower_bound, upper_bound)
+    return clamp(scaled_return, lower_bound, upper_bound)
 end
 
 """

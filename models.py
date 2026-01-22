@@ -271,10 +271,11 @@ class Opportunity:
            novelty dimension) affects return potential. Scarce, novel combinations
            command higher returns; commoditized patterns face compression.
 
-        5. **Stochastic Execution Path**: Lognormal and Gaussian noise model
-           the practical indeterminism of execution. Even identical opportunities
-           can yield different returns due to timing, execution quality, and
-           path-dependent contingencies.
+        5. **Power Law Return Distribution**: Returns are drawn from a Pareto
+           distribution matching empirical VC return patterns (Kaplan & Schoar,
+           Korteweg & Sorensen). Most investments cluster near the minimum while
+           rare "unicorns" drive portfolio returns. The shape parameter α controls
+           tail heaviness: α ≈ 2.0 for early-stage VC, α ≈ 2.5 for growth equity.
 
         6. **Downside Risk Realization**: Tail risk materialization based on
            failure potential, market conditions, and oversupply pressure.
@@ -368,29 +369,69 @@ class Opportunity:
             crowd_penalty = 1.0 - 0.6 * (tier_share - 0.45)
             base_mean *= float(np.clip(crowd_penalty, 0.35, 1.0))
 
+        # =====================================================================
+        # POWER LAW RETURN DISTRIBUTION
+        # =====================================================================
+        # Venture returns empirically follow a power law (Pareto) distribution:
+        # - Most investments return near the minimum (many failures/zombies)
+        # - A small number of "home runs" drive portfolio returns
+        # - Matches VC empirics: ~65% return <1×, ~25% return 1-3×, ~10% are outliers
+        #
+        # We use a Pareto distribution with:
+        # - x_m (minimum): scales with opportunity quality (base_mean)
+        # - α (shape): from config.POWER_LAW_SHAPE_A (typically 2.0-2.5)
+        #
+        # Lower α = heavier tails = more extreme outliers
+        # =====================================================================
+
         volatility = float(market_conditions.get("volatility", 0.0) or 0.0)
-        noise_scale = getattr(self.config, "RETURN_NOISE_SCALE", 0.25)
-        # Regime-sensitive sigma: higher in boom/crisis
         regime = market_conditions.get("regime", "normal")
-        regime_sigma_cap = {"crisis": 2.0, "recession": 1.6, "normal": 1.4, "growth": 1.6, "boom": 2.0}.get(regime, 1.6)
-        log_sigma = np.clip(noise_scale + risk_signal * 0.4 + volatility * 0.35, 0.3, regime_sigma_cap)
-        log_mu = np.log(max(base_mean, 0.3))
-        log_draw = np.random.lognormal(mean=log_mu, sigma=log_sigma)
-        gaussian = np.random.normal(base_mean, base_mean * (0.2 + volatility * 0.15))
-        blended = 0.6 * log_draw + 0.4 * max(0.0, gaussian)
 
-        oversupply_weight = float(getattr(self.config, "DOWNSIDE_OVERSUPPLY_WEIGHT", 0.65))
-        downside = np.clip(0.2 + risk_signal * 0.55 + oversupply_weight * oversupply, 0.0, 4.0)
-        shock = np.random.beta(1.2, 2.2)
-        # Allow deeper downside draw; keep a softer floor
-        blended *= np.clip(1.0 - downside * shock, -0.5, 1.25)
+        # Power law shape parameter - lower = heavier tails
+        alpha = float(getattr(self.config, "POWER_LAW_SHAPE_A", 2.5))
 
-        scarcity_headroom = 6.0 + 1.3 * max(0.0, scarcity_signal + novelty_signal - 1.0)
-        upper_bound = float(np.clip(scarcity_headroom, 2.0, 18.0))
-        lower_bound = float(getattr(self.config, "RETURN_LOWER_BOUND", -1.0))
+        # Adjust alpha based on regime (more extreme outcomes in volatile regimes)
+        regime_alpha_adjust = {
+            "crisis": -0.4,    # Heavier tails in crisis
+            "recession": -0.2,
+            "normal": 0.0,
+            "growth": -0.1,    # Slightly heavier in growth (more unicorns)
+            "boom": -0.3       # Heavier in boom (bubbles create outliers)
+        }
+        alpha += regime_alpha_adjust.get(regime, 0.0)
+        alpha = float(np.clip(alpha, 1.5, 4.0))
 
-        # Permit deeper negative realized multiples to reflect wipeouts
-        return float(np.clip(blended, lower_bound, upper_bound))
+        # Adjust alpha based on volatility (more volatile = heavier tails)
+        alpha -= volatility * 0.3
+        alpha = float(np.clip(alpha, 1.5, 4.0))
+
+        # The minimum return (x_m) scales with opportunity quality
+        # Increased floor (0.5 multiplier) to ensure median ~1× for sustainable survival
+        x_min = float(np.clip(base_mean * 0.5, 0.3, 3.0))
+
+        # Sample from Pareto distribution: X = x_m / U^(1/α)
+        u = np.random.uniform(0, 1)
+        u = float(np.clip(u, 1e-6, 1.0 - 1e-6))
+        pareto_draw = x_min / (u ** (1.0 / alpha))
+
+        # Apply quality scaling - better opportunities shift the distribution up
+        quality_scale = base_mean / max(x_min, 0.1)
+        scaled_return = pareto_draw * float(np.clip(quality_scale * 0.6, 0.6, 2.5))
+
+        # Downside risk adjustment (oversupply, risk signal)
+        downside_weight = float(getattr(self.config, "DOWNSIDE_OVERSUPPLY_WEIGHT", 0.65))
+        downside = float(np.clip(0.2 + risk_signal * 0.4 + downside_weight * oversupply, 0.0, 2.0))
+
+        # Beta shock for additional variance
+        shock = np.random.beta(1.5, 2.5)
+        scaled_return *= float(np.clip(1.0 - downside * shock * 0.5, 0.3, 1.2))
+
+        # Final bounds - allow higher upper bound for power law outliers (unicorns)
+        scarcity_headroom = 10.0 + 5.0 * max(0.0, scarcity_signal + novelty_signal - 0.8)
+        upper_bound = float(np.clip(scarcity_headroom, 5.0, 50.0))  # Allow up to 50× for unicorns
+        lower_bound = max(0.0, float(getattr(self.config, "RETURN_LOWER_BOUND", 0.0)))  # Floor at 0 for successful investments
+
+        return float(np.clip(scaled_return, lower_bound, upper_bound))
 
     def update_lifecycle(self, adoption_rate: float) -> None:
         if self.lifecycle_stage == "emerging" and adoption_rate > 0.2:

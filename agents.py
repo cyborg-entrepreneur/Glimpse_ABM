@@ -1617,11 +1617,21 @@ class EmergentAgent:
         ai_cost = self._estimate_ai_cost(ai_level, expected_calls)
         total_estimated_cost = op_cost + ai_cost
 
-        utilities = {
+        # Calculate raw utilities
+        raw_utilities = {
             'invest': self._calculate_investment_utility(opportunities, market_conditions, info_system, perception, ai_level),
             'innovate': self._calculate_innovation_utility(market_conditions, perception),
             'explore': self._calculate_exploration_utility(perception, ai_level),
             'maintain': self._calculate_maintain_utility(market_conditions, perception, total_estimated_cost)
+        }
+
+        # Apply configurable base weights to scale utilities
+        # This allows calibration of action shares to empirical targets
+        utilities = {
+            'invest': raw_utilities['invest'] * getattr(self.config, 'ACTION_BASE_WEIGHT_INVEST', 0.40),
+            'innovate': raw_utilities['innovate'] * getattr(self.config, 'ACTION_BASE_WEIGHT_INNOVATE', 0.35),
+            'explore': raw_utilities['explore'] * getattr(self.config, 'ACTION_BASE_WEIGHT_EXPLORE', 0.25),
+            'maintain': raw_utilities['maintain'] * getattr(self.config, 'ACTION_BASE_WEIGHT_MAINTAIN', 0.20)
         }
         locked_capital = max(0.0, self.portfolio.locked_capital)
         locked_ratio = locked_capital / max(1.0, self.resources.capital + locked_capital)
