@@ -141,31 +141,19 @@ def _patch_joblib_for_sandbox() -> None:
 
 _patch_joblib_for_sandbox()
 
+# Progress tracker is optional - moved to .archive for cleanup
+def collect_progress(*args, **kwargs):
+    """Stub for removed progress_tracker module."""
+    return {}
+
+def render_report(*args, **kwargs):
+    """Stub for removed progress_tracker module."""
+    return "Progress tracking not available (module archived)"
+
 try:
     from tools.progress_tracker import collect_progress, render_report
-except ModuleNotFoundError:
-    import sys
-
-    _base = Path(__file__).resolve()
-    _candidate_roots = {
-        _base.parent,
-        _base.parents[1],
-        _base.parents[2],
-    }
-    _loaded = False
-    for root in _candidate_roots:
-        tools_dir = root / "tools"
-        tracker_path = tools_dir / "progress_tracker.py"
-        if tracker_path.exists():
-            sys.path.insert(0, str(root))
-            try:
-                from tools.progress_tracker import collect_progress, render_report  # type: ignore
-            except ModuleNotFoundError:
-                continue
-            _loaded = True
-            break
-    if not _loaded:
-        raise
+except (ModuleNotFoundError, ImportError):
+    pass  # Use stub functions defined above
 
 from .analysis import (
     ANALYSIS_VERSION,
@@ -173,7 +161,13 @@ from .analysis import (
     ComprehensiveVisualizationSuite,
     StatisticalAnalysisSuite,
 )
-from .publication import PublicationPipeline
+
+# PublicationPipeline is optional - moved to .archive for cleanup
+PublicationPipeline = None
+try:
+    from .publication import PublicationPipeline
+except (ModuleNotFoundError, ImportError):
+    pass  # PublicationPipeline not available
 from .config import (
     CalibrationProfile,
     EmergentConfig,
@@ -2237,19 +2231,22 @@ def run_cli(
 
         # Generate publication outputs if requested
         if getattr(args, 'publication', False):
-            results_dir = result.get('results_directory') or result.get('results_dir')
-            if results_dir:
-                print("\n[CLI] 📖 Generating publication outputs...")
-                try:
-                    pub_output_dir = os.path.join(results_dir, 'publication')
-                    pipeline = PublicationPipeline(results_dir, pub_output_dir)
-                    pub_results = pipeline.run_full_pipeline(
-                        author=getattr(args, 'publication_author', '')
-                    )
-                    result['publication_outputs'] = pub_results
-                    print(f"[CLI] Publication outputs: {pub_output_dir}")
-                except Exception as exc:
-                    print(f"[CLI] ⚠️ Publication generation failed: {exc}")
+            if PublicationPipeline is None:
+                print("[CLI] Publication pipeline not available (module archived)")
+            else:
+                results_dir = result.get('results_directory') or result.get('results_dir')
+                if results_dir:
+                    print("\n[CLI] Generating publication outputs...")
+                    try:
+                        pub_output_dir = os.path.join(results_dir, 'publication')
+                        pipeline = PublicationPipeline(results_dir, pub_output_dir)
+                        pub_results = pipeline.run_full_pipeline(
+                            author=getattr(args, 'publication_author', '')
+                        )
+                        result['publication_outputs'] = pub_results
+                        print(f"[CLI] Publication outputs: {pub_output_dir}")
+                    except Exception as exc:
+                        print(f"[CLI] Publication generation failed: {exc}")
 
     print("[CLI] ✅ Task completed.")
     return result
