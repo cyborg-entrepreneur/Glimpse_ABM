@@ -160,12 +160,13 @@ class EmergentSimulation:
         self._reset_debug_logs()
         self._pending_shift_events: List[Dict[str, Any]] = []
     
-    def _enforce_survival_threshold(self, agent: EmergentAgent) -> None:
+    def _enforce_survival_threshold(self, agent: EmergentAgent, round_num: int) -> None:
         if not agent.alive:
             return
         reason = agent._evaluate_failure_conditions(float(agent.resources.capital))
         if reason:
             agent.alive = False
+            agent.failure_round = round_num  # Track when failure occurred for Kaplan-Meier
             agent.failure_reason = reason
 
     def _apply_operating_costs(self, agents: List[EmergentAgent], market_conditions: Dict[str, Any], round_num: int) -> None:
@@ -187,7 +188,7 @@ class EmergentSimulation:
                 continue
             agent.resources.capital -= operating_cost
             agent.resources.performance.record_deployment('opex', operating_cost, 'none', round_num)
-            self._enforce_survival_threshold(agent)
+            self._enforce_survival_threshold(agent, round_num)
     
     def _record_round_to_buffer(self, round_num: int, decisions: list, market_state: dict,
                                 uncertainty_state: dict, innovations: list,
@@ -1079,7 +1080,7 @@ class EmergentSimulation:
                 round_num
             )
             agent.update_state_from_outcome(outcome, ai_was_accurate=ai_was_accurate)
-            self._enforce_survival_threshold(agent)
+            self._enforce_survival_threshold(agent, round_num)
         # BLOCK 2: AGENT DECISION MAKING (Parallel Processing)
         def process_agent_decision(agent_data_local):
             """Processes a single agent's decision. Renamed arg to avoid confusion."""
@@ -1151,10 +1152,10 @@ class EmergentSimulation:
             if agent.alive:
                 if total_cost > 0:
                     agent.resources.capital = max(0.0, agent.resources.capital - total_cost)
-                self._enforce_survival_threshold(agent)
+                self._enforce_survival_threshold(agent, round_num)
 
         for agent in alive_agents:
-            self._enforce_survival_threshold(agent)
+            self._enforce_survival_threshold(agent, round_num)
 
         innovations_this_round = []
         for action in agent_actions:
@@ -1255,7 +1256,7 @@ class EmergentSimulation:
             if action_type != 'invest':
                 outcome = self._calculate_action_outcome(action, market_conditions, round_num)
                 agent.update_state_from_outcome(outcome)
-                self._enforce_survival_threshold(agent)
+                self._enforce_survival_threshold(agent, round_num)
 
         for action in agent_actions:
             if action.get('action') == 'explore' and action.get('discovered_niche'):
@@ -1363,6 +1364,8 @@ class EmergentSimulation:
                 'run_id': self.run_id,
                 'agent_id': a.id,
                 'survived': a.alive,
+                'failure_round': getattr(a, 'failure_round', None),  # NEW: When did agent fail
+                'failure_reason': getattr(a, 'failure_reason', None),  # Why did agent fail
                 'final_capital': a.resources.capital,
                 'capital_growth': a.resources.capital / max(
                     1e-6,

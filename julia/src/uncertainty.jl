@@ -422,12 +422,17 @@ function _summarize_actions(env::KnightianUncertaintyEnvironment, agent_actions:
         "invest_hhi" => 0.0,
         "herding_counts" => Dict{String,Int}(),
         "invest_by_ai" => Dict{String,Int}(),
-        "tier_stats" => Dict{String,Any}()
+        "tier_stats" => Dict{String,Any}(),
+        "ai_action_correlation" => 0.0  # NEW: Track AI-induced action correlation
     )
 
     invest_counts = Dict{String,Int}()
     invest_by_ai = Dict{String,Int}()
     tiers = ["none", "basic", "advanced", "premium"]
+
+    # NEW: Track actions and opportunities by tier for correlation calculation
+    actions_by_tier = Dict{String,Vector{String}}(tier => String[] for tier in tiers)
+    opportunities_by_tier = Dict{String,Dict{String,Int}}(tier => Dict{String,Int}() for tier in tiers)
 
     tier_template() = Dict{String,Int}(
         "total_actions" => 0,
@@ -450,6 +455,11 @@ function _summarize_actions(env::KnightianUncertaintyEnvironment, agent_actions:
             tier_stats[tier] = tier_template()
         end
         tier_stats[tier]["total_actions"] += 1
+
+        # NEW: Track actions for correlation calculation
+        if !isnothing(act_type)
+            push!(actions_by_tier[tier], act_type)
+        end
 
         if act_type == "innovate"
             summary["innovate"] += 1
@@ -477,7 +487,10 @@ function _summarize_actions(env::KnightianUncertaintyEnvironment, agent_actions:
             details = get(action, "chosen_opportunity_details", Dict())
             opp_id = get(details, "id", get(action, "opportunity_id", nothing))
             if !isnothing(opp_id)
-                invest_counts[string(opp_id)] = get(invest_counts, string(opp_id), 0) + 1
+                opp_id_str = string(opp_id)
+                invest_counts[opp_id_str] = get(invest_counts, opp_id_str, 0) + 1
+                # NEW: Track opportunity choices by tier
+                opportunities_by_tier[tier][opp_id_str] = get(opportunities_by_tier[tier], opp_id_str, 0) + 1
             end
             invest_by_ai[tier] = get(invest_by_ai, tier, 0) + 1
         end
@@ -518,6 +531,40 @@ function _summarize_actions(env::KnightianUncertaintyEnvironment, agent_actions:
         combo_hhi, sector_hhi = get_combination_diversity_metrics(market)
         summary["combo_hhi"] = combo_hhi
         summary["sector_hhi"] = sector_hhi
+    end
+
+    # NEW: Calculate AI action correlation for competitive recursion
+    # When agents with AI choose similar actions/opportunities, recursion increases
+    ai_tiers = ["basic", "advanced", "premium"]
+    ai_action_counts = sum(length(actions_by_tier[tier]) for tier in ai_tiers)
+
+    if ai_action_counts >= 2
+        # Calculate correlation based on opportunity clustering among AI agents
+        ai_opportunity_hhi = 0.0
+        total_ai_investments = sum(sum(values(opportunities_by_tier[tier])) for tier in ai_tiers)
+
+        if total_ai_investments > 0
+            # HHI of opportunities among AI agents (higher = more correlated)
+            all_ai_opps = Dict{String,Int}()
+            for tier in ai_tiers
+                for (opp_id, count) in opportunities_by_tier[tier]
+                    all_ai_opps[opp_id] = get(all_ai_opps, opp_id, 0) + count
+                end
+            end
+
+            ai_opportunity_hhi = sum((count / total_ai_investments)^2 for count in values(all_ai_opps))
+        end
+
+        # Correlation ranges from baseline 0.3 (no AI) to 0.6+ (high AI adoption with clustering)
+        # Scale by AI adoption rate and opportunity clustering
+        ai_adoption_rate = ai_action_counts / max(1, length(agent_actions))
+        summary["ai_action_correlation"] = clamp(
+            0.30 + 0.30 * ai_adoption_rate * ai_opportunity_hhi,
+            0.30,
+            0.70
+        )
+    else
+        summary["ai_action_correlation"] = 0.30  # Baseline correlation without AI
     end
 
     return summary
@@ -724,7 +771,17 @@ function measure_uncertainty_state!(
     gap_values = collect(values(knowledge_gaps))
     gap_pressure = !isempty(gap_values) ? clamp(safe_mean(gap_values), 0.0, 1.0) : 0.0
     gap_coverage = total_opportunities > 0 ? length(knowledge_gaps) / total_opportunities : 0.0
-    hallucination_rate = length(env.ai_uncertainty_signals["hallucination_events"]) / max(1, env._ai_signal_history)
+    # Use rolling window for hallucination rate so it can decay over time
+    # hallucination_events is a Vector{Dict} where each entry is one event
+    hallucination_events = env.ai_uncertainty_signals["hallucination_events"]
+    window_size = min(100, env._ai_signal_history)
+    recent_hallucinations = if length(hallucination_events) <= window_size
+        length(hallucination_events)
+    else
+        # Count hallucinations in recent window (last window_size events)
+        length(hallucination_events[max(1, end-window_size+1):end])
+    end
+    hallucination_rate = recent_hallucinations / max(1, window_size)
     knowledge_gap_term = 1.0 - clamp(knowledge_norm, 0.0, 1.0)
 
     # ACTOR IGNORANCE: Linear additive formula (consistent with other dimensions)
@@ -934,32 +991,32 @@ function measure_uncertainty_state!(
     ai_novelty_uplift = Float64(getfield_default(env.config, :AI_NOVELTY_UPLIFT, 0.08))
 
     # Linear additive: drivers that increase novelty potential minus drags
+    # Positive: new combinations, new possibilities, niches, innovation, disruption, diversity
+    # Negative: derivative adoption (known patterns), reuse pressure (combinatorial exhaustion)
     agentic_level = clamp(
         0.25 +                                  # base level
-        0.18 * combo_rate +                     # new combinations increase novelty
-        0.15 * new_possibility_rate +           # rate of new possibilities
-        0.12 * niche_rate +                     # niche discovery
-        0.10 * adoption_rate +                  # adoption of innovations
-        0.10 * innovation_intensity +           # innovation activity
-        0.08 * disruption_avg +                 # disruption potential
-        0.10 * scarcity_signal +                # component scarcity (novel combos harder)
-        0.08 * sector_diversity -               # diversity enables novelty
-        0.20 * reuse_pressure +                 # reuse reduces novelty (but kept positive for balance)
+        0.20 * combo_rate +                     # new combinations increase novelty
+        0.18 * new_possibility_rate +           # rate of new possibilities
+        0.15 * niche_rate +                     # niche discovery
+        0.12 * innovation_intensity +           # innovation activity
+        0.10 * disruption_avg +                 # disruption potential
+        0.08 * sector_diversity +               # diversity enables novelty
+        -0.15 * adoption_rate +                 # derivative adoption REDUCES novelty
+        -0.20 * reuse_pressure +                # reuse/exhaustion reduces novelty
         ai_novelty_uplift * ai_quality,         # AI effect on novelty
         0.0, 1.0
     )
 
     agentic_level_no_ai = clamp(
         0.25 +
-        0.18 * combo_rate +
-        0.15 * new_possibility_rate +
-        0.12 * niche_rate +
-        0.10 * adoption_rate +
-        0.10 * innovation_intensity +
-        0.08 * disruption_avg +
-        0.10 * scarcity_signal +
-        0.08 * sector_diversity -
-        0.20 * reuse_pressure,
+        0.20 * combo_rate +
+        0.18 * new_possibility_rate +
+        0.15 * niche_rate +
+        0.12 * innovation_intensity +
+        0.10 * disruption_avg +
+        0.08 * sector_diversity +
+        -0.15 * adoption_rate +
+        -0.20 * reuse_pressure,
         0.0, 1.0
     )
 
@@ -1026,6 +1083,9 @@ function measure_uncertainty_state!(
     alive_agents = env._last_alive_agents
     population_factor = clamp(alive_agents / agent_count, 0.15, 1.0)
 
+    # Track AI action correlation for analysis (no direct effect on recursion)
+    ai_correlation = Float64(get(action_summary, "ai_action_correlation", 0.30))
+
     # Recursion weights from config
     rw = getfield_default(env.config, :RECURSION_WEIGHTS, Dict())
     crowd_w = Float64(get(rw, "crowd_weight", 0.35))
@@ -1033,11 +1093,16 @@ function measure_uncertainty_state!(
     herd_w = Float64(get(rw, "ai_herd_weight", 0.40))
     premium_reuse_w = Float64(get(rw, "premium_reuse_weight", 0.20))
 
+    # Crowding component based on BEHAVIORAL convergence, not just tier adoption
+    # Reduced direct premium_share effect (was 0.35) - recursion should emerge from
+    # actual convergent behavior, not merely from AI tier selection
+    # The herding/convergence effects will still emerge through invest_hhi and
+    # ai_herding_intensity (which measures actual opportunity clustering)
     crowding_component = (
-        0.45 * invest_hhi +
-        0.35 * premium_share +
-        crowd_w * crowding_pressure +
-        0.12 * knowledge_overlap
+        0.45 * invest_hhi +            # Concentration of investments (behavioral)
+        0.15 * premium_share +          # Reduced from 0.35 - mild anticipation effect
+        crowd_w * crowding_pressure +   # Actual crowding pressure (behavioral)
+        0.12 * knowledge_overlap        # Knowledge concentration
     )
 
     scale = 0.5 + 0.5 * population_factor
@@ -1074,6 +1139,7 @@ function measure_uncertainty_state!(
         "volatility" => volatility,
         "ai_premium_share" => premium_share,
         "ai_herding_intensity" => ai_herding_intensity,
+        "ai_action_correlation" => ai_correlation,  # NEW: Track correlation metric
         "ai_delta" => get(ai_effects, "ai_recursion_delta", 0.0)
     )
 
@@ -1272,7 +1338,7 @@ function perceive_uncertainty(
     # Knowledge deficit
     avg_knowledge_level = personal_knowledge
     knowledge_deficit = max(0.0, 1.0 - avg_knowledge_level)
-    knowledge_deficit = clamp(knowledge_deficit - 0.2 * info_breadth, 0.0, 1.2)
+    knowledge_deficit = clamp(knowledge_deficit - 0.2 * info_breadth, 0.0, 1.0)
 
     # Discovery momentum
     discovery_momentum = 0.1 + 0.3 * share_explore

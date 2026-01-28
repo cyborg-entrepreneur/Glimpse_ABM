@@ -290,9 +290,14 @@ class MarketEnvironment:
         - Retail: 0.7 (HHI 500-1000, fragmented)
         - Service: 0.9 (HHI 800-1500, moderately fragmented)
         - Manufacturing: 1.4 (HHI 1800-3000, concentrated)
+
+        Returns base intensity scaled by global COMPETITION_SCALE_FACTOR for robustness testing.
         """
         profile = self.config.SECTOR_PROFILES.get(sector, {})
-        return float(profile.get('competition_intensity', 1.0))
+        base_intensity = float(profile.get('competition_intensity', 1.0))
+
+        # Apply global competition scale factor for robustness testing
+        return base_intensity * self.config.COMPETITION_SCALE_FACTOR
 
     def update_opportunity_competition(self, opp, delta: float) -> None:
         """Apply sector-specific competition intensity to opportunity competition updates."""

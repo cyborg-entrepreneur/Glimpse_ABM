@@ -95,22 +95,22 @@ class EmergentConfig:
     # =========================================================================
     AGENT_AI_MODE: str = "emergent"
     N_AGENTS: int = 1000
-    INITIAL_CAPITAL: float = 1_500_000.0
-    INITIAL_CAPITAL_RANGE: Tuple[float, float] = (1_200_000.0, 1_800_000.0)
+    INITIAL_CAPITAL: float = 5_000_000.0
+    INITIAL_CAPITAL_RANGE: Tuple[float, float] = (2_500_000.0, 10_000_000.0)
     SURVIVAL_THRESHOLD: float = 230_000.0
     SURVIVAL_CAPITAL_RATIO: float = 0.38
     INSOLVENCY_GRACE_ROUNDS: int = 7
     RANDOM_SEED: int = 42
 
-    BASE_OPERATIONAL_COST: float = 50000.0
-    COMPETITION_COST_MULTIPLIER: float = 150.0
+    BASE_OPERATIONAL_COST: float = 16667.0  # Monthly (was 50000 quarterly)
+    COMPETITION_COST_MULTIPLIER: float = 50.0  # Monthly (was 150 quarterly)
     OPERATING_RESERVE_MONTHS: int = 3
     MAX_AGENT_KNOWLEDGE: int = 90
     SECTOR_STRENGTH_PRUNE_THRESHOLD: float = 0.1
     LIQUIDITY_RESERVE_FRACTION: float = 0.29
-    MAX_INVESTMENT_FRACTION: float = 0.11
-    TARGET_INVESTMENT_FRACTION: float = 0.10
-    AI_CREDIT_LINE_ROUNDS: int = 30
+    MAX_INVESTMENT_FRACTION: float = 0.037  # Monthly (was 0.11 quarterly)
+    TARGET_INVESTMENT_FRACTION: float = 0.033  # Monthly (was 0.10 quarterly)
+    AI_CREDIT_LINE_ROUNDS: int = 90  # Monthly (was 30 quarterly)
     AI_TRUST_RESERVE_DISCOUNT: float = 0.25
 
     # Network Configuration
@@ -135,26 +135,26 @@ class EmergentConfig:
         }
     )
 
-    # Market configuration
-    N_ROUNDS: int = 250
+    # Market configuration (monthly cadence: 120 rounds = 10 years)
+    N_ROUNDS: int = 120  # Monthly (was 250 quarterly)
     N_RUNS: int = 50
     BASE_OPPORTUNITIES: int = 5
-    DISCOVERY_PROBABILITY: float = 0.30
-    INNOVATION_PROBABILITY: float = 0.42
+    DISCOVERY_PROBABILITY: float = 0.10  # Monthly (was 0.30 quarterly)
+    INNOVATION_PROBABILITY: float = 0.14  # Monthly (was 0.42 quarterly)
     AI_HERDING_DECAY: float = 1.0
-    AI_SIGNAL_HISTORY: int = 140
+    AI_SIGNAL_HISTORY: int = 46  # Monthly (was 140 quarterly)
 
-    # Innovation economics
+    # Innovation economics (monthly cadence)
     INNOVATION_BASE_SPEND_RATIO: float = 0.025
-    INNOVATION_MAX_SPEND: float = 8000.0
+    INNOVATION_MAX_SPEND: float = 2667.0  # Monthly (was 8000 quarterly)
     INNOVATION_FAIL_RECOVERY_RATIO: float = 0.12
-    INNOVATION_SUCCESS_BASE_RETURN: float = 0.25
+    INNOVATION_SUCCESS_BASE_RETURN: float = 0.08  # Monthly (was 0.25 quarterly)
     INNOVATION_SUCCESS_RETURN_MULTIPLIER: Tuple[float, float] = (1.8, 3.2)
-    INNOVATION_RD_CAP_FRACTION: float = 0.12
-    INNOVATION_REUSE_PROBABILITY: float = 0.22
+    INNOVATION_RD_CAP_FRACTION: float = 0.04  # Monthly (was 0.12 quarterly)
+    INNOVATION_REUSE_PROBABILITY: float = 0.07  # Monthly (was 0.22 quarterly)
     INNOVATION_REUSE_LOOKBACK: int = 100
-    INVESTMENT_SUCCESS_ROI_THRESHOLD: float = 0.05
-    BURN_HISTORY_WINDOW: int = 3
+    INVESTMENT_SUCCESS_ROI_THRESHOLD: float = 0.017  # Monthly (was 0.05 quarterly)
+    BURN_HISTORY_WINDOW: int = 9  # Monthly (was 3 quarterly)
     BURN_FAILURE_THRESHOLD: float = 0.12
     BURN_LEVERAGE_CAP: float = 0.75
     RETURN_OVERSUPPLY_PENALTY: float = 0.35  # Reduced from 0.52 for better survival
@@ -173,6 +173,14 @@ class EmergentConfig:
     # =========================================================================
     # AI TOOL CONFIGURATION - 2027 Scaling Law Projections
     # =========================================================================
+    # Temporal Framework: Simulation represents 2028-2038 (post-AGI launch)
+    # Scaling Law: none (human) → basic (consumer AI) → advanced (SOTA) → premium (AGI)
+    #
+    # Tier definitions:
+    # - none: Human decision-making only (no AI augmentation)
+    # - basic: Consumer-level AI tools (ChatGPT Plus, Claude Pro) ~$20-30/month
+    # - advanced: Current SOTA systems (GPT-4, Claude Opus, o1) ~$400/month heavy use
+    # - premium: Projected AGI systems (December 2027 launch) ~$3,500/month early access
     #
     # SCALING LAW CALIBRATION (Hoffmann et al. 2022, Kaplan et al. 2020)
     # ─────────────────────────────────────────────────────────────────────
@@ -226,7 +234,7 @@ class EmergentConfig:
                 "effective_compute_log10": 5,
             },
             "premium": {
-                "cost": 3500,               # Monthly subscription (2027 frontier)
+                "cost": 3500,               # Monthly subscription (AGI - Dec 2027 launch)
                 "cost_type": "subscription",
                 "info_quality": 0.97,       # log10(10^8) = 8 -> 0.25 + 0.09*8 = 0.97
                 "info_breadth": 0.92,
@@ -344,25 +352,25 @@ class EmergentConfig:
         }
     )
 
-    # Investment & Innovation Penalties
+    # Investment & Innovation Penalties (monthly cadence)
     UNCERTAINTY_LEARNING_ENABLED: bool = True
     INITIAL_RESPONSE_VARIANCE: float = 0.3
-    LEARNING_RATE_BASE: float = 0.1
-    EXPLORATION_DECAY: float = 0.995
+    LEARNING_RATE_BASE: float = 0.033  # Monthly (was 0.1 quarterly)
+    EXPLORATION_DECAY: float = 0.9983  # Monthly equivalent of 0.995 quarterly
     SOCIAL_LEARNING_WEIGHT: float = 0.2
     MIN_FUNDING_FRACTION: float = 0.25
-    COST_OF_CAPITAL: float = 0.06
+    COST_OF_CAPITAL: float = 0.005  # Monthly (was 0.06 quarterly, ~6% annual)
 
     # Exploration & maintaining Sensitivity
     EXPLORATION_SENSITIVITY = 1.5
     MAINTAIN_UNCERTAINTY_SENSITIVITY = 0.5
 
-    # Uncertainty and Market Dynamics
-    BLACK_SWAN_PROBABILITY: float = 0.05
+    # Uncertainty and Market Dynamics (monthly cadence)
+    BLACK_SWAN_PROBABILITY: float = 0.017  # Monthly (was 0.05 quarterly)
     BOOM_TAIL_UNCERTAINTY_EXPONENT: float = 1.08
     MARKET_VOLATILITY: float = 0.25
-    COMPETITION_EFFECT: float = 0.25
-    MARKET_SHIFT_PROBABILITY: float = 0.09
+    COMPETITION_SCALE_FACTOR: float = 1.0  # Multiplier for sector-specific competition_intensity (0.0=no competition, 1.0=baseline, 2.0=double)
+    MARKET_SHIFT_PROBABILITY: float = 0.03  # Monthly (was 0.09 quarterly)
     MARKET_SHIFT_SEVERITY_RANGE: Tuple[float, float] = (0.25, 0.75)
     MARKET_SHIFT_MAX_SECTORS: int = 3
     MARKET_SHIFT_REGIME_MULTIPLIER: Dict[str, float] = field(default_factory=lambda: {
@@ -380,13 +388,14 @@ class EmergentConfig:
     # Crisis frequency: ~1 per decade, boom frequency: ~2-3 per decade
     # Market regime transitions - calibrated for stability with mean-reversion to normal
     # Adjusted to reduce inter-run variance while maintaining business cycle dynamics
+    # Monthly regime transitions (converted from quarterly using p_monthly = 1 - (1-p_quarterly)/3)
     MACRO_REGIME_TRANSITIONS: Dict[str, Dict[str, float]] = field(
         default_factory=lambda: {
-            "crisis": {"crisis": 0.25, "recession": 0.35, "normal": 0.35, "growth": 0.05, "boom": 0.0},
-            "recession": {"crisis": 0.03, "recession": 0.30, "normal": 0.52, "growth": 0.13, "boom": 0.02},
-            "normal": {"crisis": 0.01, "recession": 0.08, "normal": 0.55, "growth": 0.28, "boom": 0.08},
-            "growth": {"crisis": 0.01, "recession": 0.03, "normal": 0.22, "growth": 0.50, "boom": 0.24},
-            "boom": {"crisis": 0.01, "recession": 0.04, "normal": 0.20, "growth": 0.40, "boom": 0.35},
+            "crisis": {"crisis": 0.75, "recession": 0.12, "normal": 0.12, "growth": 0.01, "boom": 0.0},
+            "recession": {"crisis": 0.01, "recession": 0.77, "normal": 0.17, "growth": 0.04, "boom": 0.01},
+            "normal": {"crisis": 0.003, "recession": 0.027, "normal": 0.85, "growth": 0.09, "boom": 0.03},
+            "growth": {"crisis": 0.003, "recession": 0.01, "normal": 0.07, "growth": 0.84, "boom": 0.077},
+            "boom": {"crisis": 0.003, "recession": 0.013, "normal": 0.067, "growth": 0.13, "boom": 0.787},
         }
     )
     # Regime modifiers - balanced for realistic business cycle dynamics
@@ -446,6 +455,35 @@ class EmergentConfig:
     # penalties) to 1.0 (full). Tests whether market-level competition dynamics
     # drive the paradox.
     COMPETITION_INTENSITY: float = 1.0
+
+    # ========================================================================
+    # NEW MARKET MECHANICS PARAMETERS (from Julia implementation)
+    # ========================================================================
+
+    # Competition dynamics control
+    DISABLE_COMPETITION_DYNAMICS: bool = False  # Master switch to disable competition effects
+    OPPORTUNITY_COMPETITION_PENALTY: float = 0.5  # Return penalty from crowded opportunities
+    OPPORTUNITY_COMPETITION_THRESHOLD: float = 0.2  # Crowding level at which penalties begin
+    OPPORTUNITY_COMPETITION_FLOOR: float = 0.1  # Minimum return multiplier under max competition
+
+    # Novelty disruption mechanics
+    NOVELTY_DISRUPTION_ENABLED: bool = True  # Enable innovation disruption effects
+    NOVELTY_DISRUPTION_THRESHOLD: float = 0.6  # Novelty level to trigger disruption
+    NOVELTY_DISRUPTION_MAGNITUDE: float = 0.25  # Disruption impact on existing investments
+    DISRUPTION_COMPETITION_THRESHOLD: float = 10.0  # Competition level triggering disruption vulnerability
+    NOVELTY_NOISE_INVERSION_FACTOR: float = 0.4  # Noise scaling for novel opportunities
+
+    # Opportunity capacity constraints
+    OPPORTUNITY_CAPACITY_ENABLED: bool = True  # Enable capacity-based crowding
+    OPPORTUNITY_BASE_CAPACITY: float = 500000.0  # Base investment capacity per opportunity
+    OPPORTUNITY_CAPACITY_VARIANCE: float = 0.3  # Variance in opportunity capacities
+    CAPACITY_PENALTY_START: float = 0.7  # Utilization level at which crowding penalty begins
+    CAPACITY_PENALTY_MAX: float = 0.4  # Maximum penalty at full capacity
+
+    # Sequential decision mechanics (early vs late movers)
+    SEQUENTIAL_DECISIONS_ENABLED: bool = True  # Enable sequential decision rounds
+    EARLY_DECISION_FRACTION: float = 0.3  # Fraction of agents making early decisions
+    SIGNAL_VISIBILITY_WEIGHT: float = 0.15  # Weight of early signals for late movers
 
     # Downside oversupply weight in realized returns
     DOWNSIDE_OVERSUPPLY_WEIGHT: float = 0.45  # Balanced penalty for oversupply conditions
@@ -516,7 +554,7 @@ class EmergentConfig:
             },
         }
     )
-    AI_TIER_RECENT_WINDOW: int = 15
+    AI_TIER_RECENT_WINDOW: int = 45  # Monthly (was 15 quarterly)
     AI_TIER_DEMOTE_MARGIN: float = 0.06
     AI_TIER_NEIGHBOR_INFLUENCE: float = 0.06
     AI_TIER_SCORING: Dict[str, Dict[str, Any]] = field(
@@ -524,7 +562,7 @@ class EmergentConfig:
             "basic": {
                 "score_threshold": 0.0,
                 "score_slope": 6.0,
-                "trial_rounds": 4,
+                "trial_rounds": 12,  # Monthly (was 4 quarterly)
                 "weights": {
                     "trust": 0.6,
                     "success": 0.3,
@@ -541,7 +579,7 @@ class EmergentConfig:
             "advanced": {
                 "score_threshold": 0.08,
                 "score_slope": 6.0,
-                "trial_rounds": 4,
+                "trial_rounds": 12,  # Monthly (was 4 quarterly)
                 "weights": {
                     "trust": 0.65,
                     "success": 0.32,
@@ -558,7 +596,7 @@ class EmergentConfig:
             "premium": {
                 "score_threshold": 0.18,
                 "score_slope": 6.5,
-                "trial_rounds": 5,
+                "trial_rounds": 15,  # Monthly (was 5 quarterly)
                 "weights": {
                     "trust": 0.70,
                     "success": 0.38,
@@ -578,7 +616,7 @@ class EmergentConfig:
     AI_TIER_DEMOTION_COOLDOWN: int = 12
     TRAIT_MOMENTUM: float = 0.7
     AI_TRUST_ADJUSTMENT_RATE: float = 0.1
-    AI_SUBSCRIPTION_AMORTIZATION_ROUNDS: int = 60
+    AI_SUBSCRIPTION_AMORTIZATION_ROUNDS: int = 180  # Monthly (was 60 quarterly)
     AI_SUBSCRIPTION_FLOAT_BASE_ROUNDS: int = 0
     AI_SUBSCRIPTION_FLOAT_MAX_ROUNDS: int = 3
 
@@ -597,11 +635,11 @@ class EmergentConfig:
     ACTION_BASE_WEIGHT_EXPLORE: float = 0.12
     ACTION_BASE_WEIGHT_MAINTAIN: float = 0.20
 
-    # Uncertainty volatility controls
-    UNCERTAINTY_SHORT_WINDOW: int = 6
+    # Uncertainty volatility controls (monthly cadence)
+    UNCERTAINTY_SHORT_WINDOW: int = 18  # Monthly (was 6 quarterly)
     UNCERTAINTY_SHORT_DECAY: float = 0.0
-    UNCERTAINTY_VOLATILITY_WINDOW: int = 14
-    UNCERTAINTY_VOLATILITY_DECAY: float = 0.6
+    UNCERTAINTY_VOLATILITY_WINDOW: int = 42  # Monthly (was 14 quarterly)
+    UNCERTAINTY_VOLATILITY_DECAY: float = 0.87  # Monthly equivalent (0.6^(1/3))
     UNCERTAINTY_VOLATILITY_SCALING: float = 0.45
     UNCERTAINTY_AI_SWITCH_WEIGHT: float = 0.09
     UNCERTAINTY_MARKET_RETURN_WEIGHT: float = 0.14
@@ -638,7 +676,7 @@ class EmergentConfig:
         default_factory=lambda: {
             "tech": {
                 # Later-stage venture-backed software/hardware with differentiated upside
-                "return_range": (1.60, 4.00),  # Boosted for survival
+                "return_range": (1.60, 4.00),
                 "return_log_mu": math.log(2.40),
                 "return_log_sigma": 0.45,
                 "return_volatility_range": (0.22, 0.38),
@@ -648,89 +686,87 @@ class EmergentConfig:
                 "maturity_range": (8, 20),  # Shortened for cash flow sustainability
                 "gross_margin_range": (0.55, 0.85),
                 "operating_margin_range": (0.08, 0.28),
-                # Quarterly operational costs (SBA/BLS calibrated 2025)
+                # Monthly operational costs (SBA/BLS calibrated 2025)
                 # Tech: moderate employee costs, low physical overhead
-                # BLS QCEW: Information sector avg $75k/quarter for small firms
-                "operational_cost_range": (60_000.0, 90_000.0),
+                # BLS QCEW: Information sector converted to monthly
+                "operational_cost_range": (20_000.0, 30_000.0),  # Monthly (was 60-90k quarterly)
                 # Empirically-calibrated fields (scaled for 40-60 round runway)
                 # Reflects Series A/B rounds with 24-36 month runway before profitability
                 "initial_capital_range": (3_000_000.0, 6_000_000.0),  # 40-80 rounds runway
-                "survival_threshold": 150_000.0,   # ~2 quarters operating expenses
-                "innovation_probability": 0.48,    # NSF 15-25% R&D, 52% USPTO grant rate
+                "survival_threshold": 150_000.0,   # ~2 months operating expenses
+                "survival_equity_ratio": 0.38,     # Tech: High burn tolerance (BLS/NVCA calibrated)
+                "innovation_probability": 0.16,    # Monthly (was 0.48 quarterly)
                 "innovation_return_multiplier": (2.0, 4.0),  # High tech upside
-                "knowledge_decay_rate": 0.12,      # 2-3 year half-life (fast obsolescence)
+                "knowledge_decay_rate": 0.04,      # Monthly (was 0.12 quarterly)
                 "competition_intensity": 1.2,      # HHI 1500-2500 moderate concentration
             },
             "retail": {
                 # Multi-unit retail concepts with moderate upside and higher churn
-                "return_range": (1.40, 2.80),  # Boosted for survival
+                "return_range": (1.40, 2.80),
                 "return_log_mu": math.log(1.85),
                 "return_log_sigma": 0.32,
                 "return_volatility_range": (0.18, 0.3),
-                "failure_range": (0.2, 0.38),
+                "failure_range": (0.2, 0.38),  # BLS: Retail failure 20-38% (5-year rate)
                 "failure_volatility_range": (0.04, 0.1),
                 "capital_range": (50000, 400000),
-                "maturity_range": (4, 15),  # Shortened for cash flow sustainability
+                "maturity_range": (4, 15),   # Empirical: 1-4 year investment maturity for retail
                 "gross_margin_range": (0.18, 0.42),
                 "operating_margin_range": (0.015, 0.08),
-                # Quarterly operational costs (SBA/BLS calibrated 2025)
-                # Retail: inventory, lease, and staffing costs
-                # BLS QCEW: Retail trade avg $55k/quarter for small firms
-                "operational_cost_range": (40_000.0, 70_000.0),
-                # Empirically-calibrated fields (scaled for 40-60 round runway)
-                "initial_capital_range": (2_200_000.0, 4_000_000.0),  # 40-73 rounds runway
-                "survival_threshold": 130_000.0,   # ~2 quarters operating expenses
-                "innovation_probability": 0.32,    # NSF 1-3% R&D, 35% USPTO grant rate
+                # Monthly operational costs (BLS QCEW: Retail converted to monthly)
+                "operational_cost_range": (13_000.0, 23_000.0),  # Monthly (was 40-70k quarterly)
+                # Empirically-calibrated fields (Seed/Series A rounds with 18-24 month runway)
+                "initial_capital_range": (2_200_000.0, 4_000_000.0),
+                "survival_threshold": 130_000.0,   # ~3 months operating expenses
+                "survival_equity_ratio": 0.38,     # Retail: Moderate burn (30-40% year-1; 12-month reserve requirement)
+                "innovation_probability": 0.11,    # Monthly (was 0.32 quarterly)
                 "innovation_return_multiplier": (1.6, 2.5),  # Moderate returns
-                "knowledge_decay_rate": 0.07,      # 4-5 year half-life
+                "knowledge_decay_rate": 0.023,     # Monthly (was 0.07 quarterly)
                 "competition_intensity": 0.7,      # HHI 500-1000 fragmented
             },
             "service": {
                 # B2B/B2C recurring service ventures with low capex and resilient margins
-                "return_range": (1.50, 3.00),  # Boosted for survival
+                "return_range": (1.50, 3.00),
                 "return_log_mu": math.log(1.95),
                 "return_log_sigma": 0.36,
                 "return_volatility_range": (0.16, 0.28),
-                "failure_range": (0.1, 0.28),
+                "failure_range": (0.1, 0.28),  # BLS: Service failure 10-28% (5-year rate)
                 "failure_volatility_range": (0.03, 0.08),
                 "capital_range": (15000, 200000),
-                "maturity_range": (3, 10),  # Shortened for cash flow sustainability
+                "maturity_range": (3, 10),   # Empirical: 9mo-2.5yr investment maturity for services
                 "gross_margin_range": (0.45, 0.75),
                 "operating_margin_range": (0.12, 0.24),
-                # Quarterly operational costs (SBA/BLS calibrated 2025)
-                # Service: lowest overhead - primarily labor, minimal physical plant
-                # BLS QCEW: Professional services avg $35k/quarter for small firms
-                "operational_cost_range": (25_000.0, 45_000.0),
-                # Empirically-calibrated fields (scaled for 40-60 round runway)
-                "initial_capital_range": (1_400_000.0, 2_500_000.0),  # 40-71 rounds runway
-                "survival_threshold": 70_000.0,    # ~2 quarters operating expenses
-                "innovation_probability": 0.38,    # NSF 3-8% R&D, 40% USPTO grant rate
+                # Monthly operational costs (BLS QCEW: Services converted to monthly)
+                "operational_cost_range": (8_300.0, 15_000.0),  # Monthly (was 25-45k quarterly)
+                # Empirically-calibrated fields (Seed/Series A rounds with 16-28 month runway)
+                "initial_capital_range": (1_400_000.0, 2_500_000.0),
+                "survival_threshold": 70_000.0,    # ~2 months operating expenses
+                "survival_equity_ratio": 0.52,     # Service: Capital efficient (higher retention expected; 80% fail if <20% at year 2)
+                "innovation_probability": 0.13,    # Monthly (was 0.38 quarterly)
                 "innovation_return_multiplier": (1.6, 2.5),  # Moderate returns
-                "knowledge_decay_rate": 0.05,      # 5-7 year half-life (stable expertise)
+                "knowledge_decay_rate": 0.017,     # Monthly (was 0.05 quarterly)
                 "competition_intensity": 0.9,      # HHI 800-1500 moderately fragmented
             },
             "manufacturing": {
                 # Advanced manufacturing / industrial ventures with heavier capital loads
-                "return_range": (1.60, 3.50),  # Boosted for survival
+                "return_range": (1.60, 3.50),
                 "return_log_mu": math.log(2.20),
                 "return_log_sigma": 0.4,
                 "return_volatility_range": (0.18, 0.3),
-                "failure_range": (0.25, 0.42),
+                "failure_range": (0.25, 0.42),  # BLS: Manufacturing failure 25-42% (5-year rate)
                 "failure_volatility_range": (0.04, 0.1),
                 "capital_range": (250000, 1500000),
-                "maturity_range": (10, 28),  # Shortened for cash flow sustainability
+                "maturity_range": (10, 28),  # Empirical: 2.5-7yr investment maturity for manufacturing
                 "gross_margin_range": (0.28, 0.48),
                 "operating_margin_range": (0.04, 0.18),
-                # Quarterly operational costs (SBA/BLS calibrated 2025)
-                # Manufacturing: highest overhead - equipment, materials, facility, labor
-                # BLS QCEW: Manufacturing avg $100k/quarter for small firms
-                "operational_cost_range": (80_000.0, 120_000.0),
-                # Empirically-calibrated fields (scaled for 40-60 round runway)
-                "initial_capital_range": (4_000_000.0, 7_500_000.0),  # 40-75 rounds runway
-                "survival_threshold": 200_000.0,   # ~2 quarters operating expenses
-                "innovation_probability": 0.52,    # NSF 8-15% R&D, 58% USPTO grant rate
+                # Monthly operational costs (BLS QCEW: Manufacturing converted to monthly)
+                "operational_cost_range": (26_700.0, 40_000.0),  # Monthly (was 80-120k quarterly)
+                # Empirically-calibrated fields (Series A/B rounds with 20-30 month runway)
+                "initial_capital_range": (4_000_000.0, 7_500_000.0),
+                "survival_threshold": 200_000.0,   # ~2 months operating expenses
+                "survival_equity_ratio": 0.58,     # Manufacturing: Asset-heavy (capital preservation critical; 43.6% 10-year survival best)
+                "innovation_probability": 0.17,    # Monthly (was 0.52 quarterly)
                 "innovation_return_multiplier": (1.5, 2.8),  # Incremental improvements
-                "knowledge_decay_rate": 0.03,      # 7-10 year half-life (most durable)
+                "knowledge_decay_rate": 0.01,      # Monthly (was 0.03 quarterly)
                 "competition_intensity": 1.4,      # HHI 1800-3000 concentrated
             },
         }
@@ -1027,7 +1063,7 @@ CALIBRATION_LIBRARY: Dict[str, CalibrationProfile] = {
         ),
         overrides={
             "BASE_OPERATIONAL_COST": 70000.0,
-            "SURVIVAL_CAPITAL_RATIO": 0.56,
+            "SURVIVAL_CAPITAL_RATIO": 0.40,  # Updated for realistic survival rates
             "INSOLVENCY_GRACE_ROUNDS": 6,
             "DISCOVERY_PROBABILITY": 0.22,
             "INNOVATION_PROBABILITY": 0.37,

@@ -509,6 +509,7 @@ class Portfolio:
                 crowd_multiplier = 1.0
                 if crowd_idx > crowd_threshold:
                     crowd_multiplier += 0.25 * (crowd_idx - crowd_threshold)
+
                 failure_chance = float(np.clip(base_failure * crowd_multiplier, 0.05, 0.9))
                 success = np.random.random() >= failure_chance
 
@@ -691,6 +692,8 @@ class EmergentAgent:
                 np.clip(np.random.beta(1.8, 1.1), 0.0, 1.0)
             )
         self.alive = True
+        self.failure_round = None  # Track when agent fails for Kaplan-Meier analysis
+        self.failure_reason = None  # Track why agent failed
         self.knowledge_base = knowledge_base
         self.innovation_engine = innovation_engine
 
@@ -819,6 +822,27 @@ class EmergentAgent:
         # Fallback to global threshold
         return float(self.config.SURVIVAL_THRESHOLD)
 
+    def _get_sector_equity_ratio(self) -> float:
+        """Get sector-specific minimum capital retention ratio (current/initial).
+
+        Returns the minimum equity ratio (capital/initial_capital) that must be maintained
+        to avoid failure. Calibrated to empirical survival patterns and investor shut-down
+        thresholds from BLS, Carta, CB Insights, and sector-specific VC data (2015-2024).
+
+        Sector ratios represent investor shut-down decision points:
+        - Tech (0.28): High burn tolerance for growth; VCs patient if metrics show progress
+        - Retail (0.38): Moderate burn; inventory volatility requires buffer
+        - Service (0.52): Capital efficient model; higher retention expectations
+        - Manufacturing (0.58): Asset-heavy; capital preservation critical for long payback
+
+        Falls back to global SURVIVAL_CAPITAL_RATIO if sector-specific not defined.
+        """
+        sector_profile = self.config.SECTOR_PROFILES.get(self.primary_sector, {})
+        if 'survival_equity_ratio' in sector_profile:
+            return float(sector_profile['survival_equity_ratio'])
+        # Fallback to global ratio
+        return float(getattr(self.config, 'SURVIVAL_CAPITAL_RATIO', 0.40))
+
     def _get_uncertainty_cache(self, round_num: int) -> Dict[str, Any]:
         if self._uncertainty_cache_round != round_num:
             self._uncertainty_cache_round = round_num
@@ -875,7 +899,7 @@ class EmergentAgent:
             if (
                 credit_line > 0
                 and current_round is not None
-                and current_round < credit_line
+                and current_round <= credit_line
                 and level in {'advanced', 'premium'}
             ):
                 continue
@@ -914,7 +938,9 @@ class EmergentAgent:
         else:
             self._liquidity_streak = 0
 
-        ratio_floor = float(getattr(self.config, 'SURVIVAL_CAPITAL_RATIO', 0.0)) * relief_factor
+        # Use sector-specific equity ratio (empirically calibrated to investor shut-down thresholds)
+        sector_equity_ratio = self._get_sector_equity_ratio()
+        ratio_floor = sector_equity_ratio * relief_factor
         capital_ratio = capital_after / initial_equity
         if reason is None:
             if capital_ratio < ratio_floor:
@@ -1160,6 +1186,8 @@ class EmergentAgent:
             self._insolvency_streak += 1
             if self._insolvency_streak >= grace_period:
                 self.alive = False
+                self.failure_round = round_num  # Record when failure occurred
+                self.failure_reason = 'bankruptcy'  # Record failure reason
                 return {
                     'action': 'exit',
                     'reason': 'bankruptcy',
@@ -1283,7 +1311,8 @@ class EmergentAgent:
         failure_reason = self._evaluate_failure_conditions(capital_after_action)
         if failure_reason:
             self.alive = False
-            self.failure_reason = failure_reason
+            self.failure_round = round_num  # Record when failure occurred
+            self.failure_reason = failure_reason  # Already set, but keeping consistent
             return {
                 'action': 'exit',
                 'reason': failure_reason,

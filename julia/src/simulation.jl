@@ -117,6 +117,10 @@ function EmergentSimulation(;
             end
         end
         agent = EmergentAgent(i, config; rng=rng, fixed_ai_level=initial_tier)
+        # Initialize subscription schedule for fixed AI tier (ensures costs are charged)
+        if initial_tier != "none"
+            ensure_subscription_schedule!(agent, initial_tier)
+        end
         push!(agents, agent)
     end
 
@@ -147,6 +151,8 @@ function initialize_agents!(sim::EmergentSimulation; fixed_ai_level::Union{Strin
         if !isnothing(fixed_ai_level)
             agent.fixed_ai_level = fixed_ai_level
             agent.current_ai_level = fixed_ai_level
+            # Start subscription schedule if this is a subscription tier
+            ensure_subscription_schedule!(agent, fixed_ai_level)
         end
     end
 end
@@ -163,7 +169,8 @@ function run!(sim::EmergentSimulation)
         # Log progress periodically
         if sim.config.enable_round_logging && round % sim.config.round_log_interval == 0
             alive_count = count(a -> a.alive, sim.agents)
-            mean_capital = mean([get_capital(a) for a in sim.agents if a.alive])
+            capitals = [get_capital(a) for a in sim.agents if a.alive]
+            mean_capital = isempty(capitals) ? 0.0 : mean(capitals)
             # println("[$(sim.run_id)] Round $round: $(alive_count)/$(sim.config.N_AGENTS) alive, mean capital: \$$(round(Int, mean_capital))")
         end
     end
@@ -211,6 +218,18 @@ function step!(sim::EmergentSimulation, round::Int)
         end
     end
 
+    # Phase 1.5: Charge AI subscription installments (matching Python _apply_subscription_carry)
+    for agent in sim.agents
+        if !agent.alive
+            continue
+        end
+        subscription_cost = apply_subscription_carry!(agent, round)
+        # Check survival after subscription charges
+        if subscription_cost > 0.0
+            check_survival!(agent, round)
+        end
+    end
+
     # Phase 2: Process matured investments (matching Python BLOCK 1)
     # Pass market_conditions with uncertainty_state (matches Python line 913)
     all_matured = Dict{String,Any}[]
@@ -237,36 +256,117 @@ function step!(sim::EmergentSimulation, round::Int)
     alive_agents = filter(a -> a.alive, sim.agents)
 
     # Phase 3: AI level selection and action decisions (matching Python BLOCK 2)
-    agent_actions = Dict{String,Any}[]
-    for agent in sim.agents
-        if !agent.alive
-            continue
-        end
+    # Check if sequential decisions are enabled
+    sequential_enabled = hasfield(typeof(sim.config), :SEQUENTIAL_DECISIONS_ENABLED) ?
+        sim.config.SEQUENTIAL_DECISIONS_ENABLED : false
 
-        # Collect neighbor agents for social influence
-        neighbor_agents = EmergentAgent[]
-        if length(alive_agents) > 1
+    agent_actions = Dict{String,Any}[]
+
+    if sequential_enabled && length(alive_agents) > 1
+        # Sequential decision making: early agents decide first, their choices become visible signals
+        early_fraction = hasfield(typeof(sim.config), :EARLY_DECISION_FRACTION) ?
+            sim.config.EARLY_DECISION_FRACTION : 0.3
+        signal_weight = hasfield(typeof(sim.config), :SIGNAL_VISIBILITY_WEIGHT) ?
+            sim.config.SIGNAL_VISIBILITY_WEIGHT : 0.15
+
+        n_early = max(1, Int(floor(length(alive_agents) * early_fraction)))
+
+        # Shuffle and split into early and late deciders
+        shuffled_agents = shuffle(sim.rng, collect(alive_agents))
+        early_agents = shuffled_agents[1:n_early]
+        late_agents = shuffled_agents[n_early+1:end]
+
+        # Phase 3a: Early agents decide (no visibility signals)
+        early_signals = Dict{String,Int}()  # Track which opportunities early agents invested in
+
+        for agent in early_agents
+            neighbor_agents = EmergentAgent[]
             other_agents = filter(a -> a.id != agent.id && a.alive, alive_agents)
             if !isempty(other_agents)
                 n_neighbors = min(5, length(other_agents))
                 neighbor_agents = rand(sim.rng, other_agents, n_neighbors)
             end
+
+            outcome = make_decision!(
+                agent,
+                available_opportunities,
+                market_conditions,
+                sim.market,
+                round;
+                uncertainty_env=sim.uncertainty_env,
+                neighbor_agents=neighbor_agents,
+                innovation_engine=sim.innovation_engine,
+                info_system=sim.info_system
+            )
+
+            push!(agent_actions, outcome)
+
+            # Record visible signal for invest actions
+            if get(outcome, "action", "") == "invest"
+                opp_id = string(get(outcome, "opportunity_id", ""))
+                if !isempty(opp_id)
+                    early_signals[opp_id] = get(early_signals, opp_id, 0) + 1
+                end
+            end
         end
 
-        # Use make_decision! which properly integrates AI level effects
-        outcome = make_decision!(
-            agent,
-            available_opportunities,
-            market_conditions,
-            sim.market,
-            round;
-            uncertainty_env=sim.uncertainty_env,
-            neighbor_agents=neighbor_agents,
-            innovation_engine=sim.innovation_engine,
-            info_system=sim.info_system
-        )
+        # Phase 3b: Late agents decide with visible signals
+        for agent in late_agents
+            neighbor_agents = EmergentAgent[]
+            other_agents = filter(a -> a.id != agent.id && a.alive, alive_agents)
+            if !isempty(other_agents)
+                n_neighbors = min(5, length(other_agents))
+                neighbor_agents = rand(sim.rng, other_agents, n_neighbors)
+            end
 
-        push!(agent_actions, outcome)
+            outcome = make_decision!(
+                agent,
+                available_opportunities,
+                market_conditions,
+                sim.market,
+                round;
+                uncertainty_env=sim.uncertainty_env,
+                neighbor_agents=neighbor_agents,
+                innovation_engine=sim.innovation_engine,
+                info_system=sim.info_system,
+                early_signals=early_signals,
+                signal_weight=signal_weight
+            )
+
+            push!(agent_actions, outcome)
+        end
+    else
+        # Original simultaneous decision logic
+        for agent in sim.agents
+            if !agent.alive
+                continue
+            end
+
+            # Collect neighbor agents for social influence
+            neighbor_agents = EmergentAgent[]
+            if length(alive_agents) > 1
+                other_agents = filter(a -> a.id != agent.id && a.alive, alive_agents)
+                if !isempty(other_agents)
+                    n_neighbors = min(5, length(other_agents))
+                    neighbor_agents = rand(sim.rng, other_agents, n_neighbors)
+                end
+            end
+
+            # Use make_decision! which properly integrates AI level effects
+            outcome = make_decision!(
+                agent,
+                available_opportunities,
+                market_conditions,
+                sim.market,
+                round;
+                uncertainty_env=sim.uncertainty_env,
+                neighbor_agents=neighbor_agents,
+                innovation_engine=sim.innovation_engine,
+                info_system=sim.info_system
+            )
+
+            push!(agent_actions, outcome)
+        end
     end
 
     # Update tier beliefs from immediate action outcomes (innovate, explore)
@@ -310,6 +410,26 @@ function step!(sim::EmergentSimulation, round::Int)
             # Spawn derivative opportunity from successful innovation (Python match)
             cash_multiple = Float64(get(action, "cash_multiple", 1.5))
             spawn_opportunity_from_innovation!(sim.market, innov, cash_multiple)
+        end
+    end
+
+    # Phase 5b: Apply novelty disruption for high-novelty innovations
+    # This implements the "DeepSeek Effect" - novel innovations disrupt crowded opportunities
+    novelty_disruption_enabled = hasfield(typeof(sim.config), :NOVELTY_DISRUPTION_ENABLED) ?
+        sim.config.NOVELTY_DISRUPTION_ENABLED : true
+    if novelty_disruption_enabled
+        for innov in innovations
+            disrupted_count = apply_novelty_disruption!(sim.market, innov)
+            if disrupted_count > 0
+                # Track disruption in action for the innovator (optional: for analysis)
+                for action in agent_actions
+                    if get(action, "agent_id", 0) == innov.creator_id &&
+                       get(action, "action", "") == "innovate"
+                        action["disrupted_opportunities"] = disrupted_count
+                        break
+                    end
+                end
+            end
         end
     end
 
@@ -476,11 +596,41 @@ function compile_round_stats(
     n_success = count(o -> get(o, "success", false), matured_outcomes)
     n_failure = n_matured - n_success
 
-    # Uncertainty levels
+    # Uncertainty levels (formula-based, environment level - kept for backwards compatibility)
     actor_ignorance = Float64(get(get(uncertainty_state, "actor_ignorance", Dict()), "level", 0.0))
     practical_indet = Float64(get(get(uncertainty_state, "practical_indeterminism", Dict()), "level", 0.0))
     agentic_novelty = Float64(get(get(uncertainty_state, "agentic_novelty", Dict()), "level", 0.0))
     competitive_rec = Float64(get(get(uncertainty_state, "competitive_recursion", Dict()), "level", 0.0))
+
+    # EMERGENT uncertainty (agent-level, computed from actual outcomes)
+    # These metrics emerge from what actually happens to agents, not from formulas
+    emergent_by_tier = aggregate_emergent_uncertainty_by_tier(sim.agents)
+
+    # Get simulation's AI tier (all agents have same fixed tier in this simulation design)
+    # Use fixed_ai_level if set, otherwise current_ai_level
+    sim_tier = if !isempty(sim.agents)
+        first_agent = sim.agents[1]
+        if !isnothing(first_agent.fixed_ai_level)
+            first_agent.fixed_ai_level
+        else
+            first_agent.current_ai_level
+        end
+    else
+        "none"
+    end
+
+    # Get emergent metrics for this tier
+    tier_emergent = get(emergent_by_tier, sim_tier, Dict{String,Float64}(
+        "actor_ignorance" => 0.5,
+        "practical_indeterminism" => 0.5,
+        "agentic_novelty" => 0.5,
+        "competitive_recursion" => 0.0
+    ))
+
+    emergent_actor_ignorance = Float64(get(tier_emergent, "actor_ignorance", 0.5))
+    emergent_practical_indet = Float64(get(tier_emergent, "practical_indeterminism", 0.5))
+    emergent_agentic_novelty = Float64(get(tier_emergent, "agentic_novelty", 0.5))
+    emergent_competitive_rec = Float64(get(tier_emergent, "competitive_recursion", 0.0))
 
     # --- Uncertainty Transformation Metrics ---
     # Store baseline on first round (or first round with uncertainty data)
@@ -550,7 +700,7 @@ function compile_round_stats(
         "round" => round,
         "n_alive" => n_alive,
         "n_total" => n_total,
-        "survival_rate" => n_alive / n_total,
+        "survival_rate" => n_total > 0 ? n_alive / n_total : 0.0,
         "mean_capital" => mean_capital,
         "median_capital" => median_capital,
         "std_capital" => std_capital,
@@ -604,11 +754,16 @@ function compile_round_stats(
         "n_success" => n_success,
         "n_failure" => n_failure,
         "success_rate" => n_matured > 0 ? n_success / n_matured : 0.0,
-        # Uncertainty levels
+        # Uncertainty levels (formula-based, kept for backwards compatibility)
         "actor_ignorance" => actor_ignorance,
         "practical_indeterminism" => practical_indet,
         "agentic_novelty" => agentic_novelty,
         "competitive_recursion" => competitive_rec,
+        # EMERGENT uncertainty (agent-level, from actual outcomes)
+        "emergent_actor_ignorance" => emergent_actor_ignorance,
+        "emergent_practical_indeterminism" => emergent_practical_indet,
+        "emergent_agentic_novelty" => emergent_agentic_novelty,
+        "emergent_competitive_recursion" => emergent_competitive_rec,
         # Uncertainty transformation metrics
         "delta_actor_ignorance" => delta_actor,
         "delta_practical_indeterminism" => delta_practical,
@@ -1068,6 +1223,7 @@ mutable struct EnhancedSimulation
     uncertainty_env::KnightianUncertaintyEnvironment
     knowledge_base::KnowledgeBase
     innovation_engine::InnovationEngine
+    info_system::InformationSystem  # AI information generation system
     agent_network::Union{AgentNetwork,Nothing}
     current_round::Int
     history::Vector{Dict{String,Any}}
@@ -1120,6 +1276,9 @@ function EnhancedSimulation(;
     combination_tracker = CombinationTracker()
     innovation_engine = InnovationEngine(config, knowledge_base, combination_tracker)
 
+    # Create information system for AI-assisted analysis
+    info_system = InformationSystem(config)
+
     # Determine initial AI tier distribution
     tier_order = ["none", "basic", "advanced", "premium"]
     tier_probs = if isnothing(initial_tier_distribution)
@@ -1151,6 +1310,10 @@ function EnhancedSimulation(;
             end
         end
         agent = EmergentAgent(i, config; rng=rng, fixed_ai_level=initial_tier)
+        # Initialize subscription schedule for fixed AI tier (ensures costs are charged)
+        if initial_tier != "none"
+            ensure_subscription_schedule!(agent, initial_tier)
+        end
         push!(agents, agent)
     end
 
@@ -1196,6 +1359,7 @@ function EnhancedSimulation(;
         uncertainty_env,
         knowledge_base,
         innovation_engine,
+        info_system,
         agent_network,
         0,
         Dict{String,Any}[],
@@ -1240,7 +1404,7 @@ Enforce survival threshold for an agent.
 Uses evaluate_failure_conditions! for full Python compatibility with all 4 failure modes:
 liquidity_failure, equity_failure, funding_shock, burnout_failure.
 """
-function enforce_survival_threshold!(agent::EmergentAgent, config::EmergentConfig)
+function enforce_survival_threshold!(agent::EmergentAgent, config::EmergentConfig, round_num::Int)
     if !agent.alive
         return
     end
@@ -1249,6 +1413,7 @@ function enforce_survival_threshold!(agent::EmergentAgent, config::EmergentConfi
     reason = evaluate_failure_conditions!(agent)
     if !isnothing(reason)
         agent.alive = false
+        agent.failure_round = round_num  # Track when agent fails (for Kaplan-Meier)
         agent.failure_reason = reason
     end
 end
@@ -1293,7 +1458,7 @@ function apply_operating_costs!(
         capital_delta = agent.resources.capital - capital_before
         update_burn_history!(agent, capital_delta)
 
-        enforce_survival_threshold!(agent, config)
+        enforce_survival_threshold!(agent, config, round_num)
     end
 end
 
@@ -1418,7 +1583,7 @@ function enhanced_step!(sim::EnhancedSimulation, round::Int)
 
         # Update agent state from outcome
         update_state_from_outcome!(agent, outcome)
-        enforce_survival_threshold!(agent, sim.config)
+        enforce_survival_threshold!(agent, sim.config, round)
     end
 
     # Refresh alive agents
@@ -1428,40 +1593,136 @@ function enhanced_step!(sim::EnhancedSimulation, round::Int)
     end
 
     # Phase 2: Collect agent decisions
+    # Check if sequential decisions are enabled
+    sequential_enabled = hasfield(typeof(sim.config), :SEQUENTIAL_DECISIONS_ENABLED) ?
+        sim.config.SEQUENTIAL_DECISIONS_ENABLED : false
+
     agent_actions = Dict{String,Any}[]
 
-    for agent in alive_agents
-        # Get neighbor agents from network
-        neighbor_agents = EmergentAgent[]
-        if !isnothing(sim.agent_network)
-            neighbor_ids = get_neighbors(sim.agent_network, agent.id)
-            if length(neighbor_ids) > 5
-                neighbor_ids = rand(sim.rng, neighbor_ids, 5)
+    if sequential_enabled && length(alive_agents) > 1
+        # Sequential decision making: early agents decide first, their choices become visible signals
+        early_fraction = hasfield(typeof(sim.config), :EARLY_DECISION_FRACTION) ?
+            sim.config.EARLY_DECISION_FRACTION : 0.3
+        signal_weight = hasfield(typeof(sim.config), :SIGNAL_VISIBILITY_WEIGHT) ?
+            sim.config.SIGNAL_VISIBILITY_WEIGHT : 0.15
+
+        n_early = max(1, Int(floor(length(alive_agents) * early_fraction)))
+
+        # Shuffle and split into early and late deciders
+        shuffled_agents = shuffle(sim.rng, collect(alive_agents))
+        early_agents = shuffled_agents[1:n_early]
+        late_agents = shuffled_agents[n_early+1:end]
+
+        # Phase 2a: Early agents decide (no visibility signals)
+        early_signals = Dict{String,Int}()
+
+        for agent in early_agents
+            neighbor_agents = EmergentAgent[]
+            if !isnothing(sim.agent_network)
+                neighbor_ids = get_neighbors(sim.agent_network, agent.id)
+                if length(neighbor_ids) > 5
+                    neighbor_ids = rand(sim.rng, neighbor_ids, 5)
+                end
+                neighbor_agents = [sim.agents[nid] for nid in neighbor_ids if sim.agents[nid].alive]
             end
-            neighbor_agents = [sim.agents[nid] for nid in neighbor_ids if sim.agents[nid].alive]
+
+            agent_opportunities = get_opportunities_for_agent(sim.market, agent)
+            if isempty(agent_opportunities)
+                agent_opportunities = available_opportunities
+            end
+
+            decision = make_decision!(
+                agent,
+                agent_opportunities,
+                market_conditions,
+                sim.market,
+                round;
+                uncertainty_env=sim.uncertainty_env,
+                neighbor_agents=neighbor_agents,
+                innovation_engine=sim.innovation_engine,
+                info_system=sim.info_system
+            )
+
+            decision["agent_id"] = agent.id
+            push!(agent_actions, decision)
+
+            # Record visible signal for invest actions
+            if get(decision, "action", "") == "invest"
+                opp_id = string(get(decision, "opportunity_id", ""))
+                if !isempty(opp_id)
+                    early_signals[opp_id] = get(early_signals, opp_id, 0) + 1
+                end
+            end
         end
 
-        # Get opportunities available to this agent
-        agent_opportunities = get_opportunities_for_agent(sim.market, agent)
-        if isempty(agent_opportunities)
-            agent_opportunities = available_opportunities
+        # Phase 2b: Late agents decide with visible signals
+        for agent in late_agents
+            neighbor_agents = EmergentAgent[]
+            if !isnothing(sim.agent_network)
+                neighbor_ids = get_neighbors(sim.agent_network, agent.id)
+                if length(neighbor_ids) > 5
+                    neighbor_ids = rand(sim.rng, neighbor_ids, 5)
+                end
+                neighbor_agents = [sim.agents[nid] for nid in neighbor_ids if sim.agents[nid].alive]
+            end
+
+            agent_opportunities = get_opportunities_for_agent(sim.market, agent)
+            if isempty(agent_opportunities)
+                agent_opportunities = available_opportunities
+            end
+
+            decision = make_decision!(
+                agent,
+                agent_opportunities,
+                market_conditions,
+                sim.market,
+                round;
+                uncertainty_env=sim.uncertainty_env,
+                neighbor_agents=neighbor_agents,
+                innovation_engine=sim.innovation_engine,
+                info_system=sim.info_system,
+                early_signals=early_signals,
+                signal_weight=signal_weight
+            )
+
+            decision["agent_id"] = agent.id
+            push!(agent_actions, decision)
         end
+    else
+        # Original simultaneous decision logic
+        for agent in alive_agents
+            # Get neighbor agents from network
+            neighbor_agents = EmergentAgent[]
+            if !isnothing(sim.agent_network)
+                neighbor_ids = get_neighbors(sim.agent_network, agent.id)
+                if length(neighbor_ids) > 5
+                    neighbor_ids = rand(sim.rng, neighbor_ids, 5)
+                end
+                neighbor_agents = [sim.agents[nid] for nid in neighbor_ids if sim.agents[nid].alive]
+            end
 
-        # Make decision with full InnovationEngine and InformationSystem integration (matches Python)
-        decision = make_decision!(
-            agent,
-            agent_opportunities,
-            market_conditions,
-            sim.market,
-            round;
-            uncertainty_env=sim.uncertainty_env,
-            neighbor_agents=neighbor_agents,
-            innovation_engine=sim.innovation_engine,
-            info_system=sim.info_system
-        )
+            # Get opportunities available to this agent
+            agent_opportunities = get_opportunities_for_agent(sim.market, agent)
+            if isempty(agent_opportunities)
+                agent_opportunities = available_opportunities
+            end
 
-        decision["agent_id"] = agent.id
-        push!(agent_actions, decision)
+            # Make decision with full InnovationEngine and InformationSystem integration (matches Python)
+            decision = make_decision!(
+                agent,
+                agent_opportunities,
+                market_conditions,
+                sim.market,
+                round;
+                uncertainty_env=sim.uncertainty_env,
+                neighbor_agents=neighbor_agents,
+                innovation_engine=sim.innovation_engine,
+                info_system=sim.info_system
+            )
+
+            decision["agent_id"] = agent.id
+            push!(agent_actions, decision)
+        end
     end
 
     # Record AI signals
@@ -1509,7 +1770,27 @@ function enhanced_step!(sim::EnhancedSimulation, round::Int)
         if action_type != "invest"
             outcome = calculate_action_outcome(action, market_conditions, round)
             update_state_from_outcome!(agent, outcome)
-            enforce_survival_threshold!(agent, sim.config)
+            enforce_survival_threshold!(agent, sim.config, round)
+        end
+    end
+
+    # Phase 3b: Apply novelty disruption for high-novelty innovations
+    # This implements the "DeepSeek Effect" - novel innovations disrupt crowded opportunities
+    novelty_disruption_enabled = hasfield(typeof(sim.config), :NOVELTY_DISRUPTION_ENABLED) ?
+        sim.config.NOVELTY_DISRUPTION_ENABLED : true
+    if novelty_disruption_enabled
+        for innov in innovations_this_round
+            disrupted_count = apply_novelty_disruption!(sim.market, innov)
+            if disrupted_count > 0
+                # Track disruption in action for the innovator
+                for action in agent_actions
+                    if get(action, "agent_id", 0) == innov.creator_id &&
+                       get(action, "action", "") == "innovate"
+                        action["disrupted_opportunities"] = disrupted_count
+                        break
+                    end
+                end
+            end
         end
     end
 
@@ -1972,7 +2253,7 @@ function compile_enhanced_round_stats(
         "round" => round,
         "n_alive" => n_alive,
         "n_total" => n_total,
-        "survival_rate" => n_alive / n_total,
+        "survival_rate" => n_total > 0 ? n_alive / n_total : 0.0,
         "mean_capital" => mean_capital,
         "median_capital" => median_capital,
         "std_capital" => std_capital,
@@ -2119,6 +2400,8 @@ function run_parallel_batch(;
                 for agent in sim.agents
                     agent.fixed_ai_level = ai_level
                     agent.current_ai_level = ai_level
+                    # Start subscription schedule if this is a subscription tier
+                    ensure_subscription_schedule!(agent, ai_level)
                 end
             end
 
@@ -2156,6 +2439,8 @@ function run_parallel_batch(;
                 for agent in sim.agents
                     agent.fixed_ai_level = ai_level
                     agent.current_ai_level = ai_level
+                    # Start subscription schedule if this is a subscription tier
+                    ensure_subscription_schedule!(agent, ai_level)
                 end
             end
 

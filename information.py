@@ -91,10 +91,26 @@ class InformationSystem:
         domain = self._determine_domain(opportunity)
         domain_cap = self.config.get_ai_domain_capability(ai_level, domain)
 
-        actual_accuracy = float(np.clip(np.random.normal(domain_cap["accuracy"], 0.1), 0, 1))
-        # Scale hallucination rate by intensity parameter (for robustness testing)
+        # Quality-dependent accuracy scaling with lognormal distribution
+        # (matches Julia's superior approach in information.jl:182-187)
+        info_quality = ai_config["info_quality"]
+        tier_noise = max(0.1, 1.2 - info_quality)
+        base_accuracy = domain_cap["accuracy"]
+
+        # Apply lognormal accuracy noise
+        accuracy_noise_scale = 0.12 + 0.08 * tier_noise
+        accuracy_noise_loc = 1.0 - 0.35 * (1.0 - info_quality)
+        accuracy_noise = np.exp(np.random.normal(0, 1) * accuracy_noise_scale) * accuracy_noise_loc
+        actual_accuracy = float(np.clip(base_accuracy * accuracy_noise, 0.35, 0.99))
+
+        # 2-step hallucination rate chain (simplified version)
+        # Step 1: Get base hallucination rate from domain capability
+        base_hallucination_rate = domain_cap["hallucination_rate"]
+
+        # Step 2: Apply intensity scaling (robustness parameter)
         hallucination_intensity = getattr(self.config, 'HALLUCINATION_INTENSITY', 1.0)
-        hallucination_rate = domain_cap["hallucination_rate"] * hallucination_intensity
+        hallucination_rate = base_hallucination_rate * hallucination_intensity
+
         bias = domain_cap["bias"]
 
         return_noise = np.random.normal(0, 1) * (1 - actual_accuracy) * 0.5
@@ -346,14 +362,25 @@ class EnhancedInformationSystem(InformationSystem):
         info_quality = ai_config.get("info_quality", 0.0)
         info_breadth = ai_config.get("info_breadth", 0.0)
         base_accuracy = domain_cap.get("accuracy", 0.5)
+
+        # 4-step hallucination rate chain (matches Julia information.jl:189-204)
+        # Step 1: Get base hallucination rate from domain capability
         base_hallucination_rate = domain_cap.get("hallucination_rate", 0.1)
-        # Scale hallucination rate by intensity parameter (for robustness testing)
-        hallucination_intensity = getattr(self.config, 'HALLUCINATION_INTENSITY', 1.0)
+
+        # Step 2: Apply stochastic modification
         hallucination_rate = self.get_stochastic_hallucination_rate(
             base_hallucination_rate, domain
         )
+
+        # Step 3: Apply lognormal variance (quality-dependent noise)
         tier_noise = max(0.1, 1.2 - info_quality)
-        hallucination_rate *= float(np.clip(np.random.lognormal(mean=0.0, sigma=0.25 * tier_noise), 0.2, 3.0))
+        lognormal_mu = 0.0
+        lognormal_sigma = 0.25 * tier_noise
+        lognormal_factor = float(np.clip(np.random.lognormal(mean=lognormal_mu, sigma=lognormal_sigma), 0.2, 3.0))
+        hallucination_rate *= lognormal_factor
+
+        # Step 4: Apply intensity scaling (robustness parameter)
+        hallucination_intensity = getattr(self.config, 'HALLUCINATION_INTENSITY', 1.0)
         hallucination_rate = float(np.clip(hallucination_rate * hallucination_intensity, 0.0, 1.0))
         accuracy_noise = float(np.clip(np.random.normal(loc=1.0 - 0.35 * (1.0 - info_quality), scale=0.12 + 0.08 * tier_noise), 0.4, 1.2))
         base_accuracy = float(np.clip(base_accuracy * accuracy_noise, 0.35, 0.99))

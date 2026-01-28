@@ -57,22 +57,6 @@ include("io.jl")
 # NumPy-compatible RNG for cross-language reproducibility
 include("numpy_rng.jl")
 
-# Causal inference module
-include("../causal/causal.jl")
-using .Causal
-
-# Analysis module
-include("../analysis/analysis.jl")
-using .Analysis
-
-# Visualization module (loaded conditionally)
-include("../analysis/visualization.jl")
-using .Visualization
-
-# CLI module
-include("../cli/cli.jl")
-using .CLI
-
 # Exports - Configuration
 export EmergentConfig
 export CalibrationProfile
@@ -120,51 +104,23 @@ export load_results
 export check_survival!, evaluate_failure_conditions!, update_burn_history!
 export get_capital, set_capital!, get_ai_level
 
+# Exports - Emergent uncertainty (agent-level metrics)
+export AgentUncertaintyMetrics
+export get_emergent_uncertainty, compute_emergent_uncertainty
+export aggregate_emergent_uncertainty_by_tier
+export record_investment_outcome!, record_creative_action!
+
+# Exports - AI subscription charging
+export ensure_subscription_schedule!, start_subscription_schedule!
+export charge_subscription_installment!, apply_subscription_carry!
+
 # Exports - Utility functions
 export stable_sigmoid, safe_exp, safe_mean, fast_mean
 export normalize_ai_label, compute_hhi, compute_gini
-export perceive_uncertainty, measure_uncertainty_state!
+export perceive_uncertainty, measure_uncertainty_state!, get_uncertainty_state
 
 # Exports - NumPy-compatible RNG
 export NumpyRNG, numpy_rand, numpy_randn, numpy_randint, numpy_seed!
 export numpy_gamma, numpy_beta, numpy_uniform, numpy_exponential
-
-# Exports - Causal inference
-export cohens_d, cliffs_delta, glass_delta
-export anova_oneway, kruskal_wallis
-export bootstrap_ci, permutation_test
-export mann_whitney_u, survival_analysis
-export EffectSizeResult, ANOVAResult, SurvivalResult
-export CoxRegressionResult, PropensityScoreResult, DiDResult, RDResult
-export kaplan_meier_curves, log_rank_test
-export estimate_propensity_scores, propensity_score_matching, inverse_probability_weighting
-export difference_in_differences, event_study
-export regression_discontinuity
-
-# Exports - Statistical testing (rigorous analysis)
-export StatisticalTestResult, MixedEffectsResult, CausalEffectEstimate
-export set_fast_stats_mode, get_bootstrap_iterations
-export cohens_d_with_ci, eta_squared, epsilon_squared, cramers_v
-export test_normality, test_homogeneity
-export kruskal_wallis_test, mann_whitney_u_test, chi_square_test
-export welch_ttest, spearman_correlation
-export benjamini_hochberg, holm_bonferroni
-export bootstrap_ci_stat, compute_ate_bootstrap
-export descriptive_stats, significance_stars, format_p_value
-
-# Exports - Analysis
-export AnalysisFramework, run_full_analysis
-export compute_survival_summary, compute_capital_summary
-export compute_ai_tier_comparison, aggregate_sweep_results
-
-# Exports - Visualization
-export plot_survival_by_tier, plot_capital_distribution
-export plot_ai_adoption_over_time, plot_uncertainty_dynamics
-export plot_effect_sizes, plot_survival_curves
-export create_summary_dashboard, save_all_figures
-
-# Exports - CLI
-export run_cli, parse_args
-export run_master_launcher, run_fixed_level_sweep
 
 end # module

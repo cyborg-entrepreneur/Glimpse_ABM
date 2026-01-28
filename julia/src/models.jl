@@ -98,6 +98,11 @@ mutable struct Opportunity
     origin_innovation_id::Union{String,Nothing}
     crowding_penalty::Float64
     component_scarcity::Float64
+    # New fields for paradox mechanisms
+    novelty_score::Float64              # 0.0 = established, 1.0 = very novel
+    total_invested::Float64             # Track total investment for capacity constraints
+    capacity::Float64                   # Max investment capacity
+    disrupted_count::Int                # How many times disrupted by innovations
 end
 
 function Opportunity(;
@@ -128,7 +133,12 @@ function Opportunity(;
     market_impact::Float64 = 0.0,
     origin_innovation_id::Union{String,Nothing} = nothing,
     crowding_penalty::Float64 = 0.0,
-    component_scarcity::Float64 = 0.5
+    component_scarcity::Float64 = 0.5,
+    # New fields for paradox mechanisms
+    novelty_score::Float64 = 0.0,       # 0.0 = established, 1.0 = very novel
+    total_invested::Float64 = 0.0,      # Track total investment
+    capacity::Float64 = 500000.0,       # Default capacity
+    disrupted_count::Int = 0            # Disruption counter
 )
     opp = Opportunity(
         id, latent_return_potential, latent_failure_potential, complexity,
@@ -138,12 +148,19 @@ function Opportunity(;
         entry_barriers, age, base_failure_potential, truly_unknown,
         required_discovery_threshold, combination_uncertainty,
         combination_signature, market_impact, origin_innovation_id,
-        crowding_penalty, component_scarcity
+        crowding_penalty, component_scarcity,
+        novelty_score, total_invested, capacity, disrupted_count
     )
 
     # Initialize base_failure_potential if not set
     if isnothing(opp.base_failure_potential)
         opp.base_failure_potential = opp.latent_failure_potential
+    end
+
+    # Set capacity based on config if available
+    if !isnothing(config) && hasfield(typeof(config), :OPPORTUNITY_BASE_CAPACITY)
+        variance = hasfield(typeof(config), :OPPORTUNITY_CAPACITY_VARIANCE) ? config.OPPORTUNITY_CAPACITY_VARIANCE : 0.3
+        opp.capacity = config.OPPORTUNITY_BASE_CAPACITY * (1.0 + (rand() - 0.5) * 2 * variance)
     end
 
     return opp
@@ -273,12 +290,90 @@ function realized_return(
         base_mean *= crowd_penalty_extra
     end
 
-    # Tier-specific crowding (matching Python - fixed 0.6 coefficient)
-    tier_shares = get(market_conditions, "tier_invest_share", Dict{String,Float64}())
-    tier_share = isnothing(investor_tier) ? 0.0 : Float64(get(tier_shares, investor_tier, 0.0))
-    if tier_share > 0.45
-        crowd_penalty = 1.0 - 0.6 * (tier_share - 0.45)
-        base_mean *= clamp(crowd_penalty, 0.35, 1.0)
+    # NOTE: Removed legacy tier-specific crowding penalty (was lines 276-282)
+    # That penalty applied when any tier's market share > 45%, but:
+    # 1. In 100% same-tier experiments, both treatments faced identical penalty
+    # 2. It was redundant with opportunity-level competition penalty below
+    # 3. The paradox should emerge from natural herding, not tier-specific penalties
+
+    # =========================================================================
+    # OPPORTUNITY-LEVEL COMPETITION PENALTY (AI Information Paradox mechanism)
+    # =========================================================================
+    # When multiple agents converge on the same opportunity, returns are reduced
+    # due to fundamental market dynamics:
+    #
+    # 1. PRICE IMPACT (Kyle 1985, Almgren-Chriss 2000)
+    #    - Large order flow moves prices against investors
+    #    - Impact scales as √(order_flow) in liquid markets
+    #
+    # 2. CAPACITY CONSTRAINTS (Berk & Green 2004)
+    #    - Each opportunity has limited "alpha" to extract
+    #    - More investors = smaller slice of the pie for each
+    #
+    # 3. RESOURCE COMPETITION (Cournot oligopoly)
+    #    - Finite talent, customers, and market share
+    #    - Profits decrease as 1/n with n competitors
+    #
+    # Competition is an unbounded "competitive pressure index":
+    # - competition = 0.0: No other investors (monopoly position)
+    # - competition = 1.0: Normal competitive pressure (~10 investors)
+    # - competition = 3.0: Severe crowding (~30 investors)
+    #
+    # The penalty uses SQUARE ROOT scaling (market microstructure standard):
+    # - Reflects diminishing marginal impact at high competition
+    # - Well-established in finance literature (Kyle 1985)
+    # =========================================================================
+    opp_comp_threshold = isnothing(config) ? 0.2 : config.OPPORTUNITY_COMPETITION_THRESHOLD
+    opp_comp_penalty_rate = isnothing(config) ? 0.5 : config.OPPORTUNITY_COMPETITION_PENALTY
+    opp_comp_floor = isnothing(config) ? 0.1 : config.OPPORTUNITY_COMPETITION_FLOOR
+
+    if opp.competition > opp_comp_threshold
+        # Excess competition above baseline threshold
+        excess_competition = opp.competition - opp_comp_threshold
+
+        # SQUARE ROOT penalty (Kyle 1985 market impact model)
+        # Price impact ∝ √(order_flow), so return penalty ∝ √(competition)
+        #
+        # At competition=0.5 (5 investors):  √(0.3) × rate = 0.55 × 0.5 = 27% penalty
+        # At competition=1.0 (10 investors): √(0.8) × rate = 0.89 × 0.5 = 45% penalty
+        # At competition=2.0 (20 investors): √(1.8) × rate = 1.34 × 0.5 = 67% penalty
+        # At competition=3.0 (30 investors): √(2.8) × rate = 1.67 × 0.5 = 84% penalty
+        #
+        # This creates the AI Information Paradox:
+        # - Premium AI (33 investors → comp≈3.3): ~85% penalty
+        # - Human (15 investors → comp≈1.5): ~55% penalty
+        sqrt_factor = sqrt(excess_competition)
+        competition_penalty = 1.0 - opp_comp_penalty_rate * sqrt_factor
+        base_mean *= clamp(competition_penalty, opp_comp_floor, 1.0)
+    end
+
+    # =========================================================================
+    # CAPACITY CONSTRAINTS
+    # =========================================================================
+    # Real opportunities have limited capacity. First movers get better terms.
+    # As investment approaches capacity, returns diminish.
+    # This creates winner-take-all dynamics that amplify the AI paradox:
+    # - Premium agents converge → fill capacity quickly → late investors suffer
+    capacity_enabled = !isnothing(config) &&
+        hasfield(typeof(config), :OPPORTUNITY_CAPACITY_ENABLED) &&
+        config.OPPORTUNITY_CAPACITY_ENABLED
+
+    if capacity_enabled && hasfield(typeof(opp), :capacity) && opp.capacity > 0
+        utilization = opp.total_invested / opp.capacity
+        penalty_start = !isnothing(config) && hasfield(typeof(config), :CAPACITY_PENALTY_START) ?
+            config.CAPACITY_PENALTY_START : 0.7
+        penalty_max = !isnothing(config) && hasfield(typeof(config), :CAPACITY_PENALTY_MAX) ?
+            config.CAPACITY_PENALTY_MAX : 0.4
+
+        if utilization > penalty_start && penalty_start < 1.0
+            # Linear penalty from penalty_start to 1.0
+            # At 70% utilized: 0% capacity penalty
+            # At 100% utilized: max penalty (e.g., 40%)
+            denom = 1.0 - penalty_start
+            excess = denom > 0.001 ? (utilization - penalty_start) / denom : 1.0
+            capacity_penalty = 1.0 - clamp(excess, 0.0, 1.0) * penalty_max
+            base_mean *= clamp(capacity_penalty, 1.0 - penalty_max, 1.0)
+        end
     end
 
     # =========================================================================
@@ -1113,7 +1208,8 @@ function update_diversification!(portfolio::Portfolio)
 
     # Compute entropy-based diversification
     proportions = [amt / total_amount for amt in values(sector_amounts)]
-    max_entropy = log(4)  # Assume 4 sectors
+    n_sectors = length(sector_amounts)
+    max_entropy = n_sectors > 1 ? log(n_sectors) : 1.0  # Use actual sector count
 
     if max_entropy <= 0
         portfolio.diversification_score = 0.0

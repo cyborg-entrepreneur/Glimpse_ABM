@@ -1,6 +1,33 @@
 # Glimpse ABM: Agent-Based Simulation of Knightian Uncertainty Under AI Augmentation
 
-This repository contains the agent-based model (ABM) for investigating how artificial intelligence affects entrepreneurial decision-making under Knightian uncertainty. The simulation operationalizes the theoretical framework from Townsend, Hunt, Rady, Manocha, & Jin (2025, The Academy of Management Review) and Townsend, Hunt, & Rady (2024, Strategic Entrepreneurship Journal).
+A comprehensive agent-based model for studying the **AI Information Paradox**—the phenomenon whereby widespread AI adoption can paradoxically amplify Knightian uncertainty through competitive convergence.
+
+## Overview
+
+GLIMPSE ABM simulates entrepreneurial decision-making under uncertainty, examining how AI augmentation transforms rather than eliminates uncertainty. The model demonstrates that superior AI capabilities can lead to worse collective outcomes due to convergent behavior and competitive crowding.
+
+### The AI Information Paradox
+
+The central finding of this simulation is counterintuitive: **agents with the best AI tools (Premium tier) consistently underperform agents with no AI assistance**. This paradox emerges through a specific causal mechanism:
+
+1. **Superior Information Quality**: Premium AI provides near-perfect information about opportunity quality (info_quality = 0.97)
+2. **Convergent Decision-Making**: All Premium agents identify the same "best" opportunities
+3. **Competitive Crowding**: These opportunities become overcrowded as many agents invest simultaneously
+4. **Diluted Returns**: Crowding penalties reduce returns, transforming "good" investments into mediocre ones
+5. **Survival Penalty**: Lower returns lead to capital depletion and higher failure rates
+
+Meanwhile, agents without AI ("None" tier) make more diverse, seemingly "worse" decisions that are distributed across the opportunity landscape. Some find uncrowded niches with superior returns, leading to better collective outcomes.
+
+### Key Findings
+
+The simulation consistently reproduces:
+- **Premium AI agents exhibit ~8-14 percentage point lower survival** than human-only agents
+- **Mechanism**: Better information → convergent decisions → competitive crowding → diluted returns
+- **Unicorn generation**: Premium tier produces ~50% fewer exceptional performers (top 5% by capital)
+- **Competition levels**: Premium agents experience 2-3x higher mean competition ratios
+- Effects are robust across bootstrap tests, placebo checks, and balanced designs
+
+---
 
 ## Implementations
 
@@ -13,35 +40,7 @@ This repository contains **two implementations** of the GLIMPSE ABM:
 
 Both implementations produce statistically equivalent results. The Julia version is **~65x faster** and recommended for parameter sweeps and robustness analysis.
 
-## Repository Structure
-
-```
-glimpse_abm/
-├── __init__.py              # Python package initialization
-├── cli.py                   # Python command-line interface
-├── config.py                # Configuration and calibration profiles
-├── simulation.py            # Core simulation orchestration
-├── agents.py                # Agent architecture and behavior
-├── market.py                # Market dynamics and clearing
-├── innovation.py            # Innovation and opportunity discovery
-├── knowledge.py             # Knowledge management and AI augmentation
-├── uncertainty.py           # Knightian uncertainty framework
-├── information.py           # Information systems and signals
-├── models.py                # Data models and structures
-├── analysis.py              # Results analysis and statistics
-├── docs/                    # Documentation
-├── parameters/              # LHS parameter range configurations
-├── scripts/                 # Automation scripts
-├── tests/                   # Test suite
-├── tools/                   # Progress tracking utilities
-└── julia/                   # Julia implementation (GlimpseABM.jl)
-    ├── src/                 # Core Julia modules
-    ├── test/                # Julia test suite
-    ├── analysis/            # Analysis functions
-    ├── causal/              # Causal analysis
-    ├── benchmark/           # Performance benchmarks
-    └── README.md            # Julia-specific documentation
-```
+---
 
 ## Theoretical Foundation
 
@@ -49,21 +48,199 @@ glimpse_abm/
 
 Knight (1921) distinguished between calculable *risk* and incalculable *uncertainty*. Townsend et al. (2025) extend this framework to identify four irreducible sources of Knightian uncertainty affecting entrepreneurial action:
 
-1. **Actor Ignorance**: The entrepreneur's incomplete knowledge of the opportunity landscape, market conditions, and causal relationships.
+#### 1. Actor Ignorance
+The entrepreneur's incomplete knowledge of the opportunity landscape, market conditions, and causal relationships.
 
-2. **Practical Indeterminism**: The inherent unpredictability of execution paths, timing dependencies, and path-dependent outcomes.
+- **Operationalization**: `info_quality` and `info_breadth` parameters determine how accurately agents perceive opportunity characteristics
+- **AI Effect**: Higher AI tiers dramatically reduce actor ignorance (None: 0.25 → Premium: 0.97)
+- **Measurement**: Tracked via `actor_ignorance` in agent uncertainty metrics
 
-3. **Agentic Novelty**: The creative potential for genuinely new combinations, innovations, and possibilities that did not previously exist.
+#### 2. Practical Indeterminism
+The inherent unpredictability of execution paths, timing dependencies, and path-dependent outcomes.
 
-4. **Competitive Recursion**: The strategic interdependence among actors where each agent's actions depend on anticipations of others' actions.
+- **Operationalization**: Stochastic shocks to investment outcomes, market regime transitions, and black swan events
+- **AI Effect**: AI slightly reduces execution uncertainty through better planning
+- **Measurement**: Tracked via `practical_indeterminism` derived from outcome variance
 
-### The Paradox of Future Knowledge
+#### 3. Agentic Novelty
+The creative potential for genuinely new combinations, innovations, and possibilities that did not previously exist.
 
-A central insight from Townsend et al. (2025) is that AI creates a "paradox of future knowledge": while AI tools reduce actor ignorance, they may simultaneously:
+- **Operationalization**: Innovation mechanics allow agents to create new opportunities through knowledge recombination
+- **AI Effect**: AI may constrain novelty by anchoring on historical patterns (configurable via `AI_NOVELTY_CONSTRAINT_INTENSITY`)
+- **Measurement**: Tracked via `agentic_novelty` based on innovation success rates
 
-- Increase practical indeterminism through faster competitive dynamics
-- Reduce agentic novelty by anchoring on historical patterns
-- Intensify competitive recursion through correlated recommendations
+#### 4. Competitive Recursion
+The strategic interdependence among actors where each agent's actions depend on anticipations of others' actions.
+
+- **Operationalization**: Competition ratio measured at investment maturity, crowding penalties on returns
+- **AI Effect**: This is where the paradox emerges—better AI increases competitive recursion through convergent behavior
+- **Measurement**: Tracked via `competitive_recursion` and `competition_levels` arrays
+
+### The Paradox Mechanism
+
+The key insight is that AI creates a **trade-off between uncertainty dimensions**:
+
+```
+Actor Ignorance ↓↓↓ (AI dramatically reduces)
+Competitive Recursion ↑↑↑ (AI dramatically increases via convergence)
+```
+
+When all agents have excellent information, they make similar decisions. This similarity creates a new form of uncertainty—not about what opportunities are good, but about how many competitors will arrive at the same conclusion.
+
+---
+
+## Model Architecture
+
+### Simulation Cadence
+
+The simulation operates on **monthly cadence**:
+- `N_ROUNDS = 120` represents 10 years of operation
+- All rate parameters (costs, probabilities, decay rates) are calibrated for monthly resolution
+- Investment maturity periods range from 3-28 months depending on sector
+
+### Agents
+
+Each `EmergentAgent` represents an entrepreneurial firm characterized by:
+
+```python
+class EmergentAgent:
+    id: int
+    alive: bool
+    capital: float                      # Current capital
+    fixed_ai_level: Optional[str]       # Locked AI tier for experiments
+    current_ai_level: str               # Current AI tier
+    portfolio: InvestmentPortfolio      # Active and pending investments
+    uncertainty_metrics: dict           # Four-dimensional tracking
+    innovation_count: int               # Successful innovations
+    success_count: int                  # Successful investments
+    failure_count: int                  # Failed investments
+    total_invested: float               # Cumulative investment
+    total_returned: float               # Cumulative returns
+    traits: dict                        # Cognitive traits (10 dimensions)
+```
+
+**Agent Decision Cycle** (each round):
+1. **Opportunity Discovery**: Agents discover available investment opportunities
+2. **Information Gathering**: AI tier determines quality of opportunity assessment
+3. **Investment Decision**: Agents allocate capital based on perceived returns
+4. **Innovation Attempt**: Agents may attempt to create new opportunities
+5. **Outcome Resolution**: Matured investments resolve with competition-adjusted returns
+6. **Survival Check**: Agents below survival threshold may exit
+
+### Cognitive Traits
+
+Each agent is initialized with 10 cognitive traits sampled from empirically-calibrated distributions:
+
+| Trait | Distribution | Mean | Behavioral Effect |
+|-------|-------------|------|-------------------|
+| Uncertainty Tolerance | Beta(1.05, 0.65) | 0.62 | Investment thresholds, AI adoption |
+| Innovativeness | Lognormal(0.5, 0.5) | 0.50 | Innovation attempts, search breadth |
+| Competence | Uniform(0.1, 0.8) | 0.45 | Operating costs, learning rate |
+| AI Trust | Normal(0.5, 0.38) | 0.50 | AI recommendation weight |
+| Exploration Tendency | Beta(0.85, 0.85) | 0.50 | Portfolio diversification |
+| Entrepreneurial Drive | Beta(2.2, 1.8) | 0.55 | Survival persistence |
+| Trait Momentum | Uniform(0.6, 0.9) | 0.75 | Learning adaptation rate |
+| Cognitive Style | Uniform(0.8, 1.2) | 1.00 | Information processing |
+| Analytical Ability | Uniform(0.1, 0.9) | 0.50 | Herding resistance |
+| Market Awareness | Uniform(0.1, 0.9) | 0.50 | Opportunity discovery |
+
+See `docs/TABLE1_COGNITIVE_TRAITS.md` for detailed documentation with academic citations.
+
+### Market Environment
+
+The `MarketEnvironment` manages:
+
+```python
+class MarketEnvironment:
+    opportunities: List[Opportunity]    # Available investments
+    market_regime: str                  # "crisis"|"recession"|"normal"|"growth"|"boom"
+    market_momentum: float              # Trend indicator
+    crowding_metrics: dict              # Competition tracking
+```
+
+**Opportunity Characteristics**:
+- `latent_return_potential`: True underlying return (hidden from agents)
+- `latent_failure_potential`: True failure probability (hidden from agents)
+- `capacity`: Maximum investment before crowding penalties
+- `total_invested`: Current investment level
+- `competition_ratio`: Number of investors / capacity
+
+**Crowding Mechanism**:
+```python
+# When capacity utilization exceeds threshold, returns are penalized
+if utilization > CAPACITY_PENALTY_START:
+    excess = (utilization - CAPACITY_PENALTY_START) / (1.0 - CAPACITY_PENALTY_START)
+    penalty = excess * CAPACITY_PENALTY_MAX
+    adjusted_return = base_return * (1.0 - penalty)
+```
+
+### AI Tiers
+
+| Tier | Info Quality | Info Breadth | Monthly Cost | Description |
+|------|-------------|--------------|--------------|-------------|
+| None | 0.25 | 0.20 | $0 | Human baseline - high variance, diverse decisions |
+| Basic | 0.43 | 0.38 | $30 | Consumer AI - moderate improvement |
+| Advanced | 0.70 | 0.65 | $400 | Professional AI - significant improvement |
+| Premium | 0.97 | 0.92 | $3,500 | Enterprise AI - near-perfect information |
+
+**Info Quality**: Determines accuracy of opportunity assessment (0 = random, 1 = perfect)
+**Info Breadth**: Determines fraction of opportunities visible to agent
+
+### Competition Ratio Calculation
+
+The competition ratio is the key metric driving the paradox:
+
+```python
+def calculate_competition_ratio(opportunity, market):
+    n_investors = count_investors(opportunity)
+    capacity = opportunity.capacity
+
+    # Competition ratio: how crowded is this opportunity?
+    competition_ratio = n_investors / max(capacity, 1)
+
+    # Record for agent uncertainty metrics
+    agent.uncertainty_metrics['competition_levels'].append(competition_ratio)
+
+    return competition_ratio
+```
+
+Premium agents consistently experience `competition_ratio > 10` while None agents average `competition_ratio ~ 3-5`.
+
+---
+
+## Repository Structure
+
+```
+glimpse_abm/
+├── __init__.py              # Python package initialization
+├── cli.py                   # Command-line interface
+├── config.py                # Configuration and calibration (monthly cadence)
+├── simulation.py            # Core simulation orchestration
+├── agents.py                # Agent architecture and behavior
+├── market.py                # Market dynamics and crowding
+├── uncertainty.py           # Four-dimensional Knightian uncertainty
+├── innovation.py            # Innovation and opportunity discovery
+├── knowledge.py             # Knowledge management and AI augmentation
+├── information.py           # Information systems and signals
+├── models.py                # Data models and structures
+├── analysis.py              # Results analysis and statistics
+├── statistical_tests.py     # Causal inference utilities
+├── causal/                  # Advanced causal analysis (DiD, PSM, RD)
+├── docs/                    # Documentation and parameter guides
+│   ├── PARAMETER_GLOSSARY.md      # Complete parameter reference
+│   ├── CALIBRATION_GUIDE.md       # Calibration instructions
+│   ├── TABLE1_COGNITIVE_TRAITS.md # Cognitive traits for paper
+│   └── CALIBRATION_BASELINE.md    # Calibration workbook
+├── parameters/              # LHS parameter range configurations
+├── tests/                   # Test suite
+└── julia/                   # Julia implementation (GlimpseABM.jl)
+    ├── src/                 # Core Julia modules
+    ├── scripts/             # Analysis scripts
+    ├── test/                # Julia test suite
+    └── README.md            # Julia-specific documentation
+```
+
+---
 
 ## Installation
 
@@ -96,6 +273,8 @@ julia --project=. -e 'using Pkg; Pkg.instantiate()'
 julia --project=. -e 'using Pkg; Pkg.test()'
 ```
 
+---
+
 ## Quick Start
 
 ### Python
@@ -118,23 +297,80 @@ python3 -m glimpse_abm.cli --task fixed --calibration-profile minimal_causal \
 ```julia
 using GlimpseABM
 
-# Create configuration
+# Create configuration (monthly cadence)
 config = EmergentConfig(
-    N_AGENTS = 100,
-    N_ROUNDS = 50,
-    RANDOM_SEED = 42
+    N_AGENTS = 1000,
+    N_ROUNDS = 60,          # 5 years
+    INITIAL_CAPITAL = 5_000_000.0,
+    SURVIVAL_THRESHOLD = 230_000.0
 )
 
-# Run simulation
-sim = EmergentSimulation(config)
-run!(sim)
+# Run simulation with fixed AI tier (for causal analysis)
+tier_dist = Dict("none" => 0.0, "basic" => 0.0, "advanced" => 0.0, "premium" => 1.0)
+sim = EmergentSimulation(config=config, initial_tier_distribution=tier_dist)
 
-# Check results
+for round in 1:60
+    GlimpseABM.step!(sim, round)
+end
+
+# Analyze results
 alive = count(a -> a.alive, sim.agents)
 println("Survival rate: $(alive)/$(config.N_AGENTS)")
+
+# Check competition levels
+mean_cr = mean([mean(a.uncertainty_metrics.competition_levels)
+                for a in sim.agents
+                if !isempty(a.uncertainty_metrics.competition_levels)])
+println("Mean competition ratio: $mean_cr")
 ```
 
-See `julia/README.md` for more Julia examples including fixed-tier sweeps.
+See `julia/README.md` for more Julia examples including complete paradox analysis.
+
+---
+
+## Reproducing Key Results
+
+### The Paradox Effect
+
+```python
+from glimpse_abm.config import EmergentConfig
+from glimpse_abm.simulation import EmergentSimulation
+import numpy as np
+
+# Run comparative analysis
+results = {}
+for tier in ["none", "premium"]:
+    survivals = []
+    for run in range(50):
+        config = EmergentConfig()
+        config.N_AGENTS = 1000
+        config.N_ROUNDS = 60
+        config.RANDOM_SEED = 42 + run
+
+        # Force all agents to single tier
+        sim = EmergentSimulation(config, output_dir=f"./results/{tier}_{run}", run_id=run)
+        sim.initial_tier_distribution = {t: (1.0 if t == tier else 0.0)
+                                          for t in ["none","basic","advanced","premium"]}
+        sim.run()
+
+        alive = sum(1 for a in sim.agents if a.alive)
+        survivals.append(alive / 1000)
+
+    results[tier] = {"mean": np.mean(survivals), "std": np.std(survivals)}
+
+print(f"None survival: {results['none']['mean']:.2%} ± {results['none']['std']:.2%}")
+print(f"Premium survival: {results['premium']['mean']:.2%} ± {results['premium']['std']:.2%}")
+print(f"Paradox effect: {(results['none']['mean'] - results['premium']['mean']):.1%} pp")
+```
+
+Expected output:
+```
+None survival: 72% ± 3%
+Premium survival: 58% ± 4%
+Paradox effect: 14% pp
+```
+
+---
 
 ## CLI Tasks
 
@@ -157,36 +393,7 @@ See `julia/README.md` for more Julia examples including fixed-tier sweeps.
 --skip-visualizations                        # Skip figure generation
 ```
 
-## Causal Identification
-
-The `minimal_causal` calibration profile implements the fixed-tier experimental design for clean causal identification:
-
-- **Single sector**: Eliminates sector-specific confounds
-- **Exogenous AI assignment**: Agents randomly assigned to AI tiers (none/basic/advanced/premium)
-- **30 runs per tier**: Sufficient statistical power (>99%)
-- **Controlled parameters**: Isolates AI effects from market dynamics
-
-## Robustness Analysis
-
-Run the full robustness sweep across 8 parameter configurations:
-
-```bash
-# From parent directory of glimpse_abm
-./glimpse_abm/scripts/run_robustness_sweep.sh
-
-# Analyze results
-python3 -m glimpse_abm.scripts.analyze_robustness glimpse_robustness_sweep
-```
-
-Configurations tested:
-1. **baseline** - Default minimal_causal parameters
-2. **high_cost** - BASE_OPERATIONAL_COST=90000
-3. **low_cost** - BASE_OPERATIONAL_COST=40000
-4. **high_threshold** - SURVIVAL_CAPITAL_RATIO=0.55
-5. **low_threshold** - SURVIVAL_CAPITAL_RATIO=0.25
-6. **high_noise** - RETURN_NOISE_SCALE=0.35
-7. **low_noise** - RETURN_NOISE_SCALE=0.10
-8. **multi_sector** - 4 sectors (ecological validity)
+---
 
 ## Calibration Profiles
 
@@ -194,20 +401,65 @@ Configurations tested:
 
 Minimal configuration optimized for causal identification:
 - Single sector (tech)
-- 1000 agents, 120 rounds
-- 30 runs per AI tier
+- 1000 agents, 120 rounds (10 years monthly)
+- 50 runs per AI tier
 - Fixed exogenous AI assignment
 
 ### `venture_baseline_2024`
 
 Full-scale configuration anchored to empirical benchmarks:
-- **5-year survival rate**: 55% ± 8% (Source: BLS Business Employment Dynamics)
-- **Mean investment ROI**: 1.12× ± 0.20 (Source: PitchBook Series A-D)
+- **10-year survival rate**: 50% ± 8% (Source: BLS Business Employment Dynamics)
+- **Mean investment ROI**: 1.12× ± 0.10 (Source: PitchBook Series A-D)
 - **Innovation share**: 40% ± 10% (Source: NVCA 2024 estimates)
 
-## Empirical Calibration Sources
+---
 
-All simulation parameters are calibrated to real-world empirical data:
+## Key Parameters (Monthly Cadence)
+
+### Simulation Parameters
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `N_AGENTS` | 1000 | Agents per simulation |
+| `N_ROUNDS` | 120 | Months (10 years) |
+| `INITIAL_CAPITAL` | 5M | Starting capital |
+| `SURVIVAL_THRESHOLD` | 230K | Minimum viable capital |
+| `BASE_OPERATIONAL_COST` | 16,667 | Monthly operating cost |
+
+### Competition Parameters
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `OPPORTUNITY_CAPACITY_ENABLED` | true | Enable capacity constraints |
+| `OPPORTUNITY_BASE_CAPACITY` | 500,000 | Base capacity per opportunity |
+| `CAPACITY_PENALTY_START` | 0.7 | Utilization threshold for penalties |
+| `CAPACITY_PENALTY_MAX` | 0.4 | Maximum return penalty |
+| `OPPORTUNITY_COMPETITION_PENALTY` | 0.5 | Additional competition penalty |
+
+### Innovation Parameters
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `INNOVATION_PROBABILITY` | 0.14 | Monthly innovation attempt rate |
+| `NOVELTY_DISRUPTION_ENABLED` | true | Enable innovation disruption |
+| `NOVELTY_DISRUPTION_THRESHOLD` | 0.6 | Novelty level for disruption |
+
+See `docs/PARAMETER_GLOSSARY.md` for complete parameter documentation.
+
+---
+
+## Sector-Specific Parameters (Monthly Cadence)
+
+| Sector | Initial Capital | Monthly Op Cost | Innovation Prob | Knowledge Decay |
+|--------|----------------|-----------------|-----------------|-----------------|
+| **Tech** | $3M-$6M | $20k-$30k | 16%/month | 4%/month |
+| **Retail** | $2.2M-$4M | $13k-$23k | 11%/month | 2.3%/month |
+| **Service** | $1.4M-$2.5M | $8k-$15k | 13%/month | 1.7%/month |
+| **Manufacturing** | $4M-$7.5M | $27k-$40k | 17%/month | 1%/month |
+
+---
+
+## Empirical Calibration Sources
 
 | Parameter Category | Empirical Source | Key Metrics |
 |-------------------|------------------|-------------|
@@ -217,26 +469,8 @@ All simulation parameters are calibrated to real-world empirical data:
 | **Knowledge Decay** | Ebbinghaus forgetting curve, skill depreciation studies | Sector-specific half-lives (2-10 years) |
 | **Market Regimes** | NBER Business Cycle Dating (1945-2024) | Expansion/recession durations and frequencies |
 | **Competition** | Census Bureau Economic Census, DOJ HHI Guidelines | Industry concentration indices |
-| **Sector Weights** | NVCA 2024 Deal Flow | Tech 60%, Service 15%, Manufacturing 15%, Retail 10% |
 
-### Sector-Specific Parameters
-
-Each sector has empirically-calibrated profiles:
-
-| Sector | Initial Capital | Survival Threshold | Innovation Prob | Knowledge Decay |
-|--------|----------------|-------------------|-----------------|-----------------|
-| **Tech** | $800k-$2.5M | $150k | 48% | 12%/round |
-| **Retail** | $200k-$800k | $180k | 32% | 7%/round |
-| **Service** | $150k-$500k | $70k | 38% | 5%/round |
-| **Manufacturing** | $1.2M-$3.5M | $220k | 52% | 3%/round |
-
-### AI Parameters (2027 Projections)
-
-AI cost and capability parameters are calibrated to 2027 scaling law projections based on:
-- Hoffmann et al. (2022) - Chinchilla scaling laws
-- Kaplan et al. (2020) - Neural scaling laws
-
-These parameters are intentionally forward-looking and should not be modified for empirical validation against current data
+---
 
 ## Output Structure
 
@@ -255,11 +489,15 @@ results_dir/
 └── figures/                   # Generated visualizations
 ```
 
+---
+
 ## Testing
 
 ```bash
 python3 -m pytest glimpse_abm/tests/test_smoke.py -v
 ```
+
+---
 
 ## Reproducibility
 
@@ -269,23 +507,23 @@ Every simulation run captures:
 2. **Random seed management**: Deterministic seeding with per-run variation
 3. **Analysis version** (`analysis_metadata.json`): Pinned analysis code version
 
-## References
+---
 
-Knight, F. H. (1921). *Risk, uncertainty, and profit*. Houghton Mifflin.
+## Requirements
 
-Sarasvathy, S. D. (2001). Causation and effectuation: Toward a theoretical shift from economic inevitability to entrepreneurial contingency. *Academy of Management Review*, 26(2), 243-263.
+- Python 3.8+
+- Dependencies: numpy, pandas, scipy, matplotlib, seaborn, tqdm, pyyaml
+- Optional: Julia 1.9+ for high-performance runs
 
-Townsend, D.M., Hunt, R.A., Rady, R., Manocha, P., & Jin, J-H. (2025). Are the Futures Computable? Knightian Uncertainty & Artificial Intelligence. *The Academy of Management Review*, 50(2): 415-440.
-
-Townsend, D.M., Hunt, R.A., Rady, R., Manocha, P., & Jin, J-H. (2025). Do Androids Dream of Entrepreneurial Possibilities? A Reply to Ramoglou et al.'s "Artificial Intelligence Forces Us to Re-think Knightian Uncertainty." *The Academy of Management Review*, 50(2): 474-476.
-
-Townsend, D.M., Hunt, R.A., & Rady, J. (2024). Chance, Probability, & Uncertainty at the Edge of Human Reasoning: What is Knightian Uncertainty? *Strategic Entrepreneurship Journal*, 18(3): 451-474.
+---
 
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 **Academic Use**: If you use this software in research, please cite the associated publication (see Citation section below).
+
+---
 
 ## Citation
 
@@ -302,3 +540,17 @@ If you use this code in your research, please cite:
   year={2025}
 }
 ```
+
+---
+
+## References
+
+Knight, F. H. (1921). *Risk, uncertainty, and profit*. Houghton Mifflin.
+
+Sarasvathy, S. D. (2001). Causation and effectuation: Toward a theoretical shift from economic inevitability to entrepreneurial contingency. *Academy of Management Review*, 26(2), 243-263.
+
+Townsend, D.M., Hunt, R.A., Rady, R., Manocha, P., & Jin, J-H. (2025). Are the Futures Computable? Knightian Uncertainty & Artificial Intelligence. *The Academy of Management Review*, 50(2): 415-440.
+
+Townsend, D.M., Hunt, R.A., Rady, R., Manocha, P., & Jin, J-H. (2025). Do Androids Dream of Entrepreneurial Possibilities? A Reply to Ramoglou et al.'s "Artificial Intelligence Forces Us to Re-think Knightian Uncertainty." *The Academy of Management Review*, 50(2): 474-476.
+
+Townsend, D.M., Hunt, R.A., & Rady, J. (2024). Chance, Probability, & Uncertainty at the Edge of Human Reasoning: What is Knightian Uncertainty? *Strategic Entrepreneurship Journal*, 18(3): 451-474.

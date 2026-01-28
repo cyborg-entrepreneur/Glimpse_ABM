@@ -268,9 +268,11 @@ function attempt_innovation!(
     # Get component count
     n_components = get_component_count(innovation_type; rng=rng)
 
-    # Check for reuse
-    reuse_prob = get(engine.config, :INNOVATION_REUSE_PROBABILITY, 0.0)
-    lookback = get(engine.config, :INNOVATION_REUSE_LOOKBACK, 100)
+    # Check for reuse - use hasfield for struct access
+    reuse_prob = hasfield(typeof(engine.config), :INNOVATION_REUSE_PROBABILITY) ?
+        engine.config.INNOVATION_REUSE_PROBABILITY : 0.0
+    lookback = hasfield(typeof(engine.config), :INNOVATION_REUSE_LOOKBACK) ?
+        engine.config.INNOVATION_REUSE_LOOKBACK : 100
     selected_knowledge = nothing
     reuse_signature = nothing
 
@@ -278,9 +280,9 @@ function attempt_innovation!(
     # Previously had direct tier shifts (none=+0.05, premium=-0.08)
     # Now reuse probability emerges from info_breadth: broader info access → more novel
     # combinations available → lower tendency to reuse existing combinations
-    ai_levels = get(engine.config, :AI_LEVELS, Dict())
-    ai_cfg = get(ai_levels, ai_level, get(ai_levels, "none", Dict()))
-    info_breadth = Float64(get(ai_cfg, "info_breadth", get(ai_cfg, :info_breadth, 0.0)))
+    ai_levels = hasfield(typeof(engine.config), :AI_LEVELS) ? engine.config.AI_LEVELS : Dict()
+    ai_cfg = get(ai_levels, ai_level, get(ai_levels, "none", AILevelConfig(0.0, "none", 0.0, 0.0, 0.0)))
+    info_breadth = ai_cfg isa AILevelConfig ? ai_cfg.info_breadth : 0.0
     # Higher info_breadth reduces reuse (access to broader knowledge enables novel combinations)
     reuse_shift = -info_breadth * 0.12
     effective_reuse_prob = clamp(reuse_prob + reuse_shift, 0.02, 0.75)
@@ -599,8 +601,14 @@ function create_innovation(
     end
     quality = clamp(quality + randn(rng) * 0.05, 0.0, 1.0)
 
+    # FIXED: Novelty comes from combining DIVERSE knowledge (high variance in levels)
+    # Previously used mean(abs(k.level - quality)) which penalized diversity
+    # Now uses std of knowledge levels - diverse combinations = high novelty
+    knowledge_levels = [k.level for k in knowledge_pieces]
+    diversity = length(knowledge_levels) > 1 ? std(knowledge_levels) : 0.0
+    # Scale diversity (typically 0-0.3) to novelty range, add base and randomness
     novelty = clamp(
-        mean([abs(k.level - quality) for k in knowledge_pieces]) + rand(rng) * 0.2 + 0.1,
+        diversity * 2.0 + rand(rng) * 0.2 + 0.2,
         0.0,
         1.0
     )
@@ -712,14 +720,16 @@ function evaluate_innovation_success!(
 
         impact = clamp(impact * (1.0 + (novelty - 0.5) * 0.25), 0.05, 2.5)
 
-        base_multiple = 1.25 + get(engine.config, :INNOVATION_SUCCESS_BASE_RETURN, 0.25)
+        base_multiple = 1.25 + (hasfield(typeof(engine.config), :INNOVATION_SUCCESS_BASE_RETURN) ?
+            engine.config.INNOVATION_SUCCESS_BASE_RETURN : 0.25)
 
         # Use sector-specific innovation return multiplier (R&D intensity calibrated)
         sector_profile = get(engine.config.SECTOR_PROFILES, innovation.sector, nothing)
         mult_range = if !isnothing(sector_profile) && hasproperty(sector_profile, :innovation_return_multiplier)
             sector_profile.innovation_return_multiplier
         else
-            get(engine.config, :INNOVATION_SUCCESS_RETURN_MULTIPLIER, (1.8, 3.0))
+            (hasfield(typeof(engine.config), :INNOVATION_SUCCESS_RETURN_MULTIPLIER) ?
+                engine.config.INNOVATION_SUCCESS_RETURN_MULTIPLIER : (1.8, 3.0))
         end
 
         low, high = if isa(mult_range, Tuple) && length(mult_range) >= 2
@@ -737,7 +747,8 @@ function evaluate_innovation_success!(
         novelty_bonus = 1.0 + (novelty - 0.5) * 0.55
         cash_multiple = clamp((base_multiple + impact * impact_gain) * scarcity_bonus * novelty_bonus, 1.1, 8.5)
     else
-        recovery_ratio = get(engine.config, :INNOVATION_FAIL_RECOVERY_RATIO, 0.15)
+        recovery_ratio = hasfield(typeof(engine.config), :INNOVATION_FAIL_RECOVERY_RATIO) ?
+            engine.config.INNOVATION_FAIL_RECOVERY_RATIO : 0.15
         # Linear interpolation for recovery floor
         novelty_clamped = clamp(innovation.novelty, 0.05, 0.95)
         recovery_floor = 0.78 - (novelty_clamped - 0.05) / (0.95 - 0.05) * (0.78 - 0.42)

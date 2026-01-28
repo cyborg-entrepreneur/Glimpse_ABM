@@ -101,20 +101,25 @@ parameters preserved for exact behavioral compatibility.
     INITIAL_CAPITAL_RANGE::Tuple{Float64,Float64} = (2_500_000.0, 10_000_000.0)
     SURVIVAL_THRESHOLD::Float64 = 230_000.0
     SURVIVAL_CAPITAL_RATIO::Float64 = 0.38
-    INSOLVENCY_GRACE_ROUNDS::Int = 7
+    INSOLVENCY_GRACE_ROUNDS::Int = 7  # 7 months grace period before failure
     RANDOM_SEED::Int = 42
     USE_NUMPY_RNG::Bool = false  # Use NumpyRNG for cross-language reproducibility
 
-    BASE_OPERATIONAL_COST::Float64 = 50000.0
-    COMPETITION_COST_MULTIPLIER::Float64 = 150.0
+    BASE_OPERATIONAL_COST::Float64 = 16667.0  # Monthly operational cost (was 50000 quarterly)
+    COMPETITION_COST_MULTIPLIER::Float64 = 50.0  # Monthly multiplier (was 150 quarterly)
     OPERATING_RESERVE_MONTHS::Int = 3
     MAX_AGENT_KNOWLEDGE::Int = 90
     SECTOR_STRENGTH_PRUNE_THRESHOLD::Float64 = 0.1
     LIQUIDITY_RESERVE_FRACTION::Float64 = 0.29
-    MAX_INVESTMENT_FRACTION::Float64 = 0.11
-    TARGET_INVESTMENT_FRACTION::Float64 = 0.10
-    AI_CREDIT_LINE_ROUNDS::Int = 30
+    MAX_INVESTMENT_FRACTION::Float64 = 0.037  # Monthly (was 0.11 quarterly) - invest 3x less per round
+    TARGET_INVESTMENT_FRACTION::Float64 = 0.033  # Monthly (was 0.10 quarterly)
+    AI_CREDIT_LINE_ROUNDS::Int = 24  # 24 months = 2 years (typical seed funding runway)
     AI_TRUST_RESERVE_DISCOUNT::Float64 = 0.25
+
+    # Robustness test parameters for scaling AI failure modes and costs
+    HALLUCINATION_INTENSITY::Float64 = 1.0  # Scale AI hallucination rates (0.0=none, 1.0=baseline, 2.0=double)
+    OVERCONFIDENCE_INTENSITY::Float64 = 1.0  # Scale AI overconfidence effects (0.0=none, 1.0=baseline, 2.0=double)
+    AI_COST_INTENSITY::Float64 = 1.0        # Scale AI subscription/usage costs (0.0=free, 1.0=baseline, 2.0=double)
 
     # ========================================================================
     # NETWORK CONFIGURATION
@@ -142,27 +147,27 @@ parameters preserved for exact behavioral compatibility.
     # ========================================================================
     # MARKET CONFIGURATION
     # ========================================================================
-    N_ROUNDS::Int = 250
+    N_ROUNDS::Int = 120  # 120 months = 10 years (monthly cadence)
     N_RUNS::Int = 50
     BASE_OPPORTUNITIES::Int = 5
-    DISCOVERY_PROBABILITY::Float64 = 0.30
-    INNOVATION_PROBABILITY::Float64 = 0.42
+    DISCOVERY_PROBABILITY::Float64 = 0.10  # Monthly probability (was 0.30 quarterly)
+    INNOVATION_PROBABILITY::Float64 = 0.14  # Monthly probability (was 0.42 quarterly)
     AI_HERDING_DECAY::Float64 = 1.0
-    AI_SIGNAL_HISTORY::Int = 140
+    AI_SIGNAL_HISTORY::Int = 420  # 420 months history (was 140 quarters)
 
     # ========================================================================
     # INNOVATION ECONOMICS
     # ========================================================================
     INNOVATION_BASE_SPEND_RATIO::Float64 = 0.025
-    INNOVATION_MAX_SPEND::Float64 = 8000.0
+    INNOVATION_MAX_SPEND::Float64 = 2667.0  # Monthly max (was 8000 quarterly)
     INNOVATION_FAIL_RECOVERY_RATIO::Float64 = 0.12
-    INNOVATION_SUCCESS_BASE_RETURN::Float64 = 0.25
+    INNOVATION_SUCCESS_BASE_RETURN::Float64 = 0.08  # Monthly return (was 0.25 quarterly)
     INNOVATION_SUCCESS_RETURN_MULTIPLIER::Tuple{Float64,Float64} = (1.8, 3.2)
-    INNOVATION_RD_CAP_FRACTION::Float64 = 0.12
-    INNOVATION_REUSE_PROBABILITY::Float64 = 0.22
-    INNOVATION_REUSE_LOOKBACK::Int = 100
-    INVESTMENT_SUCCESS_ROI_THRESHOLD::Float64 = 0.05
-    BURN_HISTORY_WINDOW::Int = 3
+    INNOVATION_RD_CAP_FRACTION::Float64 = 0.04  # Monthly cap (was 0.12 quarterly)
+    INNOVATION_REUSE_PROBABILITY::Float64 = 0.07  # Monthly probability (was 0.22 quarterly)
+    INNOVATION_REUSE_LOOKBACK::Int = 300  # 300 months lookback (was 100 quarters)
+    INVESTMENT_SUCCESS_ROI_THRESHOLD::Float64 = 0.017  # Monthly threshold (was 0.05 quarterly)
+    BURN_HISTORY_WINDOW::Int = 9  # 9 months (was 3 quarters)
     BURN_FAILURE_THRESHOLD::Float64 = 0.12
     BURN_LEVERAGE_CAP::Float64 = 0.75
     RETURN_OVERSUPPLY_PENALTY::Float64 = 0.35  # Reduced from 0.52 for better survival
@@ -183,37 +188,45 @@ parameters preserved for exact behavioral compatibility.
     # ========================================================================
     # AI TOOL CONFIGURATION
     # ========================================================================
+    # Temporal Framework: Simulation represents 2028-2038 (post-AGI launch)
+    # Scaling Law: none (human) → basic (consumer AI) → advanced (SOTA) → premium (AGI)
+    #
+    # Tier definitions:
+    # - none: Human decision-making only (no AI augmentation)
+    # - basic: Consumer-level AI tools (ChatGPT Plus, Claude Pro) ~$20-30/month
+    # - advanced: Current SOTA systems (GPT-4, Claude Opus, o1) ~$400/month heavy use
+    # - premium: Projected AGI systems (December 2027 launch) ~$3,500/month early access
     AI_LEVELS::Dict{String,AILevelConfig} = Dict(
-        "none" => AILevelConfig(0.0, "none", 0.2, 0.18, 0.0),
-        "basic" => AILevelConfig(45.0, "per_use", 0.48, 0.38, 6.0),
-        "advanced" => AILevelConfig(1500.0, "subscription", 0.78, 0.68, 60.0),
-        "premium" => AILevelConfig(14000.0, "subscription", 0.93, 0.88, 240.0),
+        "none" => AILevelConfig(0.0, "none", 0.25, 0.20, 0.0),           # Human baseline
+        "basic" => AILevelConfig(30.0, "per_use", 0.43, 0.38, 3.0),      # Consumer AI
+        "advanced" => AILevelConfig(400.0, "subscription", 0.70, 0.65, 35.0),  # SOTA (2024-2026)
+        "premium" => AILevelConfig(3500.0, "subscription", 0.97, 0.92, 150.0), # AGI (Dec 2027)
     )
 
     AI_DOMAIN_CAPABILITIES::Dict{String,Dict{String,AIDomainCapability}} = Dict(
         "none" => Dict(
-            "market_analysis" => AIDomainCapability(0.45, 0.22, 0.05),
-            "technical_assessment" => AIDomainCapability(0.48, 0.20, -0.03),
-            "uncertainty_evaluation" => AIDomainCapability(0.42, 0.25, -0.04),
-            "innovation_potential" => AIDomainCapability(0.40, 0.24, 0.06),
+            "market_analysis" => AIDomainCapability(0.38, 0.28, 0.06),
+            "technical_assessment" => AIDomainCapability(0.40, 0.26, -0.04),
+            "uncertainty_evaluation" => AIDomainCapability(0.35, 0.30, -0.05),
+            "innovation_potential" => AIDomainCapability(0.33, 0.29, 0.07),
         ),
         "basic" => Dict(
-            "market_analysis" => AIDomainCapability(0.65, 0.18, 0.03),
-            "technical_assessment" => AIDomainCapability(0.66, 0.17, -0.02),
-            "uncertainty_evaluation" => AIDomainCapability(0.62, 0.18, -0.03),
-            "innovation_potential" => AIDomainCapability(0.60, 0.20, 0.04),
+            "market_analysis" => AIDomainCapability(0.52, 0.20, 0.04),
+            "technical_assessment" => AIDomainCapability(0.54, 0.19, -0.03),
+            "uncertainty_evaluation" => AIDomainCapability(0.50, 0.21, -0.04),
+            "innovation_potential" => AIDomainCapability(0.48, 0.22, 0.05),
         ),
         "advanced" => Dict(
-            "market_analysis" => AIDomainCapability(0.89, 0.05, 0.02),
-            "technical_assessment" => AIDomainCapability(0.91, 0.035, -0.01),
-            "uncertainty_evaluation" => AIDomainCapability(0.90, 0.045, -0.02),
-            "innovation_potential" => AIDomainCapability(0.89, 0.05, 0.015),
+            "market_analysis" => AIDomainCapability(0.78, 0.10, 0.025),
+            "technical_assessment" => AIDomainCapability(0.80, 0.09, -0.015),
+            "uncertainty_evaluation" => AIDomainCapability(0.76, 0.11, -0.02),
+            "innovation_potential" => AIDomainCapability(0.74, 0.12, 0.02),
         ),
         "premium" => Dict(
-            "market_analysis" => AIDomainCapability(0.985, 0.008, 0.002),
-            "technical_assessment" => AIDomainCapability(0.992, 0.005, -0.001),
-            "uncertainty_evaluation" => AIDomainCapability(0.990, 0.006, -0.002),
-            "innovation_potential" => AIDomainCapability(0.988, 0.007, 0.001),
+            "market_analysis" => AIDomainCapability(0.96, 0.015, 0.003),
+            "technical_assessment" => AIDomainCapability(0.97, 0.012, -0.002),
+            "uncertainty_evaluation" => AIDomainCapability(0.95, 0.018, -0.003),
+            "innovation_potential" => AIDomainCapability(0.94, 0.02, 0.004),
         ),
     )
 
@@ -222,22 +235,26 @@ parameters preserved for exact behavioral compatibility.
     # ========================================================================
     UNCERTAINTY_LEARNING_ENABLED::Bool = true
     INITIAL_RESPONSE_VARIANCE::Float64 = 0.3
-    LEARNING_RATE_BASE::Float64 = 0.1
-    EXPLORATION_DECAY::Float64 = 0.995
+    LEARNING_RATE_BASE::Float64 = 0.033  # Monthly learning rate (was 0.1 quarterly)
+    EXPLORATION_DECAY::Float64 = 0.9983  # Monthly decay (was 0.995 quarterly, same annual effect)
     SOCIAL_LEARNING_WEIGHT::Float64 = 0.2
     MIN_FUNDING_FRACTION::Float64 = 0.25
-    COST_OF_CAPITAL::Float64 = 0.06
+    COST_OF_CAPITAL::Float64 = 0.005  # Monthly cost (was 0.06 quarterly, ~6% annual)
     EXPLORATION_SENSITIVITY::Float64 = 1.5
     MAINTAIN_UNCERTAINTY_SENSITIVITY::Float64 = 0.5
 
     # ========================================================================
     # UNCERTAINTY AND MARKET DYNAMICS
     # ========================================================================
-    BLACK_SWAN_PROBABILITY::Float64 = 0.05
+    BLACK_SWAN_PROBABILITY::Float64 = 0.017  # Monthly probability (was 0.05 quarterly)
     BOOM_TAIL_UNCERTAINTY_EXPONENT::Float64 = 1.08
-    MARKET_VOLATILITY::Float64 = 0.25
-    COMPETITION_EFFECT::Float64 = 0.25
-    MARKET_SHIFT_PROBABILITY::Float64 = 0.09
+    MARKET_VOLATILITY::Float64 = 0.15  # Monthly volatility (lower than quarterly)
+    COMPETITION_SCALE_FACTOR::Float64 = 1.0  # Multiplier for sector-specific competition_intensity (0.0=no competition, 1.0=baseline, 2.0=double)
+    DISABLE_COMPETITION_DYNAMICS::Bool = false  # Set to true to freeze competition at 0.0 (for counterfactual analysis)
+    OPPORTUNITY_COMPETITION_PENALTY::Float64 = 0.5  # Return penalty per unit of opp.competition (0.5 = 50% max penalty at competition=1.0)
+    OPPORTUNITY_COMPETITION_THRESHOLD::Float64 = 0.2  # Competition level above which penalty starts applying
+    OPPORTUNITY_COMPETITION_FLOOR::Float64 = 0.1  # Minimum return multiplier after competition penalty (0.1 = 90% max reduction)
+    MARKET_SHIFT_PROBABILITY::Float64 = 0.03  # Monthly probability (was 0.09 quarterly)
     MARKET_SHIFT_SEVERITY_RANGE::Tuple{Float64,Float64} = (0.25, 0.75)
     MARKET_SHIFT_MAX_SECTORS::Int = 3
 
@@ -253,18 +270,18 @@ parameters preserved for exact behavioral compatibility.
     MACRO_REGIME_STATES::Tuple{String,String,String,String,String} =
         ("crisis", "recession", "normal", "growth", "boom")
 
-    # NBER Business Cycle-calibrated transition matrix (quarterly rounds)
+    # NBER Business Cycle-calibrated transition matrix (monthly rounds)
     # Source: NBER Business Cycle Dating Committee data 1945-2024
     # Average expansion: 64 months, average recession: 11 months
     # Crisis frequency: ~1 per decade, boom frequency: ~2-3 per decade
-    # Market regime transitions - calibrated for stability with mean-reversion to normal
-    # Adjusted to reduce inter-run variance while maintaining business cycle dynamics
+    # Adjusted for monthly cadence - higher self-transition to maintain regime duration
+    # Formula: p_monthly = 1 - (1 - p_quarterly)/3
     MACRO_REGIME_TRANSITIONS::Dict{String,Dict{String,Float64}} = Dict(
-        "crisis" => Dict("crisis" => 0.25, "recession" => 0.35, "normal" => 0.35, "growth" => 0.05, "boom" => 0.0),
-        "recession" => Dict("crisis" => 0.03, "recession" => 0.30, "normal" => 0.52, "growth" => 0.13, "boom" => 0.02),
-        "normal" => Dict("crisis" => 0.01, "recession" => 0.08, "normal" => 0.55, "growth" => 0.28, "boom" => 0.08),
-        "growth" => Dict("crisis" => 0.01, "recession" => 0.03, "normal" => 0.22, "growth" => 0.50, "boom" => 0.24),
-        "boom" => Dict("crisis" => 0.01, "recession" => 0.04, "normal" => 0.20, "growth" => 0.40, "boom" => 0.35),
+        "crisis" => Dict("crisis" => 0.75, "recession" => 0.12, "normal" => 0.12, "growth" => 0.01, "boom" => 0.0),
+        "recession" => Dict("crisis" => 0.01, "recession" => 0.77, "normal" => 0.17, "growth" => 0.04, "boom" => 0.01),
+        "normal" => Dict("crisis" => 0.003, "recession" => 0.027, "normal" => 0.85, "growth" => 0.09, "boom" => 0.03),
+        "growth" => Dict("crisis" => 0.003, "recession" => 0.01, "normal" => 0.07, "growth" => 0.84, "boom" => 0.077),
+        "boom" => Dict("crisis" => 0.003, "recession" => 0.013, "normal" => 0.067, "growth" => 0.13, "boom" => 0.787),
     )
 
     # Regime modifiers - balanced for realistic business cycle dynamics
@@ -303,6 +320,34 @@ parameters preserved for exact behavioral compatibility.
     RETURN_LOWER_BOUND::Float64 = 0.0  # Minimum return multiple (0.0 = total loss, 0.5 = 50% back)
 
     # ========================================================================
+    # NOVELTY DISRUPTION PARAMETERS (The "DeepSeek Effect")
+    # When highly novel innovations occur, they can disrupt existing opportunities
+    # ========================================================================
+    NOVELTY_DISRUPTION_ENABLED::Bool = true
+    NOVELTY_DISRUPTION_THRESHOLD::Float64 = 0.6       # Novelty level that triggers disruption
+    NOVELTY_DISRUPTION_MAGNITUDE::Float64 = 0.25      # Max return reduction from disruption (0.25 = 25%)
+    DISRUPTION_COMPETITION_THRESHOLD::Float64 = 10.0  # Competition level for vulnerability targeting
+    NOVELTY_NOISE_INVERSION_FACTOR::Float64 = 0.4     # Premium's disadvantage on novel opportunities
+
+    # ========================================================================
+    # CAPACITY CONSTRAINT PARAMETERS
+    # Real opportunities have limited capacity; first movers get better terms
+    # ========================================================================
+    OPPORTUNITY_CAPACITY_ENABLED::Bool = true
+    OPPORTUNITY_BASE_CAPACITY::Float64 = 500000.0     # Base capacity in dollars
+    OPPORTUNITY_CAPACITY_VARIANCE::Float64 = 0.3      # Random variance in capacity
+    CAPACITY_PENALTY_START::Float64 = 0.7             # When penalty kicks in (70% utilized)
+    CAPACITY_PENALTY_MAX::Float64 = 0.4               # Max penalty at full capacity (40%)
+
+    # ========================================================================
+    # SEQUENTIAL DECISION PARAMETERS
+    # Information cascades from observing early investors
+    # ========================================================================
+    SEQUENTIAL_DECISIONS_ENABLED::Bool = true
+    EARLY_DECISION_FRACTION::Float64 = 0.3            # Fraction deciding in first wave
+    SIGNAL_VISIBILITY_WEIGHT::Float64 = 0.15          # How much early signals influence later agents
+
+    # ========================================================================
     # SCALING PARAMETERS
     # ========================================================================
     OPPORTUNITIES_PER_CAPITA::Float64 = 0.01
@@ -338,13 +383,13 @@ parameters preserved for exact behavioral compatibility.
         ),
     )
 
-    AI_TIER_RECENT_WINDOW::Int = 15
+    AI_TIER_RECENT_WINDOW::Int = 45  # 45 months (was 15 quarters)
     AI_TIER_DEMOTE_MARGIN::Float64 = 0.06
     AI_TIER_NEIGHBOR_INFLUENCE::Float64 = 0.06
 
     AI_TIER_SCORING::Dict{String,Dict{String,Any}} = Dict(
         "basic" => Dict(
-            "score_threshold" => 0.0, "score_slope" => 6.0, "trial_rounds" => 4,
+            "score_threshold" => 0.0, "score_slope" => 6.0, "trial_rounds" => 12,  # 12 months (was 4 quarters)
             "weights" => Dict(
                 "trust" => 0.6, "success" => 0.3, "success_gain" => 0.2,
                 "recent_success_gain" => 0.2, "roi_gain" => 0.15, "recent_roi_gain" => 0.15,
@@ -352,7 +397,7 @@ parameters preserved for exact behavioral compatibility.
             ),
         ),
         "advanced" => Dict(
-            "score_threshold" => 0.08, "score_slope" => 6.0, "trial_rounds" => 4,
+            "score_threshold" => 0.08, "score_slope" => 6.0, "trial_rounds" => 12,  # 12 months (was 4 quarters)
             "weights" => Dict(
                 "trust" => 0.65, "success" => 0.32, "success_gain" => 0.27,
                 "recent_success_gain" => 0.27, "roi_gain" => 0.22, "recent_roi_gain" => 0.22,
@@ -360,7 +405,7 @@ parameters preserved for exact behavioral compatibility.
             ),
         ),
         "premium" => Dict(
-            "score_threshold" => 0.18, "score_slope" => 6.5, "trial_rounds" => 5,
+            "score_threshold" => 0.18, "score_slope" => 6.5, "trial_rounds" => 15,  # 15 months (was 5 quarters)
             "weights" => Dict(
                 "trust" => 0.70, "success" => 0.38, "success_gain" => 0.32,
                 "recent_success_gain" => 0.32, "roi_gain" => 0.28, "recent_roi_gain" => 0.28,
@@ -370,12 +415,12 @@ parameters preserved for exact behavioral compatibility.
     )
 
     AI_TIER_SCORE_SMOOTHING::Float64 = 0.25
-    AI_TIER_DEMOTION_COOLDOWN::Int = 12
+    AI_TIER_DEMOTION_COOLDOWN::Int = 36  # 36 months (was 12 quarters)
     TRAIT_MOMENTUM::Float64 = 0.7
-    AI_TRUST_ADJUSTMENT_RATE::Float64 = 0.1
-    AI_SUBSCRIPTION_AMORTIZATION_ROUNDS::Int = 60
+    AI_TRUST_ADJUSTMENT_RATE::Float64 = 0.033  # Monthly adjustment (was 0.1 quarterly)
+    AI_SUBSCRIPTION_AMORTIZATION_ROUNDS::Int = 180  # 180 months (was 60 quarters)
     AI_SUBSCRIPTION_FLOAT_BASE_ROUNDS::Int = 0
-    AI_SUBSCRIPTION_FLOAT_MAX_ROUNDS::Int = 3
+    AI_SUBSCRIPTION_FLOAT_MAX_ROUNDS::Int = 9  # 9 months (was 3 quarters)
 
     # ========================================================================
     # ACTION SELECTION CONTROLS
@@ -387,10 +432,10 @@ parameters preserved for exact behavioral compatibility.
     # ========================================================================
     # UNCERTAINTY VOLATILITY CONTROLS
     # ========================================================================
-    UNCERTAINTY_SHORT_WINDOW::Int = 6
+    UNCERTAINTY_SHORT_WINDOW::Int = 18  # 18 months (was 6 quarters)
     UNCERTAINTY_SHORT_DECAY::Float64 = 0.0
-    UNCERTAINTY_VOLATILITY_WINDOW::Int = 14
-    UNCERTAINTY_VOLATILITY_DECAY::Float64 = 0.6
+    UNCERTAINTY_VOLATILITY_WINDOW::Int = 42  # 42 months (was 14 quarters)
+    UNCERTAINTY_VOLATILITY_DECAY::Float64 = 0.87  # Monthly decay (was 0.6 quarterly)
     UNCERTAINTY_VOLATILITY_SCALING::Float64 = 0.45
     UNCERTAINTY_AI_SWITCH_WEIGHT::Float64 = 0.09
     UNCERTAINTY_MARKET_RETURN_WEIGHT::Float64 = 0.14
@@ -401,7 +446,7 @@ parameters preserved for exact behavioral compatibility.
     # ========================================================================
     # KNOWLEDGE & INNOVATION
     # ========================================================================
-    KNOWLEDGE_DECAY_RATE::Float64 = 0.075
+    KNOWLEDGE_DECAY_RATE::Float64 = 0.025  # Monthly decay (was 0.075 quarterly)
 
     SECTOR_KNOWLEDGE_PERSISTENCE::Dict{String,Float64} = Dict(
         "tech" => 0.85, "retail" => 0.92, "service" => 0.95, "manufacturing" => 0.97,
@@ -420,59 +465,59 @@ parameters preserved for exact behavioral compatibility.
 
     # Sector profiles with empirically-calibrated parameters
     # Sources: NVCA 2024, BLS BED/QCEW, Fed SBCS, NSF BRDIS, USPTO, Census HHI
-    # Capital ranges calibrated for 24-36 round runway (18-27 months at quarterly cadence)
+    # Capital ranges calibrated for 24-36 month runway (monthly cadence)
     SECTOR_PROFILES::Dict{String,SectorProfile} = Dict(
         "tech" => SectorProfile(
             (1.60, 4.00), log(2.40), 0.45, (0.22, 0.38),           # return params (boosted for survival)
-            (0.3, 0.5), (0.04, 0.12), (300000.0, 1200000.0),       # failure, capital
-            (8, 20), (0.55, 0.85), (0.08, 0.28),                   # maturity (shortened for cash flow), margins
-            # Empirically-calibrated fields (scaled for 40-60 round runway):
+            (0.1, 0.17), (0.013, 0.04), (300000.0, 1200000.0),     # failure (monthly), capital
+            (12, 36), (0.55, 0.85), (0.08, 0.28),                  # maturity: 12-36 months (fits 60-round sim)
+            # Empirically-calibrated fields (scaled for 120-180 month runway):
             # Reflects Series A/B rounds with 24-36 month runway before profitability
-            (3_000_000.0, 6_000_000.0),  # initial_capital_range: 40-80 rounds runway
-            (60_000.0, 90_000.0),        # operational_cost_range: BLS tech sector quarterly
-            150_000.0,                    # survival_threshold: ~2 quarters operating expenses
-            0.48,                         # innovation_probability: NSF 15-25% R&D, 52% USPTO
+            (3_000_000.0, 6_000_000.0),  # initial_capital_range: 120-240 months runway
+            (20_000.0, 30_000.0),        # operational_cost_range: BLS tech sector MONTHLY
+            150_000.0,                    # survival_threshold: ~6 months operating expenses
+            0.16,                         # innovation_probability: monthly (was 0.48 quarterly)
             (2.0, 4.0),                   # innovation_return_multiplier: high tech upside
-            0.12,                         # knowledge_decay_rate: 2-3 year half-life
+            0.04,                         # knowledge_decay_rate: monthly (was 0.12 quarterly)
             1.2                           # competition_intensity: HHI 1500-2500
         ),
         "retail" => SectorProfile(
             (1.40, 2.80), log(1.85), 0.32, (0.18, 0.3),            # return params (boosted for survival)
-            (0.2, 0.38), (0.04, 0.1), (50000.0, 400000.0),         # failure, capital
-            (4, 15), (0.18, 0.42), (0.015, 0.08),                  # maturity (shortened for cash flow), margins
-            # Empirically-calibrated fields (scaled for 40-60 round runway):
-            (2_200_000.0, 4_000_000.0),  # initial_capital_range: 40-73 rounds runway
-            (40_000.0, 70_000.0),        # operational_cost_range: BLS retail sector quarterly
-            130_000.0,                    # survival_threshold: ~2 quarters operating expenses
-            0.32,                         # innovation_probability: NSF 1-3% R&D, 35% USPTO
+            (0.07, 0.13), (0.013, 0.033), (50000.0, 400000.0),     # failure (monthly), capital
+            (6, 24), (0.18, 0.42), (0.015, 0.08),                  # maturity: 6-24 months (fits 60-round sim)
+            # Empirically-calibrated fields (scaled for 120-180 month runway):
+            (2_200_000.0, 4_000_000.0),  # initial_capital_range: 120-220 months runway
+            (13_000.0, 23_000.0),        # operational_cost_range: BLS retail sector MONTHLY
+            130_000.0,                    # survival_threshold: ~6 months operating expenses
+            0.11,                         # innovation_probability: monthly (was 0.32 quarterly)
             (1.6, 2.5),                   # innovation_return_multiplier: moderate returns
-            0.07,                         # knowledge_decay_rate: 4-5 year half-life
+            0.023,                        # knowledge_decay_rate: monthly (was 0.07 quarterly)
             0.7                           # competition_intensity: HHI 500-1000
         ),
         "service" => SectorProfile(
             (1.50, 3.00), log(1.95), 0.36, (0.16, 0.28),           # return params (boosted for survival)
-            (0.1, 0.28), (0.03, 0.08), (15000.0, 200000.0),        # failure, capital
-            (3, 10), (0.45, 0.75), (0.12, 0.24),                   # maturity (shortened for cash flow), margins
-            # Empirically-calibrated fields (scaled for 40-60 round runway):
-            (1_400_000.0, 2_500_000.0),  # initial_capital_range: 40-71 rounds runway
-            (25_000.0, 45_000.0),        # operational_cost_range: BLS services sector quarterly
-            70_000.0,                     # survival_threshold: ~2 quarters operating expenses
-            0.38,                         # innovation_probability: NSF 3-8% R&D, 40% USPTO
+            (0.033, 0.093), (0.01, 0.027), (15000.0, 200000.0),    # failure (monthly), capital
+            (6, 18), (0.45, 0.75), (0.12, 0.24),                   # maturity: 6-18 months (fits 60-round sim)
+            # Empirically-calibrated fields (scaled for 120-180 month runway):
+            (1_400_000.0, 2_500_000.0),  # initial_capital_range: 120-213 months runway
+            (8_300.0, 15_000.0),         # operational_cost_range: BLS services sector MONTHLY
+            70_000.0,                     # survival_threshold: ~6 months operating expenses
+            0.13,                         # innovation_probability: monthly (was 0.38 quarterly)
             (1.6, 2.5),                   # innovation_return_multiplier: moderate returns
-            0.05,                         # knowledge_decay_rate: 5-7 year half-life
+            0.017,                        # knowledge_decay_rate: monthly (was 0.05 quarterly)
             0.9                           # competition_intensity: HHI 800-1500
         ),
         "manufacturing" => SectorProfile(
             (1.60, 3.50), log(2.20), 0.4, (0.18, 0.3),             # return params (boosted for survival)
-            (0.25, 0.42), (0.04, 0.1), (250000.0, 1500000.0),      # failure, capital
-            (10, 28), (0.28, 0.48), (0.04, 0.18),                  # maturity (shortened for cash flow), margins
-            # Empirically-calibrated fields (scaled for 40-60 round runway):
-            (4_000_000.0, 7_500_000.0),  # initial_capital_range: 40-75 rounds runway
-            (80_000.0, 120_000.0),       # operational_cost_range: BLS manufacturing quarterly
-            200_000.0,                    # survival_threshold: ~2 quarters operating expenses
-            0.52,                         # innovation_probability: NSF 8-15% R&D, 58% USPTO
+            (0.083, 0.14), (0.013, 0.033), (250000.0, 1500000.0),  # failure (monthly), capital
+            (18, 48), (0.28, 0.48), (0.04, 0.18),                  # maturity: 18-48 months (fits 60-round sim)
+            # Empirically-calibrated fields (scaled for 120-180 month runway):
+            (4_000_000.0, 7_500_000.0),  # initial_capital_range: 120-225 months runway
+            (26_700.0, 40_000.0),        # operational_cost_range: BLS manufacturing MONTHLY
+            200_000.0,                    # survival_threshold: ~6 months operating expenses
+            0.17,                         # innovation_probability: monthly (was 0.52 quarterly)
             (1.5, 2.8),                   # innovation_return_multiplier: incremental improvements
-            0.03,                         # knowledge_decay_rate: 7-10 year half-life
+            0.01,                         # knowledge_decay_rate: monthly (was 0.03 quarterly)
             1.4                           # competition_intensity: HHI 1800-3000
         ),
     )
@@ -486,9 +531,9 @@ parameters preserved for exact behavioral compatibility.
     # ========================================================================
     # PERFORMANCE / IO
     # ========================================================================
-    buffer_flush_interval::Int = 5
+    buffer_flush_interval::Int = 15  # Every 15 months (was 5 quarters)
     write_intermediate_batches::Bool = true
-    round_log_interval::Int = 25
+    round_log_interval::Int = 12  # Log every year (12 months)
     enable_round_logging::Bool = true
     max_cache_size::Int = 100000
     agent_history_depth::Int = 5
@@ -685,10 +730,10 @@ end
 const CALIBRATION_LIBRARY = Dict{String,CalibrationProfile}(
     "minimal_causal" => CalibrationProfile(
         name="minimal_causal",
-        description="Minimal model for causal identification. Strips simulation to ~25 essential parameters.",
+        description="Minimal model for causal identification. Strips simulation to ~25 essential parameters. Monthly cadence.",
         overrides=Dict{String,Any}(
             "N_AGENTS" => 500,
-            "N_ROUNDS" => 200,
+            "N_ROUNDS" => 600,  # 600 months = 50 years (was 200 quarters)
             "N_RUNS" => 30,
             "INITIAL_CAPITAL" => 5_000_000.0,
             "SURVIVAL_CAPITAL_RATIO" => 0.40,
@@ -707,22 +752,27 @@ const CALIBRATION_LIBRARY = Dict{String,CalibrationProfile}(
     ),
     "venture_baseline_2024" => CalibrationProfile(
         name="venture_baseline_2024",
-        description="Anchors the simulation to US venture benchmarks: ~55% five-year survival.",
+        description="Anchors the simulation to US venture benchmarks: ~55% five-year survival, ~25% ten-year survival. Monthly cadence.",
         overrides=Dict{String,Any}(
-            "BASE_OPERATIONAL_COST" => 70000.0,
+            "BASE_OPERATIONAL_COST" => 6000.0,  # Monthly: calibrated for ~20% 10-yr survival
             "SURVIVAL_CAPITAL_RATIO" => 0.56,
-            "INSOLVENCY_GRACE_ROUNDS" => 6,
-            "DISCOVERY_PROBABILITY" => 0.22,
-            "INNOVATION_PROBABILITY" => 0.37,
-            "OPPORTUNITY_RETURN_RANGE" => (0.85, 5.5),
-            "INVESTMENT_SUCCESS_ROI_THRESHOLD" => 0.12,
-            "MAX_INVESTMENT_FRACTION" => 0.12,
+            "INSOLVENCY_GRACE_ROUNDS" => 6,  # 6 months grace period
+            "DISCOVERY_PROBABILITY" => 0.073,  # Monthly (was 0.22 quarterly)
+            "INNOVATION_PROBABILITY" => 0.123,  # Monthly (was 0.37 quarterly)
+            "OPPORTUNITY_RETURN_RANGE" => (0.92, 6.0),  # Better returns for 10-yr survival
+            "INVESTMENT_SUCCESS_ROI_THRESHOLD" => 0.04,  # Monthly (was 0.12 quarterly)
+            "MAX_INVESTMENT_FRACTION" => 0.04,  # Monthly (was 0.12 quarterly)
         ),
         target_metrics=Dict{String,Dict{String,Any}}(
-            "survival_rate_round250" => Dict{String,Any}(
+            "survival_rate_month60" => Dict{String,Any}(
                 "target" => 0.55,
                 "tolerance" => 0.08,
-                "source" => "BLS Business Employment Dynamics (2019 cohort).",
+                "source" => "BLS Business Employment Dynamics (2019 cohort). 5-year survival.",
+            ),
+            "survival_rate_month120" => Dict{String,Any}(
+                "target" => 0.25,
+                "tolerance" => 0.10,
+                "source" => "BLS 10-year survival estimates.",
             ),
         ),
     ),

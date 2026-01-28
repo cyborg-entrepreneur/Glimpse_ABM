@@ -49,10 +49,21 @@ htmlcov/
 *.prof
 
 # Simulation results (large, regeneratable)
-# Uncomment to track results:
-# results/
-# *_results/
-# *_sweep/
+results/
+*_results/
+*_sweep/
+*_analysis_*/
+
+# Archive (development files)
+.archive/
+
+# Generated outputs
+output/
+*.arrow
+*.jld2
+*.log
+*.pdf
+*.png
 
 # Temporary files
 tmp_*/

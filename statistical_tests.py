@@ -48,6 +48,14 @@ except ImportError:
 # Set via set_fast_stats_mode(True) before running analyses
 _FAST_STATS_MODE = False
 
+# Import causal diagnostics for publication-quality visualizations
+try:
+    from .causal_diagnostics import CausalDiagnosticPlotter
+    HAS_CAUSAL_DIAGNOSTICS = True
+except ImportError:
+    CausalDiagnosticPlotter = None
+    HAS_CAUSAL_DIAGNOSTICS = False
+
 def set_fast_stats_mode(enabled: bool = True) -> None:
     """Enable/disable fast stats mode (reduced bootstrap iterations)."""
     global _FAST_STATS_MODE
@@ -3292,6 +3300,57 @@ def run_advanced_causal_analysis(
     else:
         print("   ⚠️ Panel data not available for DiD analysis")
 
+    # Generate diagnostic plots
+    if HAS_CAUSAL_DIAGNOSTICS:
+        import os
+        print("\n" + "-" * 70)
+        print("GENERATING DIAGNOSTIC VISUALIZATIONS")
+        print("-" * 70)
+
+        figures_dir = os.path.join(results_dir, 'figures', 'diagnostics')
+        os.makedirs(figures_dir, exist_ok=True)
+
+        plotter = CausalDiagnosticPlotter(output_dir=figures_dir)
+
+        # Cox PH diagnostic: Schoenfeld residuals
+        if cox_result and hasattr(cox, 'results'):
+            try:
+                residuals_df = cox.results.schoenfeld_residuals
+                if residuals_df is not None and not residuals_df.empty:
+                    covariate_names = list(residuals_df.columns)
+                    plot_path = plotter.plot_schoenfeld_residuals(
+                        residuals_df=residuals_df,
+                        covariate_names=covariate_names,
+                        output_prefix='cox_schoenfeld_residuals'
+                    )
+                    if plot_path:
+                        print(f"   ✓ Generated Cox PH diagnostics: {plot_path}")
+            except Exception as e:
+                print(f"   ⚠️ Could not generate Cox diagnostics: {e}")
+
+        # DiD diagnostic: Event study plot
+        if 'did_result' in locals() and did_result:
+            try:
+                # Extract event study coefficients
+                if hasattr(did, 'event_study_results') and did.event_study_results:
+                    es = did.event_study_results
+                    relative_time = np.array(es.get('relative_time', []))
+                    coefficients = np.array(es.get('coefficients', []))
+                    std_errors = np.array(es.get('std_errors', []))
+
+                    plot_path = plotter.plot_event_study(
+                        relative_time=relative_time,
+                        coefficients=coefficients,
+                        std_errors=std_errors,
+                        output_prefix='did_event_study'
+                    )
+                    if plot_path:
+                        print(f"   ✓ Generated DiD event study plot: {plot_path}")
+            except Exception as e:
+                print(f"   ⚠️ Could not generate DiD diagnostics: {e}")
+    else:
+        print("\n   ⚠️ Causal diagnostics module not available (plotting libraries required)")
+
     # Save all tables
     tables_dir = os.path.join(results_dir, 'tables')
     os.makedirs(tables_dir, exist_ok=True)
@@ -4355,6 +4414,49 @@ def run_propensity_score_analysis(
             psa.run_all_methods(outcome)
             results[f'ps_results_{outcome}'] = psa.generate_results_table()
             results[f'ps_balance_{outcome}'] = psa.generate_balance_table()
+
+            # Generate diagnostic plots
+            if HAS_CAUSAL_DIAGNOSTICS and psa.propensity_scores is not None:
+                import os
+                figures_dir = os.path.join(results_dir, 'figures', 'diagnostics')
+                os.makedirs(figures_dir, exist_ok=True)
+
+                plotter = CausalDiagnosticPlotter(output_dir=figures_dir)
+
+                # Propensity overlap plot
+                try:
+                    treatment = framework.agent_df[psa.treatment_col].values
+                    plot_path = plotter.plot_propensity_overlap(
+                        propensity_scores=psa.propensity_scores,
+                        treatment=treatment,
+                        output_prefix=f'ps_overlap_{outcome}'
+                    )
+                    if plot_path:
+                        print(f"   ✓ Generated propensity overlap plot: {plot_path}")
+                except Exception as e:
+                    print(f"   ⚠️ Could not generate overlap plot: {e}")
+
+                # Love plot (covariate balance)
+                try:
+                    if psa.results and len(psa.results) > 0:
+                        # Get balance data from first PSM result
+                        ps_result = next((r for r in psa.results if r.method == 'matching'), None)
+                        if ps_result:
+                            covariate_names = list(ps_result.balance_before.keys())
+                            smd_before = np.array(list(ps_result.balance_before.values()))
+                            smd_after = np.array(list(ps_result.balance_after.values()))
+
+                            plot_path = plotter.plot_love_plot(
+                                covariate_names=covariate_names,
+                                smd_before=smd_before,
+                                smd_after=smd_after,
+                                output_prefix=f'ps_balance_{outcome}'
+                            )
+                            if plot_path:
+                                print(f"   ✓ Generated Love plot: {plot_path}")
+                except Exception as e:
+                    print(f"   ⚠️ Could not generate Love plot: {e}")
+
         except Exception as e:
             print(f"   ⚠️ Propensity score analysis failed for {outcome}: {e}")
 

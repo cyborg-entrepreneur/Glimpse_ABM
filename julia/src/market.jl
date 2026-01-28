@@ -259,8 +259,8 @@ function _transition_regime!(market::MarketEnvironment)
     # Sample next regime
     cumsum_weights = cumsum(weights)
     r = rand(market.rng)
-    idx = searchsortedfirst(cumsum_weights, r)
-    market.market_regime = regimes[min(idx, length(regimes))]
+    idx = clamp(searchsortedfirst(cumsum_weights, r), 1, length(regimes))
+    market.market_regime = regimes[idx]
 
     # Update modifiers
     market.regime_return_multiplier = get(market.config.MACRO_REGIME_RETURN_MODIFIERS, market.market_regime, 1.0)
@@ -293,12 +293,18 @@ function step!(
     )
     push!(market.total_investment_by_round, total_investment)
 
-    # Update competition levels
+    # Update competition levels (uses COMPETITION_SCALE_FACTOR for robustness testing)
+    # Normalize competition delta by population size to keep consistent pressure across scales
+    # Reference population is 100 agents; with 1000 agents, delta is 10x smaller
+    reference_population = 100.0
+    actual_population = Float64(market.config.N_AGENTS)
+    population_normalized_delta = 0.1 * (reference_population / actual_population)
+
     for action in agent_actions
         if get(action, "action", "") == "invest"
             opp = get(action, "chosen_opportunity_obj", nothing)
             if !isnothing(opp) && isa(opp, Opportunity)
-                opp.competition = min(1.0, opp.competition + 0.1)
+                update_opportunity_competition!(market, opp, population_normalized_delta)
             end
         elseif get(action, "action", "") == "explore"
             market.exploration_activity += 1
@@ -326,12 +332,16 @@ function step!(
 
         crowding_index = share_invest^2 + share_innovate^2 + share_explore^2 + share_maintain^2
 
+        # Calculate AI usage share (proportion of agents using AI)
+        ai_usage_share = count(a -> get(a, "ai_level_used", "none") != "none", agent_actions) / max(1, total_actions)
+
         market.crowding_metrics = Dict(
             "crowding_index" => crowding_index,
             "share_invest" => share_invest,
             "share_innovate" => share_innovate,
             "share_explore" => share_explore,
-            "share_maintain" => share_maintain
+            "share_maintain" => share_maintain,
+            "ai_usage_share" => ai_usage_share
         )
     end
 
@@ -409,21 +419,51 @@ Competition intensity values calibrated from Census Bureau Economic Census:
 - Retail: 0.7 (HHI 500-1000, fragmented)
 - Service: 0.9 (HHI 800-1500, moderately fragmented)
 - Manufacturing: 1.4 (HHI 1800-3000, concentrated)
+
+Returns base intensity scaled by global COMPETITION_SCALE_FACTOR for robustness testing.
 """
 function get_sector_competition_intensity(market::MarketEnvironment, sector::String)::Float64
     profile = get(market.sector_profiles, sector, nothing)
-    if !isnothing(profile) && hasproperty(profile, :competition_intensity)
-        return profile.competition_intensity
+    base_intensity = if !isnothing(profile) && hasproperty(profile, :competition_intensity)
+        profile.competition_intensity
+    else
+        1.0  # Default intensity
     end
-    return 1.0  # Default intensity
+
+    # Apply global competition scale factor for robustness testing
+    return base_intensity * market.config.COMPETITION_SCALE_FACTOR
 end
 
 """
 Apply sector-specific competition intensity to opportunity competition updates.
 """
 function update_opportunity_competition!(market::MarketEnvironment, opp::Opportunity, delta::Float64)
+    # Counterfactual mode: disable competition dynamics
+    if market.config.DISABLE_COMPETITION_DYNAMICS
+        opp.competition = 0.0
+        return
+    end
+
+    # Normal mode: update competition based on agent activity
+    #
+    # Competition is modeled as a "competitive pressure index" that can exceed 1.0.
+    # This is analogous to Herfindahl-Hirschman Index (HHI) which ranges 0-10,000,
+    # or price impact in market microstructure which scales with trade size.
+    #
+    # Interpretation:
+    # - competition = 0.0: No other investors (monopoly-like position)
+    # - competition = 1.0: Normal competitive pressure (~10 investors)
+    # - competition = 3.0: Severe crowding (~30 investors, 3x normal)
+    #
+    # This unbounded representation is essential for the AI Information Paradox:
+    # - When 33 Premium AI agents pile into ONE opportunity, competition ~3.3
+    # - When 15 Human agents invest (spread across opportunities), competition ~1.5
+    # - The penalty difference reflects the real economic cost of crowding
+    #
+    # Theoretical basis: Cournot competition (profits ∝ 1/n²) and
+    # market microstructure (Kyle 1985: price impact ∝ √order_flow)
     intensity = get_sector_competition_intensity(market, opp.sector)
-    opp.competition = clamp(opp.competition + delta * intensity, 0.0, 1.0)
+    opp.competition = max(0.0, opp.competition + delta * intensity)
 end
 
 # ============================================================================
@@ -765,8 +805,8 @@ function update_macro_regime!(
     # Sample new state
     cumsum_probs = cumsum(probs)
     r = rand(market.rng)
-    idx = searchsortedfirst(cumsum_probs, r)
-    new_state = states[min(idx, length(states))]
+    idx = clamp(searchsortedfirst(cumsum_probs, r), 1, length(states))
+    new_state = states[idx]
 
     market.market_regime = new_state
 
@@ -800,13 +840,10 @@ function manage_opportunities!(
     opportunity_demand::Dict{String,Int},
     total_investment::Float64
 )
-    # Adjust target capacity based on investment
+    # Calculate target capacity based on agent count
+    # NOTE: Previously this code incorrectly modified market.n_agents (agent count)
+    # to track opportunity targets. Now we just use target_cap directly.
     target_cap = get_scaled_opportunities(market.config, market.n_agents)
-    if total_investment > market.n_agents * 100_000
-        market.n_agents = min(market.n_agents + 1, target_cap)
-    elseif total_investment < market.n_agents * 50_000
-        market.n_agents = max(market.config.MIN_OPPORTUNITIES, market.n_agents - 1)
-    end
 
     # Calculate desired new opportunities
     young_opps = count(o -> o.age < 5, market.opportunities)
@@ -838,8 +875,8 @@ function manage_opportunities!(
             # Sample sector
             cumsum_probs = cumsum(probs)
             r = rand(market.rng)
-            idx = searchsortedfirst(cumsum_probs, r)
-            sector = market.sectors[min(idx, length(market.sectors))]
+            idx = clamp(searchsortedfirst(cumsum_probs, r), 1, length(market.sectors))
+            sector = market.sectors[idx]
         else
             sector = rand(market.rng, market.sectors)
         end
@@ -854,9 +891,10 @@ function manage_opportunities!(
     end
 
     # Age all opportunities and decay competition
+    # Competition decays as investors exit or market conditions normalize
     for opp in market.opportunities
         opp.age += 1
-        opp.competition = clamp(opp.competition * 0.9, 0.0, 1.0)
+        opp.competition = max(0.0, opp.competition * 0.9)
     end
 
     # Remove dead opportunities
@@ -1225,6 +1263,17 @@ function spawn_opportunity_from_innovation!(
     latent_failure *= demand_adjustments["failure"] * market.regime_failure_multiplier
 
     opp_id = "spawn_$(innovation.id)_$(rand(market.rng, 1000:9999))"
+
+    # Novelty score inherited from innovation (novel opportunities are harder to evaluate)
+    innov_novelty = clamp(something(innovation.novelty, 0.5), 0.0, 1.0)
+
+    # Capacity based on config
+    base_capacity = hasfield(typeof(market.config), :OPPORTUNITY_BASE_CAPACITY) ?
+        market.config.OPPORTUNITY_BASE_CAPACITY : 500000.0
+    capacity_variance = hasfield(typeof(market.config), :OPPORTUNITY_CAPACITY_VARIANCE) ?
+        market.config.OPPORTUNITY_CAPACITY_VARIANCE : 0.3
+    opp_capacity = base_capacity * (1.0 + (rand(market.rng) - 0.5) * 2 * capacity_variance)
+
     opportunity = Opportunity(
         id=opp_id,
         latent_return_potential=clamp(latent_return, 0.5, 25.0),
@@ -1236,7 +1285,9 @@ function spawn_opportunity_from_innovation!(
         config=market.config,
         sector=branch_name,
         capital_requirements=capital_req,
-        time_to_maturity=maturity
+        time_to_maturity=maturity,
+        novelty_score=innov_novelty,  # Novel opportunities from innovations
+        capacity=opp_capacity
     )
 
     push!(market.opportunities, opportunity)
@@ -1244,6 +1295,66 @@ function spawn_opportunity_from_innovation!(
     _index_opportunity!(market, opportunity)
 
     return opportunity
+end
+
+# ============================================================================
+# NOVELTY DISRUPTION (The "DeepSeek Effect")
+# ============================================================================
+
+"""
+Apply novelty disruption when a highly novel innovation occurs.
+Crowded opportunities in the same sector lose value - this implements
+the mechanism where unexpected innovations disrupt established opportunities.
+
+This is grounded in the theoretical insight that "the more important the
+innovation, the less predictable it is" (Rescher, 2016). Novel innovations
+create new possibilities that can make existing opportunities less valuable.
+"""
+function apply_novelty_disruption!(
+    market::MarketEnvironment,
+    innovation::Innovation
+)::Int
+    # Check if disruption is enabled
+    if !getfield_default(market.config, :NOVELTY_DISRUPTION_ENABLED, true)
+        return 0
+    end
+
+    novelty = clamp(something(innovation.novelty, 0.0), 0.0, 1.0)
+    threshold = getfield_default(market.config, :NOVELTY_DISRUPTION_THRESHOLD, 0.6)
+
+    if novelty < threshold
+        return 0  # No disruption for low-novelty innovations
+    end
+
+    sector = something(innovation.sector, "tech")
+    magnitude = getfield_default(market.config, :NOVELTY_DISRUPTION_MAGNITUDE, 0.25)
+    comp_threshold = getfield_default(market.config, :DISRUPTION_COMPETITION_THRESHOLD, 10.0)
+
+    # Base disruption scales with how novel the innovation is
+    # At threshold: 0% disruption, at novelty=1.0: full magnitude
+    base_disruption = (novelty - threshold) / (1.0 - threshold) * magnitude
+
+    disrupted_count = 0
+    for opp in market.opportunities
+        # Only disrupt opportunities in the same sector with high competition
+        if opp.sector == sector && opp.competition > comp_threshold
+            # Vulnerability scales with competition (crowded = fragile)
+            # At competition=0: vulnerability = 1.0
+            # Competition scale: 0=none, 1.0=normal, 3.0=severe crowding
+            # At competition=1.0 (normal): vulnerability = 1.25
+            # At competition=2.0 (crowded): vulnerability = 1.5
+            # At competition=3.0 (severe): vulnerability = 1.75
+            vulnerability = 1.0 + (opp.competition / 2.0) * 0.5
+            reduction = base_disruption * vulnerability
+
+            # Apply disruption - reduce latent return potential
+            opp.latent_return_potential *= (1.0 - clamp(reduction, 0.0, 0.5))
+            opp.disrupted_count += 1
+            disrupted_count += 1
+        end
+    end
+
+    return disrupted_count
 end
 
 # ============================================================================

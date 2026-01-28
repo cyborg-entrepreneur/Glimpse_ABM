@@ -2,58 +2,52 @@
 
 This document provides a comprehensive reference for all configurable parameters in the Glimpse ABM simulation, including their theoretical justification, default values, and empirical calibration targets.
 
+**Important**: All parameters are calibrated for **monthly cadence** (120 rounds = 10 years).
+
 ## Theoretical Foundation
 
 This simulation operationalizes the theoretical framework from:
 
 - **Townsend, D. M., Hunt, R. A., Rady, R., Manocha, P., & Jin, J-H. (2025).** Are the futures computable? Knightian uncertainty & artificial intelligence. *Academy of Management Review*, 50(2), 415-440.
 
-- **Townsend, D. M., Hunt, R. A., Rady, R., Manocha, P., & Jin, J-H. (2025).** Do androids dream of entrepreneurial possibilities? A reply to Ramoglou et al.'s "Artificial intelligence forces us to re-think Knightian uncertainty." *Academy of Management Review*, 50(2), 474-476.
-
 - **Townsend, D. M., Hunt, R. A., & Rady, J. (2024).** Chance, probability, & uncertainty at the edge of human reasoning: What is Knightian uncertainty? *Strategic Entrepreneurship Journal*, 18(3), 451-474.
 
-The simulation models entrepreneurial agents operating under the four dimensions of Knightian uncertainty identified in Townsend et al. (2025): actor ignorance, practical indeterminism, agentic novelty, and competitive recursion.
+The simulation models entrepreneurial agents operating under the four dimensions of Knightian uncertainty: **actor ignorance**, **practical indeterminism**, **agentic novelty**, and **competitive recursion**.
 
 ---
 
-## 1. Agent Configuration
+## 1. Simulation Configuration
 
-### Core Agent Parameters
+### Core Simulation Parameters
 
-| Parameter | Default | Range | Description | Theoretical Justification |
-|-----------|---------|-------|-------------|---------------------------|
-| `N_AGENTS` | 1000 | 50-5000 | Number of entrepreneurial agents | Provides sufficient statistical power for detecting AI tier effects while remaining computationally tractable |
-| `INITIAL_CAPITAL` | 1,500,000 | 1M-20M | Starting capital per agent ($) | Calibrated to ~50% survival rate with operational costs |
-| `INITIAL_CAPITAL_RANGE` | (1.2M, 1.8M) | - | Global heterogeneous capital distribution | Captures variance in entrepreneur resource endowments |
-| `SURVIVAL_THRESHOLD` | 230,000 | 50K-500K | Global minimum capital before insolvency ($) | See sector-specific thresholds below |
-| `SURVIVAL_CAPITAL_RATIO` | 0.38 | 0.25-0.65 | Fraction of initial capital triggering survival pressure | Calibrated to BLS 5-year survival rates (~55% for venture cohorts) |
-| `INSOLVENCY_GRACE_ROUNDS` | 7 | 3-12 | Rounds below threshold before exit | Reflects real-world runway management and bridge financing opportunities |
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `N_AGENTS` | 1000 | Number of entrepreneurial agents |
+| `N_ROUNDS` | 120 | Simulation months (10 years) |
+| `N_RUNS` | 50 | Monte Carlo replications per condition |
+| `RANDOM_SEED` | 42 | Base random seed for reproducibility |
 
-### Sector Assignment (NVCA 2024 Calibrated)
+### Agent Configuration
 
-Agents are assigned a primary sector at creation based on NVCA 2024 deal flow weights:
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `INITIAL_CAPITAL` | 5,000,000 | Starting capital per agent ($) |
+| `INITIAL_CAPITAL_RANGE` | (2.5M, 10M) | Heterogeneous capital distribution |
+| `SURVIVAL_THRESHOLD` | 230,000 | Minimum capital before insolvency ($) |
+| `SURVIVAL_CAPITAL_RATIO` | 0.38 | Fraction triggering survival pressure |
+| `INSOLVENCY_GRACE_ROUNDS` | 7 | Months below threshold before exit |
+| `BASE_OPERATIONAL_COST` | 16,667 | Monthly operating cost ($) |
+| `COMPETITION_COST_MULTIPLIER` | 50.0 | Monthly competition cost scaling |
 
-| Sector | Weight | Rationale |
-|--------|--------|-----------|
-| `tech` | 60% | Dominant VC deal flow |
-| `service` | 15% | B2B services |
-| `manufacturing` | 15% | Hardware/industrial |
-| `retail` | 10% | Consumer/retail |
+### Investment Parameters (Monthly)
 
-Parameter: `SECTOR_WEIGHTS` - Dict mapping sectors to assignment probabilities.
-
-### Agent Trait Distributions
-
-The simulation draws agent traits from specified probability distributions to capture heterogeneity in entrepreneurial cognition and capabilities.
-
-| Trait | Distribution | Parameters | Theoretical Basis |
-|-------|--------------|------------|-------------------|
-| `uncertainty_tolerance` | Beta | a=1.05, b=0.65 | Tech entrepreneurs skew toward higher ambiguity tolerance; mean ~0.62 with optimistic tail |
-| `innovativeness` | Lognormal | mean=0.5, σ=0.5 | Captures right-skewed distribution of innovative capacity in entrepreneur populations |
-| `competence` | Uniform | [0.1, 0.8] | Broad distribution of general business competence |
-| `ai_trust` | Normal (clipped) | μ=0.5, σ=0.38 | Heterogeneous initial AI trust with neutral mean |
-| `exploration_tendency` | Beta | a=0.85, b=0.85 | U-shaped distribution: some agents explore aggressively, others exploit consistently |
-| `entrepreneurial_drive` | Beta | a=2.2, b=1.8 | Right-skewed drive distribution reflecting entrepreneurial self-selection |
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `MAX_INVESTMENT_FRACTION` | 0.037 | Maximum monthly investment (% of capital) |
+| `TARGET_INVESTMENT_FRACTION` | 0.033 | Target monthly investment (% of capital) |
+| `LIQUIDITY_RESERVE_FRACTION` | 0.29 | Fraction kept as cash reserve |
+| `DISCOVERY_PROBABILITY` | 0.10 | Monthly opportunity discovery rate |
+| `INNOVATION_PROBABILITY` | 0.14 | Monthly innovation attempt rate |
 
 ---
 
@@ -61,325 +55,280 @@ The simulation draws agent traits from specified probability distributions to ca
 
 ### AI Tier Specifications
 
-The four AI tiers represent increasing levels of AI capability and cost, reflecting the current stratification of AI services available to entrepreneurs.
+The four AI tiers represent increasing levels of AI capability and cost.
 
-| Tier | Base Cost | Cost Type | Info Quality | Info Breadth | Per-Use Cost |
-|------|-----------|-----------|--------------|--------------|--------------|
-| `none` | $0 | - | 0.20 | 0.18 | $0 |
-| `basic` | $45 | per_use | 0.48 | 0.38 | $6 |
-| `advanced` | $1,500 | subscription | 0.78 | 0.68 | $60 |
-| `premium` | $14,000 | subscription | 0.93 | 0.88 | $240 |
+| Tier | Info Quality | Info Breadth | Monthly Cost | Per-Use Cost |
+|------|-------------|--------------|--------------|--------------|
+| `none` | 0.25 | 0.20 | $0 | $0 |
+| `basic` | 0.43 | 0.38 | $30 | $3 |
+| `advanced` | 0.70 | 0.65 | $400 | $35 |
+| `premium` | 0.97 | 0.92 | $3,500 | $150 |
 
-**Theoretical Justification**: The tier structure operationalizes the "paradox of future knowledge" from Townsend et al. (2025). Higher tiers provide better information quality (reducing actor ignorance) but at costs that affect capital allocation and with potential side effects on other uncertainty dimensions.
+**Info Quality**: Accuracy of opportunity assessment (0 = random, 1 = perfect)
+**Info Breadth**: Fraction of opportunities visible to agent
+
+### AI Paradox Mechanism
+
+The paradox emerges because:
+- Higher `info_quality` → more accurate identification of "best" opportunities
+- All Premium agents identify the same opportunities → convergent behavior
+- Convergence → competitive crowding → diluted returns
+- Result: Premium agents underperform None agents by 8-14 percentage points
 
 ### AI Domain Capabilities
 
-Each AI tier has different capabilities across analysis domains:
+| Domain | None | Basic | Advanced | Premium |
+|--------|------|-------|----------|---------|
+| `market_analysis` | 0.38 | 0.52 | 0.78 | 0.96 |
+| `technical_assessment` | 0.40 | 0.54 | 0.80 | 0.97 |
+| `uncertainty_evaluation` | 0.35 | 0.50 | 0.76 | 0.95 |
+| `innovation_potential` | 0.33 | 0.48 | 0.74 | 0.94 |
 
-| Domain | Basic Accuracy | Advanced Accuracy | Premium Accuracy |
-|--------|---------------|-------------------|------------------|
-| `market_analysis` | 0.65 | 0.89 | 0.985 |
-| `technical_assessment` | 0.66 | 0.91 | 0.992 |
-| `uncertainty_evaluation` | 0.62 | 0.90 | 0.990 |
-| `innovation_potential` | 0.60 | 0.89 | 0.988 |
+### Hallucination Rates
 
-**Hallucination Rates** (probability of false information):
-- Basic: 0.17-0.20
-- Advanced: 0.035-0.05
-- Premium: 0.005-0.008
+| Tier | Rate | Description |
+|------|------|-------------|
+| None | 0.26-0.30 | Human baseline errors |
+| Basic | 0.19-0.22 | Moderate AI errors |
+| Advanced | 0.09-0.12 | Low error rate |
+| Premium | 0.01-0.02 | Near-perfect accuracy |
+
+### AI Subscription Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `AI_CREDIT_LINE_ROUNDS` | 90 | Months of AI credit before payment required |
+| `AI_SUBSCRIPTION_AMORTIZATION_ROUNDS` | 180 | Months to amortize subscription costs |
+| `AI_TIER_RECENT_WINDOW` | 45 | Months for recent performance evaluation |
+| `AI_TRUST_RESERVE_DISCOUNT` | 0.25 | Discount for high-trust AI users |
 
 ---
 
 ## 3. Knightian Uncertainty Parameters
 
-### Actor Ignorance Parameters
+### Actor Ignorance
 
-| Parameter | Default | Description | Theoretical Link |
-|-----------|---------|-------------|------------------|
-| `DISCOVERY_PROBABILITY` | 0.30 | Base probability of discovering new opportunities | Controls rate of ignorance reduction through exploration |
-| `KNOWLEDGE_DECAY_RATE` | 0.075 | Global rate at which sector knowledge depreciates | Models obsolescence of entrepreneur's mental models |
-| `MAX_AGENT_KNOWLEDGE` | 90 | Maximum knowledge pieces per agent | Bounded rationality constraint |
+Controls how much agents don't know about opportunities.
 
-**Sector-Specific Knowledge Decay** (Ebbinghaus Forgetting Curve / Industry Skill Depreciation Research):
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `DISCOVERY_PROBABILITY` | 0.10 | Monthly chance of finding new opportunities |
+| `KNOWLEDGE_DECAY_RATE` | 0.075 | Monthly rate of knowledge obsolescence |
+| `MAX_AGENT_KNOWLEDGE` | 90 | Maximum knowledge pieces per agent |
+
+**Sector-Specific Knowledge Decay (Monthly)**:
 
 | Sector | Decay Rate | Half-Life | Rationale |
 |--------|------------|-----------|-----------|
-| `tech` | 0.12 | 2-3 years | Fast obsolescence due to rapid innovation cycles |
-| `retail` | 0.07 | 4-5 years | Moderate turnover in consumer preferences |
-| `service` | 0.05 | 5-7 years | Stable expertise-based knowledge |
-| `manufacturing` | 0.03 | 7-10 years | Most durable process-based, capital-embedded knowledge |
+| `tech` | 0.04 | 2-3 years | Fast obsolescence |
+| `retail` | 0.023 | 4-5 years | Moderate turnover |
+| `service` | 0.017 | 5-7 years | Stable expertise |
+| `manufacturing` | 0.01 | 7-10 years | Durable process knowledge |
 
-### Practical Indeterminism Parameters
+### Practical Indeterminism
 
-| Parameter | Default | Description | Theoretical Link |
-|-----------|---------|-------------|------------------|
-| `MARKET_VOLATILITY` | 0.25 | Base market return volatility | Path dependency in execution outcomes |
-| `MARKET_SHIFT_PROBABILITY` | 0.09 | Probability of regime transitions | Environmental contingency affecting timing |
-| `BLACK_SWAN_PROBABILITY` | 0.05 | Probability of extreme events | Irreducible tail risks in entrepreneurship |
+Controls environmental uncertainty and shocks.
 
-### Agentic Novelty Parameters
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `MARKET_VOLATILITY` | 0.25 | Base return volatility |
+| `MARKET_SHIFT_PROBABILITY` | 0.03 | Monthly regime transition probability |
+| `BLACK_SWAN_PROBABILITY` | 0.017 | Monthly extreme event probability |
 
-| Parameter | Default | Description | Theoretical Link |
-|-----------|---------|-------------|------------------|
-| `INNOVATION_PROBABILITY` | 0.42 | Global base probability of innovation success | Rate of genuine novelty creation |
-| `INNOVATION_REUSE_PROBABILITY` | 0.22 | Probability of reusing existing combinations | Tension between novelty and exploitation |
-| `AI_NOVELTY_UPLIFT` | 0.08 | AI's contribution to novelty potential | Can be positive (facilitating combinations) or negative (anchoring on history) |
+### Agentic Novelty
 
-**Sector-Specific Innovation Probability** (NSF BRDIS 2023, USPTO Patent Statistics):
+Controls innovation and creative destruction.
 
-| Sector | Innovation Prob | R&D Intensity | USPTO Grant Rate | Rationale |
-|--------|-----------------|---------------|------------------|-----------|
-| `tech` | 0.48 | 15-25% of revenue | 52% | High R&D investment, moderate patent success |
-| `manufacturing` | 0.52 | 8-15% of revenue | 58% | Highest patent success, process innovations |
-| `service` | 0.38 | 3-8% of revenue | 40% | Moderate R&D, service innovations |
-| `retail` | 0.32 | 1-3% of revenue | 35% | Low R&D intensity, incremental innovations |
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `INNOVATION_PROBABILITY` | 0.14 | Monthly innovation attempt rate |
+| `INNOVATION_REUSE_PROBABILITY` | 0.07 | Monthly probability of reusing combinations |
+| `AI_NOVELTY_UPLIFT` | 0.08 | AI contribution to novelty (can be negative) |
+| `NOVELTY_DISRUPTION_ENABLED` | true | Enable innovation disruption effects |
+| `NOVELTY_DISRUPTION_THRESHOLD` | 0.6 | Novelty level triggering disruption |
+| `NOVELTY_DISRUPTION_MAGNITUDE` | 0.25 | Disruption impact on existing investments |
 
-**Sector-Specific Innovation Return Multipliers**:
+**Sector-Specific Innovation (Monthly)**:
 
-| Sector | Return Multiplier Range | Rationale |
-|--------|------------------------|-----------|
-| `tech` | (2.0, 4.0) | Higher upside from successful innovations |
-| `manufacturing` | (1.5, 2.8) | More incremental improvements |
-| `service` | (1.6, 2.5) | Moderate returns |
-| `retail` | (1.6, 2.5) | Moderate returns |
+| Sector | Probability | Return Multiplier | Rationale |
+|--------|------------|-------------------|-----------|
+| `tech` | 0.16 | (2.0, 4.0) | High upside |
+| `manufacturing` | 0.17 | (1.5, 2.8) | Incremental improvements |
+| `service` | 0.13 | (1.6, 2.5) | Moderate returns |
+| `retail` | 0.11 | (1.6, 2.5) | Moderate returns |
 
-### Competitive Recursion Parameters
+### Competitive Recursion
 
-| Parameter | Default | Description | Theoretical Link |
-|-----------|---------|-------------|------------------|
-| `RECURSION_WEIGHTS.crowd_weight` | 0.35 | Weight of crowding in recursion calculation | Strategic interdependence from capital concentration |
-| `RECURSION_WEIGHTS.volatility_weight` | 0.30 | Weight of volatility in recursion | Strategic uncertainty from market dynamics |
-| `RECURSION_WEIGHTS.ai_herd_weight` | 0.40 | Weight of AI-induced herding | Correlated recommendations amplifying recursion |
-| `RECURSION_WEIGHTS.premium_reuse_weight` | 0.20 | Weight of premium AI reuse patterns | High-tier AI convergence on similar strategies |
+Controls strategic interdependence—the key driver of the AI paradox.
 
----
-
-## 4. Market Dynamics Parameters
-
-### Macro Regime Configuration
-
-The simulation implements a Markov regime-switching model with five states reflecting macroeconomic conditions. Transition probabilities are calibrated from NBER Business Cycle Dating Committee data (1945-2024).
-
-| Regime | Return Modifier | Failure Modifier | Volatility | Description |
-|--------|-----------------|------------------|------------|-------------|
-| `crisis` | 0.82 | 1.25 | 0.55 | Severe economic contraction |
-| `recession` | 0.97 | 1.08 | 0.35 | Mild economic contraction |
-| `normal` | 1.08 | 1.00 | 0.20 | Baseline economic conditions |
-| `growth` | 1.25 | 0.88 | 0.25 | Economic expansion |
-| `boom` | 1.45 | 0.72 | 0.30 | Strong economic expansion |
-
-### NBER-Calibrated Transition Matrix (Quarterly)
-
-**Source**: NBER Business Cycle Dating Committee data 1945-2024. Average expansion: 64 months, average recession: 11 months, crisis frequency: ~1 per decade.
-
-|  From / To  | crisis | recession | normal | growth | boom |
-|-------------|--------|-----------|--------|--------|------|
-| **crisis**    | 0.35 | 0.40 | 0.20 | 0.05 | 0.00 |
-| **recession** | 0.06 | 0.40 | 0.42 | 0.10 | 0.02 |
-| **normal**    | 0.02 | 0.10 | 0.52 | 0.28 | 0.08 |
-| **growth**    | 0.01 | 0.04 | 0.20 | 0.50 | 0.25 |
-| **boom**      | 0.02 | 0.06 | 0.18 | 0.38 | 0.36 |
-
-**Key calibration targets**:
-- Crisis frequency: ~2% from normal state (1 per decade)
-- Recession→normal: 42% (11-month average recession at quarterly frequency)
-- Normal→growth: 28% (reflects 64-month average expansion)
-
-### Return and Risk Parameters
-
-| Parameter | Default | Description | Calibration Target |
-|-----------|---------|-------------|-------------------|
-| `OPPORTUNITY_RETURN_RANGE` | (1.1, 25.0) | Range of possible investment multiples | Based on venture capital return distributions |
-| `RETURN_OVERSUPPLY_PENALTY` | 0.52 | Penalty for crowded opportunities | Reflects diminishing returns to capital concentration |
-| `RETURN_UNDERSUPPLY_BONUS` | 0.37 | Bonus for underexplored opportunities | Rewards contrarian strategies |
-| `RETURN_DEMAND_CROWDING_THRESHOLD` | 0.42 | Threshold triggering crowding penalties | Calibrated to observed herding costs |
-| `RETURN_LOWER_BOUND` | -1.0 | Minimum realized return (total loss) | Allows for complete investment wipeouts |
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `RECURSION_WEIGHTS.crowd_weight` | 0.35 | Weight of crowding in recursion |
+| `RECURSION_WEIGHTS.volatility_weight` | 0.30 | Weight of market volatility |
+| `RECURSION_WEIGHTS.ai_herd_weight` | 0.40 | Weight of AI-induced herding |
+| `RECURSION_WEIGHTS.premium_reuse_weight` | 0.20 | Weight of premium convergence |
 
 ---
 
-## 5. Sector Profiles
+## 4. Competition and Crowding Parameters
 
-The simulation models four sectors with distinct risk-return characteristics reflecting real venture categories. Each sector now includes empirically-calibrated parameters from multiple data sources.
+These parameters are critical for reproducing the AI paradox.
 
-### Calibration Sources
+### Capacity Constraints
 
-| Parameter | Source |
-|-----------|--------|
-| `initial_capital_range` | NVCA 2024 Yearbook, PitchBook seed/early stage data |
-| `survival_threshold` | BLS Business Employment Dynamics, Fed SBCS 2024 |
-| `innovation_probability` | NSF BRDIS 2023, USPTO Patent Statistics |
-| `innovation_return_multiplier` | Industry R&D intensity studies |
-| `knowledge_decay_rate` | Ebbinghaus forgetting curve, skill depreciation research |
-| `competition_intensity` | Census Bureau Economic Census HHI data |
-| `operational_cost_range` | SBA/BLS QCEW data (2025) |
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `OPPORTUNITY_CAPACITY_ENABLED` | true | Enable capacity-based crowding |
+| `OPPORTUNITY_BASE_CAPACITY` | 500,000 | Base investment capacity per opportunity |
+| `OPPORTUNITY_CAPACITY_VARIANCE` | 0.3 | Variance in opportunity capacities |
+| `CAPACITY_PENALTY_START` | 0.7 | Utilization threshold for penalties |
+| `CAPACITY_PENALTY_MAX` | 0.4 | Maximum return penalty at full capacity |
+
+### Competition Dynamics
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `DISABLE_COMPETITION_DYNAMICS` | false | Master switch for competition |
+| `OPPORTUNITY_COMPETITION_PENALTY` | 0.5 | Return penalty from crowding |
+| `OPPORTUNITY_COMPETITION_THRESHOLD` | 0.2 | Crowding level triggering penalties |
+| `OPPORTUNITY_COMPETITION_FLOOR` | 0.1 | Minimum return multiplier |
+| `COMPETITION_INTENSITY` | 1.0 | Global competition scaling (0-2) |
+
+### Sequential Decision Making
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `SEQUENTIAL_DECISIONS_ENABLED` | true | Enable early/late mover dynamics |
+| `EARLY_DECISION_FRACTION` | 0.3 | Fraction making early decisions |
+| `SIGNAL_VISIBILITY_WEIGHT` | 0.15 | Weight of early signals for late movers |
+
+---
+
+## 5. Market Regime Configuration
+
+### Macro Regime States
+
+The simulation implements a Markov regime-switching model calibrated from NBER Business Cycle data (1945-2024).
+
+| Regime | Return Modifier | Failure Modifier | Volatility |
+|--------|-----------------|------------------|------------|
+| `crisis` | 0.85 | 1.18 | 0.55 |
+| `recession` | 0.98 | 1.05 | 0.35 |
+| `normal` | 1.10 | 1.00 | 0.20 |
+| `growth` | 1.28 | 0.90 | 0.25 |
+| `boom` | 1.45 | 0.78 | 0.30 |
+
+### Monthly Transition Matrix
+
+Converted from quarterly NBER data using: `p_monthly = 1 - (1-p_quarterly)/3`
+
+| From / To | crisis | recession | normal | growth | boom |
+|-----------|--------|-----------|--------|--------|------|
+| **crisis** | 0.75 | 0.12 | 0.12 | 0.01 | 0.00 |
+| **recession** | 0.01 | 0.77 | 0.17 | 0.04 | 0.01 |
+| **normal** | 0.003 | 0.027 | 0.85 | 0.09 | 0.03 |
+| **growth** | 0.003 | 0.01 | 0.07 | 0.84 | 0.077 |
+| **boom** | 0.003 | 0.013 | 0.067 | 0.13 | 0.787 |
+
+---
+
+## 6. Sector Profiles (Monthly Cadence)
 
 ### Technology Sector
 
-```yaml
-# Return characteristics
-return_range: [1.35, 3.10]
-return_log_mu: ln(1.95)
-return_log_sigma: 0.45
-failure_range: [0.30, 0.50]
-capital_range: [300,000, 1,200,000]
-maturity_range: [15, 40] rounds
-operational_cost_range: [60,000, 90,000]  # quarterly, BLS QCEW
-
-# New calibrated fields
-initial_capital_range: [800,000, 2,500,000]   # NVCA 2024 software/SaaS seed
-survival_threshold: 150,000                    # BLS ~$60-90k/qtr × 2 quarters
-innovation_probability: 0.48                   # NSF 15-25% R&D intensity, 52% USPTO
-innovation_return_multiplier: [2.0, 4.0]       # High tech upside
-knowledge_decay_rate: 0.12                     # 2-3 year half-life (fast obsolescence)
-competition_intensity: 1.2                     # HHI 1500-2500, moderate concentration
-```
-
-**Justification**: Later-stage venture-backed software/hardware with differentiated upside and higher failure rates.
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| `initial_capital_range` | ($3M, $6M) | NVCA 2024 |
+| `operational_cost_range` | ($20k, $30k)/month | BLS QCEW |
+| `survival_threshold` | $150,000 | BLS BED |
+| `innovation_probability` | 0.16/month | NSF BRDIS |
+| `knowledge_decay_rate` | 0.04/month | Skill research |
+| `competition_intensity` | 1.2 | Census HHI |
 
 ### Retail Sector
 
-```yaml
-# Return characteristics
-return_range: [1.15, 2.10]
-return_log_mu: ln(1.45)
-return_log_sigma: 0.32
-failure_range: [0.20, 0.38]
-capital_range: [50,000, 400,000]
-maturity_range: [9, 30] rounds
-operational_cost_range: [70,000, 110,000]  # quarterly, BLS QCEW
-
-# New calibrated fields
-initial_capital_range: [200,000, 800,000]     # NVCA consumer/retail lower intensity
-survival_threshold: 180,000                    # BLS ~$70-110k/qtr × 2 quarters
-innovation_probability: 0.32                   # NSF 1-3% R&D intensity, 35% USPTO
-innovation_return_multiplier: [1.6, 2.5]       # Moderate returns
-knowledge_decay_rate: 0.07                     # 4-5 year half-life
-competition_intensity: 0.7                     # HHI 500-1000, fragmented market
-```
-
-**Justification**: Multi-unit retail concepts with moderate upside and higher operational variability.
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| `initial_capital_range` | ($2.2M, $4M) | NVCA 2024 |
+| `operational_cost_range` | ($13k, $23k)/month | BLS QCEW |
+| `survival_threshold` | $130,000 | BLS BED |
+| `innovation_probability` | 0.11/month | NSF BRDIS |
+| `knowledge_decay_rate` | 0.023/month | Skill research |
+| `competition_intensity` | 0.7 | Census HHI |
 
 ### Service Sector
 
-```yaml
-# Return characteristics
-return_range: [1.25, 2.20]
-return_log_mu: ln(1.53)
-return_log_sigma: 0.36
-failure_range: [0.10, 0.28]
-capital_range: [15,000, 200,000]
-maturity_range: [6, 20] rounds
-operational_cost_range: [25,000, 45,000]  # quarterly, BLS QCEW
-
-# New calibrated fields
-initial_capital_range: [150,000, 500,000]     # NVCA B2B services lean ops
-survival_threshold: 70,000                     # BLS ~$25-45k/qtr × 2 quarters
-innovation_probability: 0.38                   # NSF 3-8% R&D intensity, 40% USPTO
-innovation_return_multiplier: [1.6, 2.5]       # Moderate returns
-knowledge_decay_rate: 0.05                     # 5-7 year half-life (stable expertise)
-competition_intensity: 0.9                     # HHI 800-1500, moderately fragmented
-```
-
-**Justification**: B2B/B2C recurring service ventures with low capex and resilient margins.
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| `initial_capital_range` | ($1.4M, $2.5M) | NVCA 2024 |
+| `operational_cost_range` | ($8.3k, $15k)/month | BLS QCEW |
+| `survival_threshold` | $70,000 | BLS BED |
+| `innovation_probability` | 0.13/month | NSF BRDIS |
+| `knowledge_decay_rate` | 0.017/month | Skill research |
+| `competition_intensity` | 0.9 | Census HHI |
 
 ### Manufacturing Sector
 
-```yaml
-# Return characteristics
-return_range: [1.30, 2.65]
-return_log_mu: ln(1.78)
-return_log_sigma: 0.40
-failure_range: [0.25, 0.42]
-capital_range: [250,000, 1,500,000]
-maturity_range: [24, 72] rounds
-operational_cost_range: [90,000, 130,000]  # quarterly, BLS QCEW
-
-# New calibrated fields
-initial_capital_range: [1,200,000, 3,500,000]  # NVCA hardware/industrial high capex
-survival_threshold: 220,000                     # BLS ~$90-130k/qtr × 2 quarters
-innovation_probability: 0.52                    # NSF 8-15% R&D intensity, 58% USPTO
-innovation_return_multiplier: [1.5, 2.8]        # Incremental improvements
-knowledge_decay_rate: 0.03                      # 7-10 year half-life (most durable)
-competition_intensity: 1.4                      # HHI 1800-3000, concentrated market
-```
-
-**Justification**: Advanced manufacturing/industrial ventures with heavier capital loads and longer development cycles.
-
-### Competition Intensity Reference (Census HHI Guidelines)
-
-| HHI Range | Market Structure | Intensity Value |
-|-----------|------------------|-----------------|
-| < 1000 | Fragmented | 0.7 |
-| 1000-1500 | Moderately fragmented | 0.9 |
-| 1500-2500 | Moderate concentration | 1.2 |
-| > 2500 | Concentrated | 1.4 |
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| `initial_capital_range` | ($4M, $7.5M) | NVCA 2024 |
+| `operational_cost_range` | ($26.7k, $40k)/month | BLS QCEW |
+| `survival_threshold` | $200,000 | BLS BED |
+| `innovation_probability` | 0.17/month | NSF BRDIS |
+| `knowledge_decay_rate` | 0.01/month | Skill research |
+| `competition_intensity` | 1.4 | Census HHI |
 
 ---
 
-## 6. Calibration Profiles
-
-### `venture_baseline_2024`
-
-Anchors the simulation to US venture benchmarks.
-
-**Target Metrics**:
-- 5-year survival rate: 55% ± 8% (Source: BLS Business Employment Dynamics, 2019 cohort)
-- Mean investment ROI: 1.12× ± 0.20 (Source: PitchBook cash-on-cash, Series A-D, 2020-2022)
-- Innovation share: 40% ± 10% (Source: NVCA 2024 innovation activity estimates)
-
-### `deeptech_capital_constrained`
-
-Represents capital-intensive deep-tech ecosystems.
-
-**Target Metrics**:
-- 5-year survival rate: 35% ± 6% (Source: NVCA deep-tech survival analyses, 2017-2023)
-- Mean investment ROI: 1.48× ± 0.25 (Source: CB Insights frontier tech benchmarks, 2023)
-- Innovation share: 32% ± 8% (Source: OECD deep-tech investment mix, 2022)
-
----
-
-## 7. Uncertainty Volatility Controls
-
-These parameters control how uncertainty measurements evolve over time.
+## 7. Learning and Adaptation Parameters
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `UNCERTAINTY_SHORT_WINDOW` | 6 | Rounds for short-term uncertainty averaging |
-| `UNCERTAINTY_SHORT_DECAY` | 0.0 | Decay factor for short-term signals (0 = no decay) |
-| `UNCERTAINTY_VOLATILITY_WINDOW` | 14 | Rounds for volatility measurement |
-| `UNCERTAINTY_VOLATILITY_DECAY` | 0.6 | Exponential decay for volatility smoothing |
-| `UNCERTAINTY_VOLATILITY_SCALING` | 0.45 | Scaling factor for volatility contribution |
-| `UNCERTAINTY_CROWDING_WEIGHT` | 0.18 | Weight of capital crowding in uncertainty |
+| `LEARNING_RATE_BASE` | 0.033 | Monthly learning rate |
+| `EXPLORATION_DECAY` | 0.9983 | Monthly exploration decay |
+| `COST_OF_CAPITAL` | 0.005 | Monthly cost of capital (~6% annual) |
+| `SOCIAL_LEARNING_WEIGHT` | 0.2 | Weight of peer learning |
+
+---
+
+## 8. Uncertainty Volatility Controls
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `UNCERTAINTY_SHORT_WINDOW` | 18 | Months for short-term averaging |
+| `UNCERTAINTY_VOLATILITY_WINDOW` | 42 | Months for volatility measurement |
+| `UNCERTAINTY_VOLATILITY_DECAY` | 0.87 | Monthly decay for smoothing |
+| `UNCERTAINTY_CROWDING_WEIGHT` | 0.18 | Weight of capital crowding |
 | `UNCERTAINTY_COMPETITIVE_WEIGHT` | 0.12 | Weight of competitive dynamics |
-| `UNCERTAINTY_AI_HERDING_WEIGHT` | 0.10 | Weight of AI-induced herding patterns |
 
 ---
 
-## 8. Performance and Execution Parameters
+## 9. Robustness Test Parameters
+
+These parameters allow systematic isolation of paradox mechanisms:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `N_ROUNDS` | 250 | Simulation rounds (≈ 5 years at quarterly frequency) |
-| `N_RUNS` | 50 | Monte Carlo replications for statistical robustness |
-| `RANDOM_SEED` | 42 | Base random seed for reproducibility |
-| `use_parallel` | True | Enable parallel processing |
-| `max_workers` | min(8, CPU-1) | Maximum parallel workers |
+| `HALLUCINATION_INTENSITY` | 1.0 | Scale AI hallucination rates (0-1) |
+| `OVERCONFIDENCE_INTENSITY` | 1.0 | Scale AI overconfidence (0-1) |
+| `AI_NOVELTY_CONSTRAINT_INTENSITY` | 1.0 | Scale AI novelty constraints (0-1) |
+| `AI_COST_INTENSITY` | 1.0 | Scale AI costs (0-1) |
+| `COMPETITION_INTENSITY` | 1.0 | Scale competition effects (0-1) |
 
 ---
 
 ## Parameter Sensitivity Ranges
 
-For Latin Hypercube Sampling (LHS) and sensitivity analysis, the following ranges are used:
+For Latin Hypercube Sampling (LHS) and sensitivity analysis:
 
 | Parameter | Min | Max | Sensitivity |
 |-----------|-----|-----|-------------|
-| `BASE_OPERATIONAL_COST` | 52,000 | 65,000 | High |
-| `SURVIVAL_CAPITAL_RATIO` | 0.28 | 0.36 | High |
-| `INNOVATION_PROBABILITY` | 0.35 | 0.55 | Medium |
-| `DISCOVERY_PROBABILITY` | 0.22 | 0.35 | Medium |
-| `RECURSION_WEIGHTS.crowd_weight` | 0.20 | 0.50 | Medium |
+| `BASE_OPERATIONAL_COST` | 12,000 | 22,000 | High |
+| `SURVIVAL_CAPITAL_RATIO` | 0.28 | 0.48 | High |
+| `INNOVATION_PROBABILITY` | 0.10 | 0.18 | Medium |
+| `DISCOVERY_PROBABILITY` | 0.07 | 0.13 | Medium |
+| `CAPACITY_PENALTY_MAX` | 0.2 | 0.6 | High |
 | `AI_NOVELTY_UPLIFT` | 0.04 | 0.14 | Low-Medium |
-| `RETURN_LOWER_BOUND` | -1.5 | -0.8 | Medium |
 
 ---
 
@@ -388,7 +337,5 @@ For Latin Hypercube Sampling (LHS) and sensitivity analysis, the following range
 Knight, F. H. (1921). *Risk, uncertainty, and profit*. Houghton Mifflin.
 
 Townsend, D. M., Hunt, R. A., Rady, R., Manocha, P., & Jin, J-H. (2025). Are the futures computable? Knightian uncertainty & artificial intelligence. *Academy of Management Review*, 50(2), 415-440.
-
-Townsend, D. M., Hunt, R. A., Rady, R., Manocha, P., & Jin, J-H. (2025). Do androids dream of entrepreneurial possibilities? A reply to Ramoglou et al.'s "Artificial intelligence forces us to re-think Knightian uncertainty." *Academy of Management Review*, 50(2), 474-476.
 
 Townsend, D. M., Hunt, R. A., & Rady, J. (2024). Chance, probability, & uncertainty at the edge of human reasoning: What is Knightian uncertainty? *Strategic Entrepreneurship Journal*, 18(3), 451-474.

@@ -46,6 +46,220 @@ function AgentResources(capital::Float64)
 end
 
 # ============================================================================
+# AGENT UNCERTAINTY METRICS (Emergent, Agent-Level)
+# ============================================================================
+
+"""
+Tracks agent-level uncertainty metrics that EMERGE from actual outcomes.
+These replace the formula-based environment-level metrics.
+
+The four Knightian dimensions are computed from what actually happens to agents:
+- Actor Ignorance: How wrong were the agent's estimates? (estimation error)
+- Practical Indeterminism: How variable were outcomes? (return variance)
+- Agentic Novelty: How much new stuff did the agent create? (creative output)
+- Competitive Recursion: How crowded were investments? (competition experienced)
+"""
+mutable struct AgentUncertaintyMetrics
+    # Actor Ignorance - tracks estimation accuracy
+    # |estimated_return - actual_return| / max(0.01, |actual_return|)
+    estimation_errors::Vector{Float64}
+
+    # Practical Indeterminism - tracks outcome variance
+    # Realized return multiples from investments
+    return_history::Vector{Float64}
+
+    # Agentic Novelty - tracks creative output
+    new_combinations_created::Int
+    niches_discovered::Int
+    derivative_adoptions::Int  # Following existing patterns vs creating
+    total_actions::Int
+
+    # Competitive Recursion - tracks crowding experienced
+    # Competition levels on opportunities when invested
+    competition_levels::Vector{Float64}
+
+    # Round tracking for temporal analysis
+    round_metrics::Vector{Dict{String,Float64}}
+end
+
+function AgentUncertaintyMetrics()
+    return AgentUncertaintyMetrics(
+        Float64[],  # estimation_errors
+        Float64[],  # return_history
+        0,          # new_combinations_created
+        0,          # niches_discovered
+        0,          # derivative_adoptions
+        0,          # total_actions
+        Float64[],  # competition_levels
+        Dict{String,Float64}[]  # round_metrics
+    )
+end
+
+"""
+Compute the four uncertainty dimensions from tracked metrics.
+Returns values in [0, 1] range for comparison.
+"""
+function compute_emergent_uncertainty(metrics::AgentUncertaintyMetrics)::Dict{String,Float64}
+    # Actor Ignorance: mean estimation error (0 = perfect, 1 = very wrong)
+    actor_ignorance = if isempty(metrics.estimation_errors)
+        0.5  # No data, neutral
+    else
+        clamp(mean(metrics.estimation_errors), 0.0, 1.0)
+    end
+
+    # Practical Indeterminism: coefficient of variation of returns
+    practical_indeterminism = if length(metrics.return_history) < 2
+        0.5  # Not enough data
+    else
+        μ = mean(metrics.return_history)
+        σ = std(metrics.return_history)
+        # CV normalized to [0, 1] - higher variance = higher indeterminism
+        clamp(σ / max(0.1, abs(μ)), 0.0, 1.0)
+    end
+
+    # Agentic Novelty: ratio of creative to total actions
+    agentic_novelty = if metrics.total_actions == 0
+        0.5  # No data
+    else
+        creative_actions = metrics.new_combinations_created + metrics.niches_discovered
+        following_actions = metrics.derivative_adoptions
+        total_creative_relevant = creative_actions + following_actions
+        if total_creative_relevant == 0
+            0.5
+        else
+            clamp(creative_actions / total_creative_relevant, 0.0, 1.0)
+        end
+    end
+
+    # Competitive Recursion: mean competition level experienced
+    competitive_recursion = if isempty(metrics.competition_levels)
+        0.0  # No investments, no recursion
+    else
+        # Normalize competition to [0, 1]
+        # Competition accumulates per investment: delta ~0.1-0.2 per agent investment
+        # Over many rounds, competition can reach 10-50+ on popular opportunities
+        # Use /20.0 so moderate competition (10) maps to 0.5, high (20+) maps to 1.0
+        clamp(mean(metrics.competition_levels) / 20.0, 0.0, 1.0)
+    end
+
+    return Dict{String,Float64}(
+        "actor_ignorance" => actor_ignorance,
+        "practical_indeterminism" => practical_indeterminism,
+        "agentic_novelty" => agentic_novelty,
+        "competitive_recursion" => competitive_recursion
+    )
+end
+
+"""
+Record an investment outcome for uncertainty tracking.
+"""
+function record_investment_outcome!(
+    metrics::AgentUncertaintyMetrics,
+    estimated_return::Float64,
+    actual_return::Float64,
+    competition_level::Float64
+)
+    # Track estimation error (Actor Ignorance)
+    if isfinite(estimated_return) && isfinite(actual_return)
+        error = abs(estimated_return - actual_return) / max(0.01, abs(actual_return))
+        push!(metrics.estimation_errors, clamp(error, 0.0, 5.0))  # Cap at 5x error
+    end
+
+    # Track return (Practical Indeterminism)
+    if isfinite(actual_return)
+        push!(metrics.return_history, actual_return)
+    end
+
+    # Track competition (Competitive Recursion)
+    if isfinite(competition_level)
+        push!(metrics.competition_levels, competition_level)
+    end
+
+    # Keep history bounded (last 50 investments)
+    max_history = 50
+    if length(metrics.estimation_errors) > max_history
+        metrics.estimation_errors = metrics.estimation_errors[end-max_history+1:end]
+    end
+    if length(metrics.return_history) > max_history
+        metrics.return_history = metrics.return_history[end-max_history+1:end]
+    end
+    if length(metrics.competition_levels) > max_history
+        metrics.competition_levels = metrics.competition_levels[end-max_history+1:end]
+    end
+end
+
+"""
+Record a creative action for novelty tracking.
+"""
+function record_creative_action!(
+    metrics::AgentUncertaintyMetrics;
+    new_combination::Bool = false,
+    niche_discovered::Bool = false,
+    derivative_adoption::Bool = false
+)
+    metrics.total_actions += 1
+    if new_combination
+        metrics.new_combinations_created += 1
+    end
+    if niche_discovered
+        metrics.niches_discovered += 1
+    end
+    if derivative_adoption
+        metrics.derivative_adoptions += 1
+    end
+end
+
+"""
+Get the emergent uncertainty dimensions for an agent.
+Returns Dict with actor_ignorance, practical_indeterminism, agentic_novelty, competitive_recursion.
+"""
+function get_emergent_uncertainty(agent)::Dict{String,Float64}
+    return compute_emergent_uncertainty(agent.uncertainty_metrics)
+end
+
+"""
+Aggregate emergent uncertainty across multiple agents by AI tier.
+Returns Dict[tier => Dict[dimension => value]].
+Uses fixed_ai_level if set, otherwise current_ai_level.
+"""
+function aggregate_emergent_uncertainty_by_tier(agents::Vector)::Dict{String,Dict{String,Float64}}
+    tier_metrics = Dict{String,Vector{Dict{String,Float64}}}()
+
+    for agent in agents
+        if !agent.alive
+            continue
+        end
+        # Use fixed_ai_level if set, otherwise current_ai_level
+        tier = if !isnothing(agent.fixed_ai_level)
+            agent.fixed_ai_level
+        else
+            agent.current_ai_level
+        end
+        if !haskey(tier_metrics, tier)
+            tier_metrics[tier] = Dict{String,Float64}[]
+        end
+        push!(tier_metrics[tier], get_emergent_uncertainty(agent))
+    end
+
+    # Aggregate by taking means
+    result = Dict{String,Dict{String,Float64}}()
+    for (tier, metrics_list) in tier_metrics
+        if isempty(metrics_list)
+            continue
+        end
+        result[tier] = Dict{String,Float64}(
+            "actor_ignorance" => mean(m["actor_ignorance"] for m in metrics_list),
+            "practical_indeterminism" => mean(m["practical_indeterminism"] for m in metrics_list),
+            "agentic_novelty" => mean(m["agentic_novelty"] for m in metrics_list),
+            "competitive_recursion" => mean(m["competitive_recursion"] for m in metrics_list),
+            "n_agents" => Float64(length(metrics_list))
+        )
+    end
+
+    return result
+end
+
+# ============================================================================
 # EMERGENT AGENT
 # ============================================================================
 
@@ -80,6 +294,12 @@ mutable struct EmergentAgent
     ai_usage_count::Int
     ai_tier_history::Vector{String}
 
+    # AI subscription tracking (for cost charging)
+    subscription_accounts::Dict{String,Int}  # tier → rounds remaining
+    subscription_rates::Dict{String,Float64}  # tier → cost per round
+    subscription_deferral_remaining::Dict{String,Int}  # tier → grace rounds
+    last_subscription_charge::Float64
+
     # Performance state
     alive::Bool
     survival_rounds::Int
@@ -89,6 +309,8 @@ mutable struct EmergentAgent
     success_count::Int
     failure_count::Int
     innovation_count::Int
+    failure_round::Union{Int,Nothing}  # Track when agent fails (for Kaplan-Meier survival analysis)
+    failure_reason::Union{String,Nothing}  # Why agent failed (capital/insolvency)
 
     # Decision state
     uncertainty_response::UncertaintyResponseProfile
@@ -98,6 +320,9 @@ mutable struct EmergentAgent
 
     # Portfolio
     active_investments::Vector{Dict{String,Any}}
+
+    # Emergent uncertainty metrics (agent-level)
+    uncertainty_metrics::AgentUncertaintyMetrics
 
     # RNG
     rng::AbstractRNG
@@ -163,6 +388,10 @@ function EmergentAgent(
         AILearningProfile(),
         0,  # ai_usage_count
         String[],  # ai_tier_history
+        Dict{String,Int}(),  # subscription_accounts
+        Dict{String,Float64}(),  # subscription_rates
+        Dict{String,Int}(),  # subscription_deferral_remaining
+        0.0,  # last_subscription_charge
         true,  # alive
         0,  # survival_rounds
         0,  # insolvency_rounds
@@ -171,11 +400,14 @@ function EmergentAgent(
         0,  # success_count
         0,  # failure_count
         0,  # innovation_count
+        nothing,  # failure_round
+        nothing,  # failure_reason
         UncertaintyResponseProfile(rng=rng),
         String[],  # action_history
         "maintain",  # last_action
         Dict{String,Any}(),  # last_outcome
         Dict{String,Any}[],  # active_investments
+        AgentUncertaintyMetrics(),  # uncertainty_metrics (emergent, agent-level)
         rng
     )
 end
@@ -231,10 +463,23 @@ function check_survival!(agent::EmergentAgent, round::Int)::Bool
     # Use sector-specific survival threshold (BLS/Fed calibrated)
     survival_threshold = _get_sector_survival_threshold(agent)
 
-    if agent.resources.capital < survival_threshold
+    # Apply AI trust-based liquidity relief (matches Python agents.py:930-933)
+    # Agents with high AI trust can maintain lower liquidity reserves
+    liquidity_floor = survival_threshold
+    ai_level = agent.current_ai_level
+    if ai_level != "none"
+        trust = clamp(agent.traits["ai_trust"], 0.0, 1.0)
+        discount = clamp(agent.config.AI_TRUST_RESERVE_DISCOUNT, 0.0, 0.9)
+        relief_factor = clamp(1.0 - trust * discount, 0.5, 1.0)
+        liquidity_floor *= relief_factor
+    end
+
+    if agent.resources.capital < liquidity_floor
         agent.insolvency_rounds += 1
         if agent.insolvency_rounds >= agent.config.INSOLVENCY_GRACE_ROUNDS
             agent.alive = false
+            agent.failure_round = round  # Track when agent fails (for Kaplan-Meier)
+            agent.failure_reason = "liquidity_failure"  # Failed due to insufficient capital
             return false
         end
     else
@@ -306,6 +551,7 @@ function select_action(
     )
 
     # Investment score - higher when uncertainty is moderate and capital is good
+    # Decreases when competitive recursion is high (crowded opportunities)
     if !isempty(available_opportunities)
         invest_factor = get_response_factor(
             agent.uncertainty_response, "practical_indeterminism", practical_indet;
@@ -315,18 +561,23 @@ function select_action(
     end
 
     # Innovation score - higher when agentic novelty potential is high
+    # ALSO increases when competitive recursion is high - natural response to crowding
+    # is to create new opportunities rather than compete for existing ones
     innovate_factor = get_response_factor(
         agent.uncertainty_response, "agentic_novelty", agentic_novelty;
         rng=agent.rng
     )
-    scores["innovate"] = 0.3 * agent.innovativeness * innovate_factor * (1.0 + agentic_novelty * 0.3)
+    competition_innovation_boost = competitive_rec * 0.4  # Boost innovation when competition is high
+    scores["innovate"] = 0.3 * agent.innovativeness * innovate_factor * (1.0 + agentic_novelty * 0.3 + competition_innovation_boost)
 
     # Exploration score - higher when ignorance is high
+    # Also increases with competition - seek new niches when existing ones are crowded
     explore_factor = get_response_factor(
         agent.uncertainty_response, "actor_ignorance", actor_ignorance;
         rng=agent.rng
     )
-    scores["explore"] = 0.25 * explore_factor * (1.0 + actor_ignorance * 0.5)
+    competition_explore_boost = competitive_rec * 0.25  # Explore more when competition is high
+    scores["explore"] = 0.25 * explore_factor * (1.0 + actor_ignorance * 0.5 + competition_explore_boost)
 
     # Maintain score - higher under high uncertainty or capital pressure
     maintain_base = 0.2
@@ -372,7 +623,8 @@ function execute_action!(
     action::String,
     market::MarketEnvironment,
     round::Int;
-    opportunity::Union{Opportunity,Nothing} = nothing
+    opportunity::Union{Opportunity,Nothing} = nothing,
+    estimated_return::Union{Float64,Nothing} = nothing
 )::Dict{String,Any}
     outcome = Dict{String,Any}(
         "action" => action,
@@ -383,7 +635,7 @@ function execute_action!(
     )
 
     if action == "invest" && !isnothing(opportunity)
-        outcome = _execute_invest!(agent, opportunity, market, round, outcome)
+        outcome = _execute_invest!(agent, opportunity, market, round, outcome; estimated_return=estimated_return)
     elseif action == "innovate"
         outcome = _execute_innovate!(agent, market, round, outcome)
     elseif action == "explore"
@@ -406,7 +658,8 @@ function _execute_invest!(
     opportunity::Opportunity,
     market::MarketEnvironment,
     round::Int,
-    outcome::Dict{String,Any}
+    outcome::Dict{String,Any};
+    estimated_return::Union{Float64,Nothing} = nothing
 )::Dict{String,Any}
     capital = get_capital(agent)
     max_invest = capital * agent.config.MAX_INVESTMENT_FRACTION
@@ -422,14 +675,24 @@ function _execute_invest!(
     set_capital!(agent, capital - invest_amount)
     agent.total_invested += invest_amount
 
-    # Record investment
+    # Track total investment on opportunity (for capacity constraints)
+    if hasfield(typeof(opportunity), :total_invested)
+        opportunity.total_invested += invest_amount
+    end
+
+    # Store estimated return (use latent if not provided)
+    est_ret = isnothing(estimated_return) ? opportunity.latent_return_potential : estimated_return
+
+    # Record investment with estimated return for uncertainty tracking
     investment = Dict{String,Any}(
         "opportunity_id" => opportunity.id,
         "opportunity" => opportunity,
         "amount" => invest_amount,
         "round_invested" => round,
         "maturity_round" => round + opportunity.time_to_maturity,
-        "ai_level" => get_ai_level(agent)
+        "ai_level" => get_ai_level(agent),
+        "estimated_return" => est_ret,
+        "competition_at_entry" => hasfield(typeof(opportunity), :competition) ? opportunity.competition : 0.0
     )
     push!(agent.active_investments, investment)
 
@@ -442,6 +705,37 @@ function _execute_invest!(
     outcome["opportunity_id"] = opportunity.id
     outcome["chosen_opportunity_obj"] = opportunity
     outcome["maturity_round"] = investment["maturity_round"]
+
+    # Track whether investing in derivative (known pattern) vs novel opportunity
+    # Connected to information system: higher info quality → MORE contrarian (can spot mispricing)
+    # Competition scale: 0=none, 1.0=normal (~10 investors), 3.0=severe crowding
+    competition_signal = clamp(opportunity.competition / 2.0, 0.0, 1.0)
+
+    # Get AI information parameters
+    ai_tier = get_ai_level(agent)
+    ai_config = get(agent.config.AI_LEVELS, ai_tier, nothing)
+    info_quality = isnothing(ai_config) ? 0.25 : Float64(ai_config.info_quality)
+
+    # FIXED: Derivative probability components (inverted from before)
+    # 1. Competition signal: high competition = crowded = derivative investment
+    # 2. Info quality effect: INVERTED - higher quality = MORE contrarian
+    #    - Low info_quality: can't identify mispricing → follows the crowd (higher derivative prob)
+    #    - High info_quality: can spot when crowd is wrong → contrarian (lower derivative prob)
+    #    This creates the AI paradox: premium agents diverge more, sometimes finding novel winners
+    competition_effect = competition_signal * 0.35
+    contrarian_ability = (1.0 - info_quality) * 0.25  # 0.19 (none) to 0.01 (premium)
+
+    # None:    0.20 + 0.35*comp + 0.19 = 0.39 + 0.35*comp (more following)
+    # Premium: 0.20 + 0.35*comp + 0.01 = 0.21 + 0.35*comp (more contrarian)
+    derivative_prob = 0.20 + competition_effect + contrarian_ability
+    is_derivative = rand(agent.rng) < derivative_prob
+    outcome["invested_derivative"] = is_derivative
+    outcome["competition_at_investment"] = opportunity.competition
+    outcome["info_quality_used"] = info_quality
+    outcome["estimated_return"] = est_ret
+
+    # Track for emergent agentic novelty (derivative = following, not novel = creating)
+    record_creative_action!(agent.uncertainty_metrics; derivative_adoption=is_derivative)
 
     return outcome
 end
@@ -487,7 +781,39 @@ function _execute_innovate!(
         outcome["success"] = true
         outcome["rd_spend"] = rd_spend
         outcome["innovation_return"] = innovation_return
-        outcome["is_new_combination"] = rand(agent.rng) < 0.3
+
+        # New combination probability connected to information system
+        # Get AI information parameters
+        ai_tier = get_ai_level(agent)
+        ai_config = get(agent.config.AI_LEVELS, ai_tier, nothing)
+        info_quality = isnothing(ai_config) ? 0.25 : Float64(ai_config.info_quality)
+        info_breadth = isnothing(ai_config) ? 0.20 : Float64(ai_config.info_breadth)
+
+        # Info breadth: access to more diverse knowledge → more combination possibilities
+        # Range: 0.20 (none) to 0.92 (premium) → bonus of 0.024 to 0.11
+        breadth_bonus = info_breadth * 0.12
+
+        # Info quality: better at identifying truly novel combinations
+        # BUT also realizes many "new" ideas already exist (reduces false positives)
+        # High accuracy = fewer claimed "new" combinations, but they're genuinely new
+        # Range: 0.25 (none) to 0.97 (premium) → adjustment of -0.02 to -0.078
+        accuracy_adjustment = -info_quality * 0.08
+
+        # Net effect: breadth helps, accuracy slightly reduces (trade-off)
+        # None:    0.22 + 0.024 - 0.020 = 0.224 base
+        # Premium: 0.22 + 0.110 - 0.078 = 0.252 base
+        new_combo_base = 0.22 + breadth_bonus + accuracy_adjustment
+
+        # Innovativeness trait still affects new combination rate
+        new_combo_prob = new_combo_base * (0.7 + 0.6 * agent.innovativeness)
+        is_new_combo = rand(agent.rng) < new_combo_prob
+        outcome["is_new_combination"] = is_new_combo
+        outcome["ai_tier_used"] = ai_tier
+        outcome["info_breadth_used"] = info_breadth
+        outcome["info_quality_used"] = info_quality
+
+        # Track for emergent agentic novelty
+        record_creative_action!(agent.uncertainty_metrics; new_combination=is_new_combo)
     else
         # Partial recovery on failure
         recovery = rd_spend * agent.config.INNOVATION_FAIL_RECOVERY_RATIO
@@ -519,18 +845,67 @@ function _execute_explore!(
     discovered = rand(agent.rng) < discovery_prob
 
     if discovered
+        # Get AI information parameters
+        ai_tier = get_ai_level(agent)
+        ai_config = get(agent.config.AI_LEVELS, ai_tier, nothing)
+        info_quality = isnothing(ai_config) ? 0.25 : Float64(ai_config.info_quality)
+        info_breadth = isnothing(ai_config) ? 0.20 : Float64(ai_config.info_breadth)
+
         # Increase knowledge in a random sector
         sector = rand(agent.rng, agent.config.SECTORS)
         current_knowledge = get(agent.resources.knowledge, sector, 0.1)
-        knowledge_gain = rand(agent.rng, Uniform(0.05, 0.15))
+
+        # Knowledge gain scales with info_breadth (broader access = faster learning)
+        # Range: 0.20 (none) to 0.92 (premium)
+        # None: base 0.05-0.15, Premium: base 0.05-0.15 * 1.43
+        breadth_multiplier = 0.7 + 0.6 * info_breadth  # 0.82 (none) to 1.25 (premium)
+        knowledge_gain = rand(agent.rng, Uniform(0.05, 0.15)) * breadth_multiplier
+
         agent.resources.knowledge[sector] = min(1.0, current_knowledge + knowledge_gain)
         agent.resources.knowledge_last_used[sector] = round
 
         outcome["success"] = true
         outcome["discovered_sector"] = sector
         outcome["knowledge_gain"] = knowledge_gain
+        outcome["base_sector"] = sector
+
+        # Niche discovery: trade-off between serendipity and systematic search
+        #
+        # SERENDIPITY (human advantage):
+        # - Random exploration can stumble on truly novel niches ("unknown unknowns")
+        # - Less constrained by existing mental models
+        # - Higher variance, occasionally finds things AI would never look for
+        #
+        # SYSTEMATIC (AI advantage):
+        # - Better at finding niches in analyzed/mapped territory ("known unknowns")
+        # - More thorough coverage of possibility space
+        # - Lower variance, reliably finds opportunities within scope
+        #
+        # Trade-off: neither is strictly better
+        serendipity_factor = (1.0 - info_breadth) * 0.12  # 0.096 (none) to 0.01 (premium)
+        systematic_factor = info_breadth * 0.08           # 0.016 (none) to 0.074 (premium)
+
+        # Net niche discovery base:
+        # None:    0.12 + 0.096 + 0.016 = 0.232 (serendipity advantage)
+        # Premium: 0.12 + 0.010 + 0.074 = 0.204 (slightly lower, but more reliable)
+        niche_discovery_base = 0.12 + serendipity_factor + systematic_factor
+
+        # Uncertainty tolerance still affects niche discovery (risk-takers explore edges)
+        niche_discovery_prob = niche_discovery_base * (0.6 + 0.8 * agent.uncertainty_tolerance)
+        discovered_niche = rand(agent.rng) < niche_discovery_prob
+        created_niche = discovered_niche && knowledge_gain > 0.12  # Strong discovery creates new niche
+        outcome["discovered_niche"] = discovered_niche
+        outcome["created_niche"] = created_niche
+        outcome["info_breadth_used"] = info_breadth
+        outcome["serendipity_factor"] = serendipity_factor
+        outcome["systematic_factor"] = systematic_factor
+
+        # Track for emergent agentic novelty
+        record_creative_action!(agent.uncertainty_metrics; niche_discovered=created_niche)
     else
         outcome["success"] = false
+        outcome["discovered_niche"] = false
+        outcome["created_niche"] = false
     end
 
     outcome["explore_cost"] = explore_cost
@@ -600,13 +975,25 @@ function process_matured_investments!(
             record_return!(agent.resources.performance, "invest", capital_returned;
                           ai_level=investment["ai_level"], round_num=round)
 
+            # Track emergent uncertainty metrics
+            estimated_return = Float64(get(investment, "estimated_return", ret_multiple))
+            competition_level = hasfield(typeof(opp), :competition) ? Float64(opp.competition) : 0.0
+            record_investment_outcome!(
+                agent.uncertainty_metrics,
+                estimated_return,
+                ret_multiple,
+                competition_level
+            )
+
             push!(matured_outcomes, Dict{String,Any}(
                 "investment" => investment,
                 "investment_amount" => invested_amount,
                 "capital_returned" => capital_returned,
                 "return_multiple" => ret_multiple,
                 "success" => success,
-                "round_matured" => round
+                "round_matured" => round,
+                "estimated_return" => estimated_return,
+                "competition_at_maturity" => competition_level
             ))
         else
             push!(remaining_investments, investment)
@@ -799,18 +1186,131 @@ function estimate_ai_cost(
     end
 
     cost_type = ai_config.cost_type
+    # Scale costs by AI_COST_INTENSITY (for robustness testing)
+    cost_intensity = agent.config.AI_COST_INTENSITY
 
     if cost_type == "subscription"
-        base_cost = Float64(ai_config.cost)
-        per_use = Float64(ai_config.per_use_cost)
+        base_cost = Float64(ai_config.cost) * cost_intensity
+        per_use = Float64(ai_config.per_use_cost) * cost_intensity
         # Amortize subscription over rounds
         amort_rounds = max(1, agent.config.AI_SUBSCRIPTION_AMORTIZATION_ROUNDS)
         return base_cost / amort_rounds + per_use * max(expected_calls, 0.0)
     elseif cost_type == "per_use"
-        return Float64(ai_config.cost) * max(expected_calls, 0.0)
+        return Float64(ai_config.cost) * cost_intensity * max(expected_calls, 0.0)
     end
 
     return 0.0
+end
+
+"""
+Start a subscription schedule for a given AI level.
+Charges the full quarterly cost per round (monthly cost × 3 months).
+Since rounds = quarters and AI costs are documented as monthly fees,
+we convert: Premium at 3500/month = 10500 per quarter.
+"""
+function start_subscription_schedule!(
+    agent::EmergentAgent,
+    ai_level::String,
+    ai_config::AILevelConfig
+)
+    monthly_cost = Float64(ai_config.cost)
+
+    if monthly_cost <= 0
+        return
+    end
+
+    # Convert monthly cost to quarterly cost (rounds = quarters = 3 months)
+    quarterly_cost = monthly_cost * 3.0
+
+    # Scale costs by AI_COST_INTENSITY (for robustness testing)
+    cost_intensity = agent.config.AI_COST_INTENSITY
+    quarterly_cost = quarterly_cost * cost_intensity
+
+    # Set up subscription to charge EVERY round (no amortization)
+    agent.subscription_accounts[ai_level] = 1  # Active subscription
+    agent.subscription_rates[ai_level] = quarterly_cost  # Full quarterly cost
+    agent.subscription_deferral_remaining[ai_level] = 0
+end
+
+"""
+Charge one subscription installment for a given AI level.
+Deducts the full quarterly cost from agent capital EVERY round.
+Returns the amount charged.
+"""
+function charge_subscription_installment!(
+    agent::EmergentAgent,
+    ai_level::String
+)::Float64
+    active = get(agent.subscription_accounts, ai_level, 0)
+    rate = get(agent.subscription_rates, ai_level, 0.0)
+
+    if active <= 0 || rate <= 0
+        return 0.0
+    end
+
+    # Check deferral (credit line grace period)
+    deferral = get(agent.subscription_deferral_remaining, ai_level, 0)
+    if deferral > 0
+        agent.subscription_deferral_remaining[ai_level] = deferral - 1
+        return 0.0
+    end
+
+    # CHARGE THE SUBSCRIPTION - deduct full quarterly cost from capital
+    set_capital!(agent, get_capital(agent) - rate)
+
+    # Subscription remains active (charge EVERY round, no amortization)
+    # subscription_accounts[ai_level] stays at 1 to indicate active subscription
+
+    return rate
+end
+
+"""
+Apply subscription charges for all active AI subscriptions.
+Called once per round to charge all subscription installments.
+Returns total amount charged.
+"""
+function apply_subscription_carry!(
+    agent::EmergentAgent,
+    round::Int
+)::Float64
+    total = 0.0
+    credit_line = agent.config.AI_CREDIT_LINE_ROUNDS
+
+    for level in collect(keys(agent.subscription_accounts))
+        # Allow credit line grace period for advanced/premium tiers
+        if credit_line > 0 && round <= credit_line && level in ("advanced", "premium")
+            continue
+        end
+
+        total += charge_subscription_installment!(agent, level)
+    end
+
+    agent.last_subscription_charge = total
+    return total
+end
+
+"""
+Ensure subscription schedule is active for the given AI level.
+Call this whenever an agent adopts or switches to a subscription-based AI tier.
+"""
+function ensure_subscription_schedule!(
+    agent::EmergentAgent,
+    ai_level::String
+)
+    ai_config = get(agent.config.AI_LEVELS, ai_level, nothing)
+
+    if isnothing(ai_config)
+        return
+    end
+
+    if ai_config.cost_type != "subscription" || ai_config.cost <= 0
+        return
+    end
+
+    # Start schedule if not already active
+    if get(agent.subscription_accounts, ai_level, 0) <= 0
+        start_subscription_schedule!(agent, ai_level, ai_config)
+    end
 end
 
 """
@@ -903,6 +1403,9 @@ function choose_ai_level(
     ref_scale = max(operating_cost * 4.0, cash_buffer * 0.12, 1.0)
 
     cost_ratios = Dict{String,Float64}()
+    # Scale costs by AI_COST_INTENSITY (for robustness testing)
+    cost_intensity = agent.config.AI_COST_INTENSITY
+
     for tier in order
         if tier == "none"
             cost_ratios[tier] = 0.0
@@ -914,8 +1417,8 @@ function choose_ai_level(
             continue
         end
         cost_type = cfg.cost_type
-        base_cost = Float64(cfg.cost)
-        per_use_cost = Float64(cfg.per_use_cost)
+        base_cost = Float64(cfg.cost) * cost_intensity
+        per_use_cost = Float64(cfg.per_use_cost) * cost_intensity
 
         total_cost = if cost_type == "subscription"
             per_round = base_cost / amort_horizon
@@ -1010,6 +1513,9 @@ function choose_ai_level(
     push!(agent.ai_tier_history, best_tier)
     agent.current_ai_level = best_tier
 
+    # Start subscription schedule if this is a subscription tier
+    ensure_subscription_schedule!(agent, best_tier)
+
     return best_tier
 end
 
@@ -1031,14 +1537,36 @@ function calculate_investment_utility(
         return 0.0
     end
 
-    # Get best opportunity score
-    max_score = 0.0
-    for opp in opportunities
-        score = evaluate_opportunity_basic(agent, opp, market_conditions)
-        max_score = max(max_score, score)
-    end
+    # Get AI tier parameters - NOW USED for opportunity evaluation
+    ai_config = get(agent.config.AI_LEVELS, ai_level, nothing)
+    info_quality = isnothing(ai_config) ? 0.25 : Float64(ai_config.info_quality)
+    info_breadth = isnothing(ai_config) ? 0.20 : Float64(ai_config.info_breadth)
 
-    scaled_score = stable_sigmoid(max_score - 1.0)
+    # Get best opportunity score with AI-enhanced evaluation
+    max_score = 0.0
+    avg_score = 0.0
+    for opp in opportunities
+        base_score = evaluate_opportunity_basic(agent, opp, market_conditions)
+
+        # AI tier advantage: better info_quality = more accurate opportunity assessment
+        # Higher info_quality reduces noise in evaluation (sees true potential better)
+        noise_reduction = info_quality * 0.3  # Up to 30% noise reduction for premium
+        ai_adjusted_score = base_score * (1.0 + noise_reduction * (opp.latent_return_potential - 1.0))
+
+        # info_breadth helps identify opportunities across more sectors
+        breadth_bonus = info_breadth * 0.1 * (1.0 - opp.complexity)  # Simpler opps benefit more from broad view
+        ai_adjusted_score += breadth_bonus
+
+        max_score = max(max_score, ai_adjusted_score)
+        avg_score += ai_adjusted_score
+    end
+    avg_score /= length(opportunities)
+
+    # AI advantage: premium can better distinguish best from average opportunities
+    score_spread = max_score - avg_score
+    ai_selection_bonus = info_quality * score_spread * 0.2  # Better at picking winners
+
+    scaled_score = stable_sigmoid(max_score + ai_selection_bonus - 1.0)
 
     # Extract uncertainty levels from perception
     actor_unc = Float64(get(get(perception, "actor_ignorance", Dict()), "level", 0.5))
@@ -1097,13 +1625,20 @@ end
 
 """
 Calculate innovation utility.
+Now uses AI tier for decision-making advantage.
 """
 function calculate_innovation_utility(
     agent::EmergentAgent,
     market_conditions::Dict{String,Any},
-    perception::Dict{String,Any}
+    perception::Dict{String,Any};
+    ai_level::String = "none"
 )::Float64
     base_drive = get(agent.traits, "innovativeness", 0.5) * 0.5 + 0.05
+
+    # Get AI tier parameters - NOW USED for innovation decision
+    ai_config = get(agent.config.AI_LEVELS, ai_level, nothing)
+    info_quality = isnothing(ai_config) ? 0.25 : Float64(ai_config.info_quality)
+    info_breadth = isnothing(ai_config) ? 0.20 : Float64(ai_config.info_breadth)
 
     # Extract signals
     practical_unc = Float64(get(get(perception, "practical_indeterminism", Dict()), "level", 0.5))
@@ -1111,6 +1646,17 @@ function calculate_innovation_utility(
 
     indeterminism_bonus = practical_unc * 0.4
     innovation_opportunity = agentic_unc * 0.25
+
+    # AI advantage for innovation decisions:
+    # 1. info_breadth: broader knowledge access enables identifying novel combinations
+    breadth_innovation_bonus = info_breadth * 0.15  # Up to +14% for premium
+
+    # 2. info_quality: better at assessing innovation feasibility
+    #    High quality helps identify which innovations are worth pursuing
+    feasibility_assessment = info_quality * 0.10  # Up to +10% for premium
+
+    # 3. AI helps reduce perceived risk of innovation (better analysis of outcomes)
+    ai_risk_reduction = info_quality * 0.08  # Reduces avoidance effect
 
     # Capital constraints
     capital_ratio = get_capital(agent) / max(agent.resources.performance.initial_equity, 1.0)
@@ -1129,12 +1675,14 @@ function calculate_innovation_utility(
     raw_score = (
         base_drive +
         indeterminism_bonus +
-        innovation_opportunity -
+        innovation_opportunity +
+        breadth_innovation_bonus +      # NEW: AI breadth bonus
+        feasibility_assessment -         # NEW: AI quality bonus
         0.25 * liquidity_penalty -
         0.3 * rd_burden -
         0.4 * loss_ratio +
         0.2 * (risk_tolerance - 0.5) -
-        0.15 * avoidance
+        0.15 * avoidance * (1.0 - ai_risk_reduction)  # MODIFIED: AI reduces avoidance
     )
 
     return clamp(stable_sigmoid(raw_score - 0.6), 0.02, 0.98)
@@ -1173,9 +1721,7 @@ function calculate_exploration_utility(
     trust_penalty = max(0.0, ai_trust_level - 0.5) * 0.45
 
     recursion_penalty = max(0.0, recursive_unc - 0.5) * 0.2
-    if ai_level in ["premium", "advanced"]
-        recursion_penalty += 0.12 * max(0.0, recursive_unc - 0.5)
-    end
+    # No tier-specific modification - let behavior emerge naturally
 
     explore_roic = compute_roic(agent.resources.performance, "explore")
     momentum_bonus = clamp(explore_roic, -0.5, 0.5) * 0.2
@@ -1317,13 +1863,20 @@ end
 
 """
 Evaluate portfolio opportunities and return ranked list.
+
+Sequential Decision Signals:
+If early_signals is provided (from sequential decision making), opportunities that
+early investors chose receive a boost. The effect scales with info_quality - Premium
+agents trust visible signals more (rational herding / information cascades).
 """
 function evaluate_portfolio_opportunities(
     agent::EmergentAgent,
     opportunities::Vector{Opportunity},
     market_conditions::Dict{String,Any},
     perception::Dict{String,Any};
-    ai_level::String = "none"
+    ai_level::String = "none",
+    early_signals::Union{Dict{String,Int},Nothing} = nothing,
+    signal_weight::Float64 = 0.15
 )::Vector{Dict{String,Any}}
     if isempty(opportunities)
         return Dict{String,Any}[]
@@ -1331,31 +1884,81 @@ function evaluate_portfolio_opportunities(
 
     evaluations = Dict{String,Any}[]
 
-    # Filter opportunities based on AI level
+    # Evaluate ALL opportunities - no artificial cutoffs
+    # Herding emerges NATURALLY from information quality:
+    # - Premium agents have low noise → all rank the SAME opportunities as best → convergence
+    # - None agents have high noise → rank DIFFERENT opportunities as best → distribution
+    #
+    # NOVELTY INVERSION: Premium's advantage is INVERTED for novel opportunities
+    # - For established opportunities: Premium has low noise (accurate)
+    # - For novel opportunities: Premium has HIGH noise (patterns don't apply)
+    # This reflects "the more important the innovation, the less predictable it is" (Rescher)
     opp_pool = copy(opportunities)
     if length(opp_pool) > 1
-        if ai_level in ["premium", "advanced"]
-            # Sort by quality, take top portion
-            sort!(opp_pool, by=o -> o.latent_return_potential, rev=true)
-            cutoff = max(1, Int(floor(length(opp_pool) * (ai_level == "premium" ? 0.65 : 0.8))))
-            opp_pool = opp_pool[1:cutoff]
-        else
-            # Random shuffle, discard some
-            shuffle!(agent.rng, opp_pool)
-            discard = ai_level == "basic" ? 0.25 : 0.4
-            keep = max(1, Int(floor(length(opp_pool) * (1.0 - discard))))
-            opp_pool = opp_pool[1:keep]
+        # Get actual AI config parameters
+        ai_config = get(agent.config.AI_LEVELS, ai_level, nothing)
+        info_quality = isnothing(ai_config) ? 0.25 : Float64(ai_config.info_quality)
+
+        # Base noise scale inversely proportional to info quality
+        # Premium (0.97): base_noise = 0.015 → accurate for established opportunities
+        # None (0.25):    base_noise = 0.375 → noisy for all opportunities
+        base_noise_scale = 0.5 * (1.0 - info_quality)
+
+        # Novelty noise inversion factor from config
+        inversion_factor = getfield_default(agent.config, :NOVELTY_NOISE_INVERSION_FACTOR, 0.4)
+
+        # Sort by ESTIMATED returns with novelty-dependent noise
+        estimated_returns = Dict{String,Float64}()
+        for opp in opp_pool
+            # Get opportunity novelty score (0.0 = established, 1.0 = very novel)
+            opp_novelty = hasfield(typeof(opp), :novelty_score) ? opp.novelty_score : 0.0
+
+            # For NOVEL opportunities, Premium's advantage inverts:
+            # - Established (novelty=0): effective_noise = base_noise_scale (Premium accurate)
+            # - Novel (novelty=1): effective_noise = base_noise_scale + info_quality * inversion_factor
+            #   Premium at novelty=1: 0.015 + 0.97 * 0.4 = 0.403 (HIGHER than None's 0.375!)
+            #   None at novelty=1: 0.375 + 0.25 * 0.4 = 0.475 (slightly higher)
+            novelty_noise_penalty = opp_novelty * info_quality * inversion_factor
+
+            effective_noise = base_noise_scale + novelty_noise_penalty
+            noise = randn(agent.rng) * effective_noise
+            base_estimate = opp.latent_return_potential + noise
+
+            # Apply early signals boost (information cascade / sequential decision visibility)
+            # All tiers respond uniformly to early investor signals - let herding emerge naturally
+            if !isnothing(early_signals)
+                signal_count = get(early_signals, opp.id, 0)
+                if signal_count > 0
+                    # Uniform signal boost for all tiers - no hardcoded herding susceptibility
+                    signal_boost = signal_count * signal_weight * 0.1
+                    base_estimate *= (1.0 + signal_boost)
+                end
+            end
+
+            estimated_returns[opp.id] = base_estimate
         end
+        sort!(opp_pool, by=o -> estimated_returns[o.id], rev=true)
+
+        # NO CUTOFF - agents evaluate all opportunities and pick the best according to their estimates
     end
 
     for opp in opp_pool
         base_score = evaluate_opportunity_basic(agent, opp, market_conditions)
         final_score = apply_uncertainty_adjustments(agent, base_score, opp, perception)
 
+        # Get estimated return (if computed during sorting, otherwise use latent return)
+        est_return = if @isdefined(estimated_returns) && haskey(estimated_returns, opp.id)
+            estimated_returns[opp.id]
+        else
+            opp.latent_return_potential
+        end
+
         push!(evaluations, Dict{String,Any}(
             "opportunity" => opp,
             "final_score" => final_score,
-            "ai_level_used" => ai_level
+            "ai_level_used" => ai_level,
+            "estimated_return" => est_return,
+            "competition_at_evaluation" => hasfield(typeof(opp), :competition) ? opp.competition : 0.0
         ))
     end
 
@@ -1382,7 +1985,9 @@ function make_decision!(
     neighbor_agents::Vector{EmergentAgent} = EmergentAgent[],
     ai_level_override::Union{String,Nothing} = nothing,
     innovation_engine::Union{InnovationEngine,Nothing} = nothing,
-    info_system::Union{InformationSystem,Nothing} = nothing
+    info_system::Union{InformationSystem,Nothing} = nothing,
+    early_signals::Union{Dict{String,Int},Nothing} = nothing,
+    signal_weight::Float64 = 0.15
 )::Dict{String,Any}
     if !agent.alive
         return Dict{String,Any}(
@@ -1433,7 +2038,7 @@ function make_decision!(
     estimated_cost = agent.config.BASE_OPERATIONAL_COST
 
     invest_utility = calculate_investment_utility(agent, opportunities, market_conditions, perception; ai_level=ai_level)
-    innovate_utility = calculate_innovation_utility(agent, market_conditions, perception)
+    innovate_utility = calculate_innovation_utility(agent, market_conditions, perception; ai_level=ai_level)
     explore_utility = calculate_exploration_utility(agent, perception; ai_level=ai_level)
     maintain_utility = calculate_maintain_utility(agent, market_conditions, perception; estimated_cost=estimated_cost)
 
@@ -1480,10 +2085,19 @@ function make_decision!(
 
     # Execute chosen action
     outcome = if chosen_action == "invest" && !isempty(opportunities)
-        evals = evaluate_portfolio_opportunities(agent, opportunities, market_conditions, perception; ai_level=ai_level)
+        evals = evaluate_portfolio_opportunities(
+            agent, opportunities, market_conditions, perception;
+            ai_level=ai_level,
+            early_signals=early_signals,
+            signal_weight=signal_weight
+        )
         if !isempty(evals)
-            best_opp = evals[1]["opportunity"]
-            execute_action!(agent, "invest", market, round_num; opportunity=best_opp)
+            best_eval = evals[1]
+            best_opp = best_eval["opportunity"]
+            estimated_return = get(best_eval, "estimated_return", best_opp.latent_return_potential)
+            execute_action!(agent, "invest", market, round_num;
+                opportunity=best_opp,
+                estimated_return=estimated_return)
         else
             execute_action!(agent, "maintain", market, round_num)
         end

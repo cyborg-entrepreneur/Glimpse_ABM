@@ -13,7 +13,7 @@ using DataFrames
         # Test default config creation
         config = EmergentConfig()
         @test config.N_AGENTS == 1000
-        @test config.N_ROUNDS == 250
+        @test config.N_ROUNDS == 120
         @test config.RANDOM_SEED == 42
 
         # Test sectors populated
@@ -190,58 +190,6 @@ using DataFrames
         probs = [2.0, 3.0, 5.0]
         normalized = GlimpseABM.normalize_probs(probs)
         @test isapprox(sum(normalized), 1.0)
-    end
-
-    @testset "Causal Analysis" begin
-        # Test Cohen's d
-        group1 = [1.0, 2.0, 3.0, 4.0, 5.0] .+ 0.5
-        group2 = [1.0, 2.0, 3.0, 4.0, 5.0]
-        result = GlimpseABM.cohens_d(group1, group2)
-        @test result.measure == "Hedges' g"
-        @test !isnan(result.value)
-        @test result.ci_lower < result.value < result.ci_upper
-
-        # Test Cliff's delta
-        result2 = GlimpseABM.cliffs_delta(group1, group2)
-        @test result2.measure == "Cliff's delta"
-        @test -1.0 <= result2.value <= 1.0
-
-        # Test ANOVA
-        groups = [randn(20), randn(20) .+ 0.5, randn(20) .+ 1.0]
-        anova_result = GlimpseABM.anova_oneway(groups)
-        @test anova_result.test_name == "One-way ANOVA"
-        @test anova_result.statistic >= 0
-        @test 0.0 <= anova_result.p_value <= 1.0
-        @test 0.0 <= anova_result.effect_size <= 1.0
-
-        # Test Kruskal-Wallis
-        kw_result = GlimpseABM.kruskal_wallis(groups)
-        @test kw_result.test_name == "Kruskal-Wallis H"
-        @test kw_result.statistic >= 0
-
-        # Test bootstrap CI
-        data = randn(50) .+ 1.0
-        boot_result = GlimpseABM.bootstrap_ci(data, n_bootstrap=100)
-        @test !isnan(boot_result.estimate)
-        @test boot_result.ci_lower < boot_result.ci_upper
-
-        # Test Mann-Whitney U
-        mw_result = GlimpseABM.mann_whitney_u(group1, group2)
-        @test !isnan(mw_result.U)
-        @test 0.0 <= mw_result.p_value <= 1.0
-    end
-
-    @testset "CLI Module" begin
-        # Test argument parsing
-        args = GlimpseABM.parse_args(["--task", "fixed", "--agents", "100"])
-        @test args["task"] == "fixed"
-        @test args["agents"] == 100
-
-        # Test default values
-        args2 = GlimpseABM.parse_args(String[])
-        @test args2["task"] == "master"
-        @test args2["runs"] == 50
-        @test args2["seed"] == 42
     end
 
 end

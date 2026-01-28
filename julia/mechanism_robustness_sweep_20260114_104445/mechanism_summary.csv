@@ -1,6 +1,0 @@
-mechanism,ate_at_0pct,ate_at_100pct,delta_ate,contribution_pct,paradox_persists
-Competition,-0.014650,-0.090600,-0.075950,83.83,yes
-Hallucination,-0.051750,-0.055850,-0.004100,7.34,yes
-Overconfidence,-0.058550,-0.072100,-0.013550,18.79,yes
-NoveltyConstraint,-0.071700,-0.076000,-0.004300,5.66,yes
-AICost,-0.017500,-0.045500,-0.028000,61.54,yes

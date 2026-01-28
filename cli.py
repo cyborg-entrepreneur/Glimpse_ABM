@@ -1079,6 +1079,21 @@ def run_fixed_level_uncertainty_batch(
     framework = ComprehensiveAnalysisFramework(exp_output_dir, experiment_config)
     analysis_results = framework.run_full_analysis()
 
+    # Run complete causal analysis with diagnostic plots
+    print("\n📊 Running causal inference analysis...")
+    try:
+        from .statistical_tests import run_complete_causal_analysis
+        causal_results = run_complete_causal_analysis(
+            results_dir=exp_output_dir,
+            is_fixed_tier=(experiment_config.AGENT_AI_MODE == "fixed")
+        )
+        analysis_results['causal_analysis'] = causal_results
+        print(f"   ✓ Causal analysis complete: {len(causal_results)} tables generated")
+    except ImportError as e:
+        print(f"   ⚠️ Could not import causal analysis: {e}")
+    except Exception as e:
+        print(f"   ⚠️ Causal analysis failed: {e}")
+
     analysis_metadata_path: Optional[Path] = None
     if not framework.agent_df.empty:
         if skip_visualizations:
@@ -1391,7 +1406,7 @@ def _build_scenarios(base_config: EmergentConfig) -> Dict[str, EmergentConfig]:
 
     recursion = copy.deepcopy(baseline)
     recursion.COMPETITION_COST_MULTIPLIER = base_config.COMPETITION_COST_MULTIPLIER * 1.35
-    recursion.COMPETITION_EFFECT = min(1.0, base_config.COMPETITION_EFFECT * 1.5)
+    recursion.COMPETITION_SCALE_FACTOR = min(2.0, base_config.COMPETITION_SCALE_FACTOR * 1.5)
     recursion.BLACK_SWAN_PROBABILITY = max(0.01, base_config.BLACK_SWAN_PROBABILITY * 1.2)
     scenarios["High_CompetitiveRecursion"] = recursion
     return scenarios

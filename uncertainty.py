@@ -342,10 +342,15 @@ class KnightianUncertaintyEnvironment:
             "herding_counts": {},
             "invest_by_ai": {},
             "tier_stats": {},
+            "ai_action_correlation": 0.0,  # NEW: Track AI-induced action correlation
         }
         invest_counts = collections.Counter()
         invest_by_ai = collections.Counter()
         tiers = ["none", "basic", "advanced", "premium"]
+
+        # NEW: Track actions by tier for correlation calculation
+        actions_by_tier = {tier: [] for tier in tiers}
+        opportunities_by_tier = {tier: collections.Counter() for tier in tiers}
         tier_template = {
             "total_actions": 0,
             "innovate": 0,
@@ -363,6 +368,10 @@ class KnightianUncertaintyEnvironment:
             if tier not in tier_stats:
                 tier_stats[tier] = tier_template.copy()
             tier_stats[tier]["total_actions"] += 1
+
+            # NEW: Track actions for correlation calculation
+            actions_by_tier[tier].append(act_type)
+
             if act_type == "innovate":
                 summary["innovate"] += 1
                 if action.get("is_new_combination"):
@@ -388,6 +397,8 @@ class KnightianUncertaintyEnvironment:
                 opp_id = details.get("id") or action.get("opportunity_id")
                 if opp_id:
                     invest_counts[str(opp_id)] += 1
+                    # NEW: Track opportunity choices by tier
+                    opportunities_by_tier[tier][str(opp_id)] += 1
                 tier = normalize_ai_label(action.get("ai_level_used", "none"))
                 invest_by_ai[tier] += 1
             else:
@@ -420,6 +431,41 @@ class KnightianUncertaintyEnvironment:
             combo_hhi, sector_hhi = market.get_combination_diversity_metrics()
             summary["combo_hhi"] = combo_hhi
             summary["sector_hhi"] = sector_hhi
+
+        # NEW: Calculate AI action correlation for competitive recursion
+        # When agents with AI choose similar actions/opportunities, recursion increases
+        ai_tiers = ["basic", "advanced", "premium"]
+        ai_action_counts = sum(len(actions_by_tier[tier]) for tier in ai_tiers)
+
+        if ai_action_counts >= 2:
+            # Calculate correlation based on opportunity clustering among AI agents
+            ai_opportunity_hhi = 0.0
+            total_ai_investments = sum(sum(opportunities_by_tier[tier].values()) for tier in ai_tiers)
+
+            if total_ai_investments > 0:
+                # HHI of opportunities among AI agents (higher = more correlated)
+                all_ai_opps = collections.Counter()
+                for tier in ai_tiers:
+                    for opp_id, count in opportunities_by_tier[tier].items():
+                        all_ai_opps[opp_id] += count
+
+                ai_opportunity_hhi = sum(
+                    (count / total_ai_investments) ** 2 for count in all_ai_opps.values()
+                )
+
+            # Correlation ranges from baseline 0.3 (no AI) to 0.6+ (high AI adoption with clustering)
+            # Scale by AI adoption rate and opportunity clustering
+            ai_adoption_rate = ai_action_counts / max(1, len(agent_actions))
+            summary["ai_action_correlation"] = float(
+                np.clip(
+                    0.30 + 0.30 * ai_adoption_rate * ai_opportunity_hhi,
+                    0.30,
+                    0.70
+                )
+            )
+        else:
+            summary["ai_action_correlation"] = 0.30  # Baseline correlation without AI
+
         return summary
 
     def _compute_component_scarcity(self) -> float:
@@ -877,11 +923,16 @@ class KnightianUncertaintyEnvironment:
         agent_count = max(1, getattr(self.config, "N_AGENTS", 1))
         alive_agents = getattr(self, "_last_alive_agents", agent_count)
         population_factor = float(np.clip(alive_agents / agent_count, 0.15, 1.0))
+
+        # Track AI action correlation for analysis (no direct effect on recursion)
+        ai_correlation = float(action_summary.get("ai_action_correlation", 0.30))
+
         rw = getattr(self.config, "RECURSION_WEIGHTS", {}) or {}
         crowd_w = float(rw.get("crowd_weight", 0.35))
         vol_w = float(rw.get("volatility_weight", 0.30))
         herd_w = float(rw.get("ai_herd_weight", 0.40))
         premium_reuse_w = float(rw.get("premium_reuse_weight", 0.20))
+
         crowding_component = (
             0.45 * invest_hhi
             + 0.35 * premium_share
@@ -920,6 +971,7 @@ class KnightianUncertaintyEnvironment:
             "volatility": volatility,
             "ai_premium_share": premium_share,
             "ai_herding_intensity": ai_herding_intensity,
+            "ai_action_correlation": ai_correlation,  # NEW: Track correlation metric
             "ai_delta": ai_effects.get("ai_recursion_delta"),
         }
 
