@@ -6,7 +6,7 @@ A comprehensive agent-based model for studying the **AI Information Paradox**—
 
 GLIMPSE ABM simulates entrepreneurial decision-making under uncertainty, examining how AI augmentation transforms rather than eliminates uncertainty. The model demonstrates that superior AI capabilities can lead to worse collective outcomes due to convergent behavior and competitive crowding.
 
-### The AI Information Paradox
+### The AI Paradox of Future Knowledge
 
 The central finding of this simulation is counterintuitive: **agents with the best AI tools (Premium tier) consistently underperform agents with no AI assistance**. This paradox emerges through a specific causal mechanism:
 
