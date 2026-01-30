@@ -270,7 +270,13 @@ function get_ai_info_signals(kb::KnowledgeBase, ai_level::String)::Tuple{Float64
     end
 
     profile = get(kb.config.AI_LEVELS, ai_level, kb.config.AI_LEVELS["none"])
-    return (Float64(get(profile, "info_quality", 0.0)), Float64(get(profile, "info_breadth", 0.0)))
+    # AILevelConfig is a struct, access fields directly
+    if profile isa AILevelConfig
+        return (Float64(profile.info_quality), Float64(profile.info_breadth))
+    else
+        # Fallback for Dict-style access (legacy)
+        return (Float64(get(profile, "info_quality", 0.0)), Float64(get(profile, "info_breadth", 0.0)))
+    end
 end
 
 """

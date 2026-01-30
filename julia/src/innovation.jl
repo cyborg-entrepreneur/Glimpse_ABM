@@ -186,9 +186,10 @@ function attempt_innovation!(
     else
         engine.config.INNOVATION_PROBABILITY
     end
+    # Use agent's innovativeness trait and competence field
     competence_score = (
         get(agent.traits, "innovativeness", 0.5) * 0.6 +
-        get(agent.capabilities, "innovation", 0.1) * 0.4
+        (hasfield(typeof(agent), :competence) ? agent.competence : 0.5) * 0.4
     )
 
     ai_bonus_map = Dict("none" => 0.0, "basic" => 0.12, "advanced" => 0.25, "premium" => 0.35)
@@ -254,7 +255,9 @@ function attempt_innovation!(
     end
 
     # Determine innovation type
-    experience_units = get(agent.experience, "units", 0.0)
+    # Use survival_rounds as a proxy for experience, or innovation_count
+    experience_units = Float64(hasfield(typeof(agent), :survival_rounds) ? agent.survival_rounds : 0) +
+                       Float64(hasfield(typeof(agent), :innovation_count) ? agent.innovation_count * 2 : 0)
     innovation_type = determine_innovation_type(
         engine,
         accessible_knowledge,
@@ -497,7 +500,7 @@ function select_knowledge_combination(
         end
         weights ./= total_weight
 
-        choice_pos = weighted_choice(1:length(remaining_indices), weights; rng=rng)
+        choice_pos = weighted_choice(collect(1:length(remaining_indices)), weights; rng=rng)
         next_idx = remaining_indices[choice_pos]
         deleteat!(remaining_indices, choice_pos)
 

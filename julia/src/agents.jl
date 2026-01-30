@@ -80,6 +80,11 @@ mutable struct AgentUncertaintyMetrics
 
     # Round tracking for temporal analysis
     round_metrics::Vector{Dict{String,Float64}}
+
+    # Knowledge Recombination Metrics - tracks innovation quality from knowledge system
+    innovation_qualities::Vector{Float64}    # Quality score (0-1) of each innovation
+    innovation_novelties::Vector{Float64}    # Novelty score (0-1) of each innovation
+    innovation_scarcities::Vector{Float64}   # Scarcity bonus (0-1) of each innovation
 end
 
 function AgentUncertaintyMetrics()
@@ -91,7 +96,10 @@ function AgentUncertaintyMetrics()
         0,          # derivative_adoptions
         0,          # total_actions
         Float64[],  # competition_levels
-        Dict{String,Float64}[]  # round_metrics
+        Dict{String,Float64}[],  # round_metrics
+        Float64[],  # innovation_qualities
+        Float64[],  # innovation_novelties
+        Float64[]   # innovation_scarcities
     )
 end
 
@@ -624,7 +632,10 @@ function execute_action!(
     market::MarketEnvironment,
     round::Int;
     opportunity::Union{Opportunity,Nothing} = nothing,
-    estimated_return::Union{Float64,Nothing} = nothing
+    estimated_return::Union{Float64,Nothing} = nothing,
+    innovation_engine::Union{InnovationEngine,Nothing} = nothing,
+    market_conditions::Union{Dict{String,Any},Nothing} = nothing,
+    uncertainty_perception::Union{Dict{String,Any},Nothing} = nothing
 )::Dict{String,Any}
     outcome = Dict{String,Any}(
         "action" => action,
@@ -637,7 +648,10 @@ function execute_action!(
     if action == "invest" && !isnothing(opportunity)
         outcome = _execute_invest!(agent, opportunity, market, round, outcome; estimated_return=estimated_return)
     elseif action == "innovate"
-        outcome = _execute_innovate!(agent, market, round, outcome)
+        outcome = _execute_innovate!(agent, market, round, outcome;
+            innovation_engine=innovation_engine,
+            market_conditions=market_conditions,
+            uncertainty_perception=uncertainty_perception)
     elseif action == "explore"
         outcome = _execute_explore!(agent, market, round, outcome)
     else  # maintain
@@ -744,11 +758,15 @@ function _execute_innovate!(
     agent::EmergentAgent,
     market::MarketEnvironment,
     round::Int,
-    outcome::Dict{String,Any}
+    outcome::Dict{String,Any};
+    innovation_engine::Union{InnovationEngine,Nothing} = nothing,
+    market_conditions::Union{Dict{String,Any},Nothing} = nothing,
+    uncertainty_perception::Union{Dict{String,Any},Nothing} = nothing
 )::Dict{String,Any}
     capital = get_capital(agent)
+    ai_tier = get_ai_level(agent)
 
-    # Innovation cost
+    # Innovation cost (R&D spend)
     rd_spend = min(
         capital * agent.config.INNOVATION_BASE_SPEND_RATIO,
         agent.config.INNOVATION_MAX_SPEND
@@ -759,73 +777,149 @@ function _execute_innovate!(
     end
 
     set_capital!(agent, capital - rd_spend)
+    outcome["rd_spend"] = rd_spend
+    outcome["ai_tier_used"] = ai_tier
 
-    # Innovation success probability
-    base_prob = agent.config.INNOVATION_PROBABILITY
-    competence_factor = agent.competence
-    innovativeness_factor = agent.innovativeness
+    # =========================================================================
+    # USE KNOWLEDGE-BASED INNOVATION SYSTEM (if available)
+    # =========================================================================
+    if !isnothing(innovation_engine)
+        # Use the full knowledge recombination system
+        mkt_cond = isnothing(market_conditions) ? Dict{String,Any}("regime" => "normal") : market_conditions
 
-    success_prob = base_prob * (0.5 + 0.5 * competence_factor) * (0.7 + 0.3 * innovativeness_factor)
-    success = rand(agent.rng) < success_prob
+        # Attempt to create an innovation through knowledge recombination
+        innovation = attempt_innovation!(
+            innovation_engine,
+            agent,
+            mkt_cond,
+            round;
+            ai_level=ai_tier,
+            uncertainty_perception=uncertainty_perception,
+            decision_perception=uncertainty_perception,
+            rng=agent.rng
+        )
 
-    if success
-        # Create innovation value
-        base_return = rd_spend * agent.config.INNOVATION_SUCCESS_BASE_RETURN
-        multiplier = rand(agent.rng, Uniform(agent.config.INNOVATION_SUCCESS_RETURN_MULTIPLIER...))
-        innovation_return = base_return * multiplier
+        if !isnothing(innovation)
+            # Innovation was created through knowledge recombination
+            # Now evaluate its success and calculate returns
 
-        set_capital!(agent, get_capital(agent) + innovation_return)
-        agent.innovation_count += 1
-        agent.success_count += 1
+            # Get market innovations for competition calculation
+            market_innovations = collect(values(innovation_engine.innovations))
 
-        outcome["success"] = true
-        outcome["rd_spend"] = rd_spend
-        outcome["innovation_return"] = innovation_return
+            # Evaluate innovation success based on quality, novelty, scarcity, competition
+            success, impact, cash_multiple = evaluate_innovation_success!(
+                innovation_engine,
+                innovation,
+                mkt_cond,
+                market_innovations;
+                rng=agent.rng
+            )
 
-        # New combination probability connected to information system
-        # Get AI information parameters
-        ai_tier = get_ai_level(agent)
-        ai_config = get(agent.config.AI_LEVELS, ai_tier, nothing)
-        info_quality = isnothing(ai_config) ? 0.25 : Float64(ai_config.info_quality)
-        info_breadth = isnothing(ai_config) ? 0.20 : Float64(ai_config.info_breadth)
+            # Calculate actual returns based on R&D spend and knowledge-derived multiplier
+            innovation_return = rd_spend * cash_multiple
 
-        # Info breadth: access to more diverse knowledge → more combination possibilities
-        # Range: 0.20 (none) to 0.92 (premium) → bonus of 0.024 to 0.11
-        breadth_bonus = info_breadth * 0.12
+            set_capital!(agent, get_capital(agent) + innovation_return)
 
-        # Info quality: better at identifying truly novel combinations
-        # BUT also realizes many "new" ideas already exist (reduces false positives)
-        # High accuracy = fewer claimed "new" combinations, but they're genuinely new
-        # Range: 0.25 (none) to 0.97 (premium) → adjustment of -0.02 to -0.078
-        accuracy_adjustment = -info_quality * 0.08
+            if success
+                agent.innovation_count += 1
+                agent.success_count += 1
+            else
+                agent.failure_count += 1
+            end
 
-        # Net effect: breadth helps, accuracy slightly reduces (trade-off)
-        # None:    0.22 + 0.024 - 0.020 = 0.224 base
-        # Premium: 0.22 + 0.110 - 0.078 = 0.252 base
-        new_combo_base = 0.22 + breadth_bonus + accuracy_adjustment
+            # Record detailed outcome
+            outcome["success"] = success
+            outcome["innovation_return"] = innovation_return
+            outcome["cash_multiple"] = cash_multiple
+            outcome["market_impact"] = impact
+            outcome["innovation_id"] = innovation.id
+            outcome["innovation_type"] = innovation.type
+            outcome["innovation_quality"] = innovation.quality
+            outcome["innovation_novelty"] = innovation.novelty
+            outcome["innovation_scarcity"] = something(innovation.scarcity, 0.5)
+            outcome["is_new_combination"] = innovation.is_new_combination
+            outcome["knowledge_components"] = innovation.knowledge_components
+            outcome["ai_assisted"] = innovation.ai_assisted
+            outcome["ai_domains_used"] = innovation.ai_domains_used
 
-        # Innovativeness trait still affects new combination rate
-        new_combo_prob = new_combo_base * (0.7 + 0.6 * agent.innovativeness)
-        is_new_combo = rand(agent.rng) < new_combo_prob
-        outcome["is_new_combination"] = is_new_combo
-        outcome["ai_tier_used"] = ai_tier
-        outcome["info_breadth_used"] = info_breadth
-        outcome["info_quality_used"] = info_quality
+            # Track for emergent agentic novelty
+            record_creative_action!(agent.uncertainty_metrics; new_combination=innovation.is_new_combination)
 
-        # Track for emergent agentic novelty
-        record_creative_action!(agent.uncertainty_metrics; new_combination=is_new_combo)
+            # Record knowledge recombination metrics for analysis
+            push!(agent.uncertainty_metrics.innovation_qualities, innovation.quality)
+            push!(agent.uncertainty_metrics.innovation_novelties, innovation.novelty)
+            push!(agent.uncertainty_metrics.innovation_scarcities, something(innovation.scarcity, 0.5))
+
+            # Get AI info parameters for tracking
+            ai_config = get(agent.config.AI_LEVELS, ai_tier, nothing)
+            outcome["info_quality_used"] = isnothing(ai_config) ? 0.25 : Float64(ai_config.info_quality)
+            outcome["info_breadth_used"] = isnothing(ai_config) ? 0.20 : Float64(ai_config.info_breadth)
+        else
+            # Failed to create innovation (couldn't find good knowledge combination)
+            # Partial recovery of R&D spend
+            recovery = rd_spend * agent.config.INNOVATION_FAIL_RECOVERY_RATIO
+            set_capital!(agent, get_capital(agent) + recovery)
+
+            outcome["success"] = false
+            outcome["recovery"] = recovery
+            outcome["failure_reason"] = "no_viable_combination"
+            outcome["is_new_combination"] = false
+
+            agent.failure_count += 1
+        end
     else
-        # Partial recovery on failure
-        recovery = rd_spend * agent.config.INNOVATION_FAIL_RECOVERY_RATIO
-        set_capital!(agent, get_capital(agent) + recovery)
+        # =====================================================================
+        # FALLBACK: Simple probability-based innovation (legacy behavior)
+        # This path is used when innovation_engine is not provided
+        # =====================================================================
+        base_prob = agent.config.INNOVATION_PROBABILITY
+        competence_factor = agent.competence
+        innovativeness_factor = agent.innovativeness
 
-        outcome["success"] = false
-        outcome["rd_spend"] = rd_spend
-        outcome["recovery"] = recovery
+        success_prob = base_prob * (0.5 + 0.5 * competence_factor) * (0.7 + 0.3 * innovativeness_factor)
+        success = rand(agent.rng) < success_prob
+
+        if success
+            base_return = rd_spend * agent.config.INNOVATION_SUCCESS_BASE_RETURN
+            multiplier = rand(agent.rng, Uniform(agent.config.INNOVATION_SUCCESS_RETURN_MULTIPLIER...))
+            innovation_return = base_return * multiplier
+
+            set_capital!(agent, get_capital(agent) + innovation_return)
+            agent.innovation_count += 1
+            agent.success_count += 1
+
+            outcome["success"] = true
+            outcome["innovation_return"] = innovation_return
+
+            # Simple new combination tracking
+            ai_config = get(agent.config.AI_LEVELS, ai_tier, nothing)
+            info_quality = isnothing(ai_config) ? 0.25 : Float64(ai_config.info_quality)
+            info_breadth = isnothing(ai_config) ? 0.20 : Float64(ai_config.info_breadth)
+
+            breadth_bonus = info_breadth * 0.12
+            accuracy_adjustment = -info_quality * 0.08
+            new_combo_base = 0.22 + breadth_bonus + accuracy_adjustment
+            new_combo_prob = new_combo_base * (0.7 + 0.6 * agent.innovativeness)
+            is_new_combo = rand(agent.rng) < new_combo_prob
+
+            outcome["is_new_combination"] = is_new_combo
+            outcome["info_breadth_used"] = info_breadth
+            outcome["info_quality_used"] = info_quality
+            outcome["fallback_mode"] = true
+
+            record_creative_action!(agent.uncertainty_metrics; new_combination=is_new_combo)
+        else
+            recovery = rd_spend * agent.config.INNOVATION_FAIL_RECOVERY_RATIO
+            set_capital!(agent, get_capital(agent) + recovery)
+
+            outcome["success"] = false
+            outcome["recovery"] = recovery
+            outcome["fallback_mode"] = true
+        end
     end
 
     record_deployment!(agent.resources.performance, "innovate", rd_spend;
-                       ai_level=get_ai_level(agent), round_num=round)
+                       ai_level=ai_tier, round_num=round)
 
     return outcome
 end
@@ -2097,12 +2191,21 @@ function make_decision!(
             estimated_return = get(best_eval, "estimated_return", best_opp.latent_return_potential)
             execute_action!(agent, "invest", market, round_num;
                 opportunity=best_opp,
-                estimated_return=estimated_return)
+                estimated_return=estimated_return,
+                innovation_engine=innovation_engine,
+                market_conditions=market_conditions,
+                uncertainty_perception=perception)
         else
-            execute_action!(agent, "maintain", market, round_num)
+            execute_action!(agent, "maintain", market, round_num;
+                innovation_engine=innovation_engine,
+                market_conditions=market_conditions,
+                uncertainty_perception=perception)
         end
     else
-        execute_action!(agent, chosen_action, market, round_num)
+        execute_action!(agent, chosen_action, market, round_num;
+            innovation_engine=innovation_engine,
+            market_conditions=market_conditions,
+            uncertainty_perception=perception)
     end
 
     outcome["ai_level_used"] = ai_level

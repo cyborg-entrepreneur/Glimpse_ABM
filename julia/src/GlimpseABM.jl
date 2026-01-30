@@ -81,6 +81,7 @@ export CombinationTracker
 export get_accessible_knowledge
 export get_information
 export attempt_innovation!
+export evaluate_innovation_success!
 export get_component_scarcity_metric
 export learn_from_success!, learn_from_failure!
 export reinforce_agent_resources!
