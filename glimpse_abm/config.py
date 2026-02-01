@@ -102,7 +102,7 @@ class EmergentConfig:
     INSOLVENCY_GRACE_ROUNDS: int = 7
     RANDOM_SEED: int = 42
 
-    BASE_OPERATIONAL_COST: float = 16667.0  # Monthly (was 50000 quarterly)
+    BASE_OPERATIONAL_COST: float = 10000.0  # Monthly - calibrated for ~55% 5-yr survival (BLS benchmark)
     COMPETITION_COST_MULTIPLIER: float = 50.0  # Monthly (was 150 quarterly)
     OPERATING_RESERVE_MONTHS: int = 3
     MAX_AGENT_KNOWLEDGE: int = 90
@@ -110,8 +110,13 @@ class EmergentConfig:
     LIQUIDITY_RESERVE_FRACTION: float = 0.29
     MAX_INVESTMENT_FRACTION: float = 0.037  # Monthly (was 0.11 quarterly)
     TARGET_INVESTMENT_FRACTION: float = 0.033  # Monthly (was 0.10 quarterly)
-    AI_CREDIT_LINE_ROUNDS: int = 90  # Monthly (was 30 quarterly)
+    AI_CREDIT_LINE_ROUNDS: int = 24  # 24 months = 2 years (typical seed funding runway)
     AI_TRUST_RESERVE_DISCOUNT: float = 0.25
+
+    # Robustness test parameters for scaling AI failure modes and costs
+    HALLUCINATION_INTENSITY: float = 1.0  # Scale AI hallucination rates (0.0=none, 1.0=baseline, 2.0=double)
+    OVERCONFIDENCE_INTENSITY: float = 1.0  # Scale AI overconfidence effects (0.0=none, 1.0=baseline, 2.0=double)
+    AI_COST_INTENSITY: float = 1.0  # Scale AI subscription/usage costs (0.0=free, 1.0=baseline, 2.0=double)
 
     # Network Configuration
     USE_NETWORK_EFFECTS: bool = True
@@ -142,7 +147,7 @@ class EmergentConfig:
     DISCOVERY_PROBABILITY: float = 0.10  # Monthly (was 0.30 quarterly)
     INNOVATION_PROBABILITY: float = 0.14  # Monthly (was 0.42 quarterly)
     AI_HERDING_DECAY: float = 1.0
-    AI_SIGNAL_HISTORY: int = 46  # Monthly (was 140 quarterly)
+    AI_SIGNAL_HISTORY: int = 420  # 420 months history (was 140 quarters)
 
     # Innovation economics (monthly cadence)
     INNOVATION_BASE_SPEND_RATIO: float = 0.025
@@ -152,7 +157,7 @@ class EmergentConfig:
     INNOVATION_SUCCESS_RETURN_MULTIPLIER: Tuple[float, float] = (1.8, 3.2)
     INNOVATION_RD_CAP_FRACTION: float = 0.04  # Monthly (was 0.12 quarterly)
     INNOVATION_REUSE_PROBABILITY: float = 0.07  # Monthly (was 0.22 quarterly)
-    INNOVATION_REUSE_LOOKBACK: int = 100
+    INNOVATION_REUSE_LOOKBACK: int = 300  # 300 months lookback (was 100 quarters)
     INVESTMENT_SUCCESS_ROI_THRESHOLD: float = 0.017  # Monthly (was 0.05 quarterly)
     BURN_HISTORY_WINDOW: int = 9  # Monthly (was 3 quarterly)
     BURN_FAILURE_THRESHOLD: float = 0.12
@@ -368,7 +373,7 @@ class EmergentConfig:
     # Uncertainty and Market Dynamics (monthly cadence)
     BLACK_SWAN_PROBABILITY: float = 0.017  # Monthly (was 0.05 quarterly)
     BOOM_TAIL_UNCERTAINTY_EXPONENT: float = 1.08
-    MARKET_VOLATILITY: float = 0.25
+    MARKET_VOLATILITY: float = 0.15  # Monthly volatility (lower than quarterly)
     COMPETITION_SCALE_FACTOR: float = 1.0  # Multiplier for sector-specific competition_intensity (0.0=no competition, 1.0=baseline, 2.0=double)
     MARKET_SHIFT_PROBABILITY: float = 0.03  # Monthly (was 0.09 quarterly)
     MARKET_SHIFT_SEVERITY_RANGE: Tuple[float, float] = (0.25, 0.75)
@@ -425,31 +430,40 @@ class EmergentConfig:
     AI_NOVELTY_UPLIFT: float = 0.08
 
     # ========================================================================
-    # ROBUSTNESS TEST PARAMETERS
+    # REFUTATION TEST PARAMETERS
+    # These allow testing model robustness by modifying AI tier advantages
     # ========================================================================
-    # These parameters allow systematic isolation of different mechanisms
-    # that could drive the AI Paradox, supporting comprehensive robustness
-    # testing as described in the validation framework.
 
-    # HALLUCINATION_INTENSITY: Scales AI hallucination rates from 0.0 (no
-    # hallucinations) to 1.0 (full). Tests whether AI misinformation/false
-    # positives drive the paradox.
-    HALLUCINATION_INTENSITY: float = 1.0
+    # Execution success multipliers by AI tier
+    # Default: all 1.0 (no AI advantage in execution)
+    AI_EXECUTION_SUCCESS_MULTIPLIERS: Dict[str, float] = field(
+        default_factory=lambda: {
+            "none": 1.0,
+            "basic": 1.0,
+            "advanced": 1.0,
+            "premium": 1.0
+        }
+    )
 
-    # OVERCONFIDENCE_INTENSITY: Scales AI overconfidence effects from 0.0
-    # (no overconfidence) to 1.0 (full). Tests whether inflated confidence
-    # estimates drive the paradox.
-    OVERCONFIDENCE_INTENSITY: float = 1.0
+    # Innovation quality boost by AI tier (additive, on 0-1 scale)
+    # Default: 0.05 for all AI tiers (small boost for AI assistance)
+    AI_QUALITY_BOOST: Dict[str, float] = field(
+        default_factory=lambda: {
+            "none": 0.0,
+            "basic": 0.05,
+            "advanced": 0.05,
+            "premium": 0.05
+        }
+    )
+
+    # AI cost multiplier (for testing zero/reduced AI costs)
+    # Default: 1.0 (full costs); 0.0 = free AI
+    AI_COST_MULTIPLIER: float = 1.0
 
     # AI_NOVELTY_CONSTRAINT_INTENSITY: Scales the negative effect of premium
     # AI on agentic novelty (0.0 to 1.0). Tests whether AI-induced anchoring
     # on historical patterns drives the paradox.
     AI_NOVELTY_CONSTRAINT_INTENSITY: float = 1.0
-
-    # AI_COST_INTENSITY: Scales AI subscription/usage costs from 0.0 (free AI)
-    # to 1.0 (full cost). Tests whether opportunity costs from AI fees drive
-    # the paradox.
-    AI_COST_INTENSITY: float = 1.0
 
     # COMPETITION_INTENSITY: Scales competition effects from 0.0 (no competition
     # penalties) to 1.0 (full). Tests whether market-level competition dynamics
@@ -460,7 +474,33 @@ class EmergentConfig:
     # NEW MARKET MECHANICS PARAMETERS (from Julia implementation)
     # ========================================================================
 
-    # Competition dynamics control
+    # ========================================================================
+    # CAPACITY-CONVEXITY CROWDING MODEL
+    # ========================================================================
+    # New unified crowding penalty using capacity + convexity approach:
+    #   penalty = λ · max(0, C/K - 1)^γ
+    #   net_return = base_return · exp(-penalty)
+    #
+    # This replaces the old scattered linear penalties with a theoretically
+    # grounded model where:
+    #   - No penalty until crowding exceeds capacity (K)
+    #   - Penalty increases convexly beyond capacity (γ controls sharpness)
+    #   - Exponential decay keeps returns positive
+    # ========================================================================
+    USE_CAPACITY_CONVEXITY_CROWDING: bool = True  # Enable new crowding model
+
+    # K = Carrying capacity: competition level where penalties START
+    CROWDING_CAPACITY_K: float = 1.5
+
+    # γ = Convexity exponent: how sharply penalties increase beyond capacity
+    # γ = 2: quadratic (convex - "a little crowded is OK, very crowded is brutal")
+    CROWDING_CONVEXITY_GAMMA: float = 2.0
+
+    # λ = Strength: maps crowding into payoff reduction
+    # exp(-λ) gives the return multiplier at 2× capacity
+    CROWDING_STRENGTH_LAMBDA: float = 0.50
+
+    # Legacy parameters (used when USE_CAPACITY_CONVEXITY_CROWDING = False)
     DISABLE_COMPETITION_DYNAMICS: bool = False  # Master switch to disable competition effects
     OPPORTUNITY_COMPETITION_PENALTY: float = 0.5  # Return penalty from crowded opportunities
     OPPORTUNITY_COMPETITION_THRESHOLD: float = 0.2  # Crowding level at which penalties begin
@@ -518,7 +558,7 @@ class EmergentConfig:
     POWER_LAW_SHAPE_A: float = 3.0  # Lighter tails for more consistent outcomes
 
     # Learning parameters
-    LEARNING_RATE: float = 0.02
+    LEARNING_RATE: float = 0.05  # Learning rate for uncertainty response adaptation
 
     # Diagnostics
     ENABLE_DEBUG_LOGS: bool = False
@@ -613,12 +653,12 @@ class EmergentConfig:
         }
     )
     AI_TIER_SCORE_SMOOTHING: float = 0.25
-    AI_TIER_DEMOTION_COOLDOWN: int = 12
+    AI_TIER_DEMOTION_COOLDOWN: int = 36  # 36 months (was 12 quarters)
     TRAIT_MOMENTUM: float = 0.7
-    AI_TRUST_ADJUSTMENT_RATE: float = 0.1
+    AI_TRUST_ADJUSTMENT_RATE: float = 0.033  # Monthly adjustment (was 0.1 quarterly)
     AI_SUBSCRIPTION_AMORTIZATION_ROUNDS: int = 180  # Monthly (was 60 quarterly)
     AI_SUBSCRIPTION_FLOAT_BASE_ROUNDS: int = 0
-    AI_SUBSCRIPTION_FLOAT_MAX_ROUNDS: int = 3
+    AI_SUBSCRIPTION_FLOAT_MAX_ROUNDS: int = 9  # 9 months (was 3 quarters)
 
     # Action selection controls
     ACTION_SELECTION_TEMPERATURE: float = 0.45
@@ -648,7 +688,7 @@ class EmergentConfig:
     UNCERTAINTY_COMPETITIVE_WEIGHT: float = 0.12
 
     # Knowledge & Innovation
-    KNOWLEDGE_DECAY_RATE: float = 0.075
+    KNOWLEDGE_DECAY_RATE: float = 0.025  # Monthly decay (was 0.075 quarterly)
     SECTOR_KNOWLEDGE_PERSISTENCE: Dict[str, float] = field(
         default_factory=lambda: {
             "tech": 0.85,
