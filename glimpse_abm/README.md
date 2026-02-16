@@ -530,9 +530,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 If you use this code in your research, please cite:
 
 ```bibtex
-@article{townsend2026flux,
+@article{rady2026flux,
   title={Into the Flux: {AI} Augmentation \& The Paradox of Future Knowledge},
-  author={Townsend, David M. and Hunt, Richard A. and Rady, Judy},
+  author={Rady, Judy and Townsend, David M. and Hunt, Richard A.},
   journal={Entrepreneurship Theory and Practice},
   year={2026},
   note={Forthcoming}
@@ -547,6 +547,13 @@ If you use this code in your research, please cite:
   number={2},
   pages={415--440},
   year={2025}
+}
+
+@software{glimpse_abm,
+  title={GlimpseABM: Agent-Based Model of the AI Information Paradox},
+  author={Townsend, David M. and Rady, Judy},
+  year={2026},
+  url={https://github.com/cyborg-entrepreneur/Glimpse_ABM}
 }
 ```
 
