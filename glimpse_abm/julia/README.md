@@ -376,11 +376,20 @@ MIT License - see LICENSE file.
 ## Citation
 
 ```bibtex
+@article{townsend2026flux,
+  title={Into the Flux: {AI} Augmentation \& The Paradox of Future Knowledge},
+  author={Townsend, David M. and Hunt, Richard A. and Rady, Joseph and
+          Manocha, Puneet and Jin, Jae-Hwan},
+  journal={Entrepreneurship Theory and Practice},
+  year={2026},
+  note={Forthcoming}
+}
+
 @software{glimpse_abm,
   title = {GlimpseABM: Agent-Based Model of the AI Information Paradox},
-  author = {Townsend, David},
-  year = {2025},
-  url = {https://github.com/dtownsend-ai/glimpse_abm}
+  author = {Townsend, David M. and Hunt, Richard A. and Rady, Joseph},
+  year = {2026},
+  url = {https://github.com/cyborg-entrepreneur/Glimpse_ABM}
 }
 ```
 

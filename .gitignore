@@ -98,3 +98,10 @@ test/output/
 *.key
 *secret*
 *credential*
+
+# Working/scratch files (not for public repo)
+RESULTS_SECTION_UPDATED.md
+GLIMPSE_Diagnostic_Report.md
+create_table6_refutation*.py
+Table2_combined.*
+*.aux

@@ -248,8 +248,8 @@ glimpse_abm/
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/glimpse_abm.git
-cd glimpse_abm/..  # Move to parent directory
+git clone https://github.com/cyborg-entrepreneur/Glimpse_ABM.git
+cd Glimpse_ABM
 
 # Install dependencies
 pip install numpy pandas scipy matplotlib seaborn tqdm pyyaml
@@ -263,7 +263,7 @@ python3 -m glimpse_abm.cli --help
 ```bash
 # From Julia REPL
 using Pkg
-Pkg.add(url="https://github.com/yourusername/glimpse_abm", subdir="julia")
+Pkg.add(url="https://github.com/cyborg-entrepreneur/Glimpse_ABM", subdir="glimpse_abm/julia")
 
 # Or install locally
 cd glimpse_abm/julia
@@ -530,10 +530,20 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 If you use this code in your research, please cite:
 
 ```bibtex
+@article{townsend2026flux,
+  title={Into the Flux: {AI} Augmentation \& The Paradox of Future Knowledge},
+  author={Townsend, David M. and Hunt, Richard A. and Rady, Joseph and
+          Manocha, Puneet and Jin, Jae-Hwan},
+  journal={Entrepreneurship Theory and Practice},
+  year={2026},
+  note={Forthcoming}
+}
+
 @article{townsend2025futures,
   title={Are the Futures Computable? {K}nightian Uncertainty \& Artificial Intelligence},
-  author={Townsend, D.M. and Hunt, R.A. and Rady, R. and Manocha, P. and Jin, J-H.},
-  journal={The Academy of Management Review},
+  author={Townsend, David M. and Hunt, Richard A. and Rady, Joseph and
+          Manocha, Puneet and Jin, Jae-Hwan},
+  journal={Academy of Management Review},
   volume={50},
   number={2},
   pages={415--440},
