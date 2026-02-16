@@ -532,8 +532,7 @@ If you use this code in your research, please cite:
 ```bibtex
 @article{townsend2026flux,
   title={Into the Flux: {AI} Augmentation \& The Paradox of Future Knowledge},
-  author={Townsend, David M. and Hunt, Richard A. and Rady, Joseph and
-          Manocha, Puneet and Jin, Jae-Hwan},
+  author={Townsend, David M. and Hunt, Richard A. and Rady, Judy},
   journal={Entrepreneurship Theory and Practice},
   year={2026},
   note={Forthcoming}
@@ -541,8 +540,8 @@ If you use this code in your research, please cite:
 
 @article{townsend2025futures,
   title={Are the Futures Computable? {K}nightian Uncertainty \& Artificial Intelligence},
-  author={Townsend, David M. and Hunt, Richard A. and Rady, Joseph and
-          Manocha, Puneet and Jin, Jae-Hwan},
+  author={Townsend, David M. and Hunt, Richard A. and Rady, Judy and
+          Manocha, Parul and Jin, Ju hyeong},
   journal={Academy of Management Review},
   volume={50},
   number={2},
