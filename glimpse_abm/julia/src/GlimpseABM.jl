@@ -37,6 +37,9 @@ include("action_keys.jl")
 
 # Core configuration and models
 include("config.jl")
+# MarketConditions typed payload (v3.0) — loaded before models.jl because
+# realized_return consumes it. See market_conditions.jl for rationale.
+include("market_conditions.jl")
 include("models.jl")
 
 # Utilities (loaded early for stable_sigmoid and other helpers)
@@ -63,6 +66,7 @@ include("numpy_rng.jl")
 
 # Exports - Configuration
 export EmergentConfig
+export MarketConditions
 export CalibrationProfile
 export apply_calibration_profile
 export get_calibration_profile

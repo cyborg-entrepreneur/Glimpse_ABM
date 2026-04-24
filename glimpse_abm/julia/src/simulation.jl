@@ -217,18 +217,19 @@ function step!(sim::EmergentSimulation, round::Int)
     # here forces a fresh Information draw per round per agent.
     empty!(sim.info_system.information_cache)
 
-    # Get current uncertainty state and market conditions
+    # Get current uncertainty state and market conditions.
+    # v3.0: MarketConditions is now an immutable typed struct — uncertainty_state
+    # is injected at construction (was mutated onto a Dict after creation).
     uncertainty_state = get_uncertainty_state(sim.uncertainty_env)
-    market_conditions = get_market_conditions(sim.market)
-    market_conditions["uncertainty_state"] = uncertainty_state
+    market_conditions = get_market_conditions(sim.market; uncertainty_state=uncertainty_state)
 
     # Get alive agents
     alive_agents = filter(a -> a.alive, sim.agents)
 
     # Phase 1: Apply operational costs FIRST with severity multiplier (matching Python order)
     # Python applies this before matured investments and decisions
-    avg_comp = Float64(get(market_conditions, "avg_competition", 0.0))
-    volatility = Float64(get(market_conditions, "volatility", sim.config.MARKET_VOLATILITY))
+    avg_comp = market_conditions.avg_competition
+    volatility = market_conditions.volatility
     base_vol = Float64(sim.config.MARKET_VOLATILITY)
     severity = 1.0 + avg_comp * 0.35 + max(0.0, volatility - base_vol) * 0.45
     severity = clamp(severity, 0.7, 1.9)

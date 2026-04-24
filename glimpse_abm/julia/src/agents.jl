@@ -601,7 +601,7 @@ Select an action based on uncertainty perception and agent state.
 """
 function select_action(
     agent::EmergentAgent,
-    market_conditions::Dict{String,Any},
+    market_conditions::Union{MarketConditions,Dict{String,Any}},
     uncertainty_state::Dict{String,Any};
     available_opportunities::Vector{Opportunity} = Opportunity[]
 )::String
@@ -710,7 +710,7 @@ function execute_action!(
     estimated_return::Union{Float64,Nothing} = nothing,
     ai_info::Union{Information,Nothing} = nothing,
     innovation_engine::Union{InnovationEngine,Nothing} = nothing,
-    market_conditions::Union{Dict{String,Any},Nothing} = nothing,
+    market_conditions::Union{MarketConditions,Dict{String,Any},Nothing} = nothing,
     uncertainty_perception::Union{Dict{String,Any},Nothing} = nothing
 )::Dict{String,Any}
     outcome = Dict{String,Any}(
@@ -857,7 +857,7 @@ function _execute_innovate!(
     round::Int,
     outcome::Dict{String,Any};
     innovation_engine::Union{InnovationEngine,Nothing} = nothing,
-    market_conditions::Union{Dict{String,Any},Nothing} = nothing,
+    market_conditions::Union{MarketConditions,Dict{String,Any},Nothing} = nothing,
     uncertainty_perception::Union{Dict{String,Any},Nothing} = nothing
 )::Dict{String,Any}
     capital = get_capital(agent)
@@ -1163,7 +1163,7 @@ function process_matured_investments!(
     agent::EmergentAgent,
     market::MarketEnvironment,
     round::Int;
-    market_conditions::Union{Dict{String,Any},Nothing} = nothing
+    market_conditions::Union{MarketConditions,Dict{String,Any},Nothing} = nothing
 )::Vector{Dict{String,Any}}
     if !agent.alive
         return Dict{String,Any}[]
@@ -1814,7 +1814,7 @@ Calculate investment utility given opportunities and perception.
 function calculate_investment_utility(
     agent::EmergentAgent,
     opportunities::Vector{Opportunity},
-    market_conditions::Dict{String,Any},
+    market_conditions::Union{MarketConditions,Dict{String,Any}},
     perception::Dict{String,Any};
     ai_level::String = "none",
     info_system::Union{InformationSystem,Nothing} = nothing
@@ -1960,7 +1960,7 @@ Now uses AI tier for decision-making advantage.
 """
 function calculate_innovation_utility(
     agent::EmergentAgent,
-    market_conditions::Dict{String,Any},
+    market_conditions::Union{MarketConditions,Dict{String,Any}},
     perception::Dict{String,Any};
     ai_level::String = "none"
 )::Float64
@@ -2088,7 +2088,7 @@ Calculate maintain utility.
 """
 function calculate_maintain_utility(
     agent::EmergentAgent,
-    market_conditions::Dict{String,Any},
+    market_conditions::Union{MarketConditions,Dict{String,Any}},
     perception::Dict{String,Any};
     estimated_cost::Float64 = 0.0
 )::Float64
@@ -2149,7 +2149,7 @@ is now the canonical input.
 function evaluate_opportunity_basic(
     agent::EmergentAgent,
     opportunity::Opportunity,
-    market_conditions::Dict{String,Any};
+    market_conditions::Union{MarketConditions,Dict{String,Any}};
     estimated_return::Union{Float64,Nothing} = nothing,
     estimated_uncertainty::Union{Float64,Nothing} = nothing,
     confidence::Union{Float64,Nothing} = nothing,
@@ -2213,7 +2213,7 @@ function evaluate_opportunity_basic(
     end
 
     # Regime multiplier
-    regime = get(market_conditions, "regime", "normal")
+    regime = market_conditions.regime
     regime_mult = Dict("boom" => 1.2, "growth" => 1.1, "normal" => 1.0, "volatile" => 0.9, "crisis" => 0.7)
     score *= get(regime_mult, regime, 1.0)
 
@@ -2274,7 +2274,7 @@ agents trust visible signals more (rational herding / information cascades).
 function evaluate_portfolio_opportunities(
     agent::EmergentAgent,
     opportunities::Vector{Opportunity},
-    market_conditions::Dict{String,Any},
+    market_conditions::Union{MarketConditions,Dict{String,Any}},
     perception::Dict{String,Any};
     ai_level::String = "none",
     info_system::Union{InformationSystem,Nothing} = nothing,
@@ -2441,7 +2441,7 @@ Make a complete decision including AI level selection and action choice.
 function make_decision!(
     agent::EmergentAgent,
     opportunities::Vector{Opportunity},
-    market_conditions::Dict{String,Any},
+    market_conditions::Union{MarketConditions,Dict{String,Any}},
     market::MarketEnvironment,
     round_num::Int;
     uncertainty_env::Union{KnightianUncertaintyEnvironment,Nothing} = nothing,

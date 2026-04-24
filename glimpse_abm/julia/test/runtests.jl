@@ -196,6 +196,7 @@ using DataFrames
     include("test_tier_divergence.jl")
     include("test_diagnostics.jl")
     include("test_action_keys.jl")
+    include("test_market_conditions.jl")
 
 end
 

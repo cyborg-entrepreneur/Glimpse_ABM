@@ -47,7 +47,14 @@ const ALLOWED_CONSUMER_ONLY = Set([
     # Legacy alias for "amount" — kept as fallback in market.jl consumers
     "capital_deployed",
     # market_conditions fields populated by market.jl get_market_conditions
-    "ai_tier_shares", "sector_demand_adjustments",
+    "ai_tier_shares", "sector_demand_adjustments", "aggregate_clearing_ratio",
+    # v3.0: MarketConditions is now a typed struct; field access replaces
+    # string-keyed reads. The consistency scan still sees these as orphan
+    # "consumer-only" keys because writes are now field assignments, not
+    # string-keyed dict entries. All allowlisted here — see
+    # market_conditions.jl for the authoritative schema.
+    "trend", "momentum", "n_opportunities", "exploration_activity",
+    "crowding_metrics", "combo_hhi", "crowding_index", "extras",
 ])
 
 function read_source(path::String)::String

@@ -20,6 +20,8 @@ using Statistics
 push!(LOAD_PATH, joinpath(@__DIR__, "..", "src"))
 using GlimpseABM
 
+include("test_helpers.jl")
+
 const N_TRIALS = 100
 const N_OPPS = 50
 
@@ -39,7 +41,7 @@ const N_OPPS = 50
         push!(opportunities, opp)
     end
 
-    market_conditions = Dict{String,Any}("regime" => "normal", "uncertainty_state" => Dict{String,Any}())
+    market_conditions = test_market_conditions()
     perception = Dict{String,Any}()
 
     top1_match = 0

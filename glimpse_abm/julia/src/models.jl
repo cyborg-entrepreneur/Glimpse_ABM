@@ -185,7 +185,7 @@ contingencies.
 """
 function realized_return(
     opp::Opportunity,
-    market_conditions::Dict{String,Any},
+    market_conditions::Union{MarketConditions,Dict{String,Any}},
     investor_tier::Union{String,Nothing} = nothing;
     rng::Random.AbstractRNG = Random.default_rng()
 )::Float64
@@ -193,11 +193,11 @@ function realized_return(
     base_multiple = clamp(coalesce(opp.latent_return_potential, 1.0), 0.3, 10.0)
 
     # Regime effects
-    regime_return = Float64(get(market_conditions, "regime_return_multiplier", 1.0))
+    regime_return = Float64(market_conditions.regime_return_multiplier)
     base_multiple *= regime_return
 
     risk_signal = clamp(opp.latent_failure_potential, 0.05, 0.95)
-    regime_failure = Float64(get(market_conditions, "regime_failure_multiplier", 1.0))
+    regime_failure = Float64(market_conditions.regime_failure_multiplier)
     risk_signal = clamp(risk_signal * regime_failure, 0.05, 0.95)
 
     # Lifecycle multipliers
@@ -211,11 +211,11 @@ function realized_return(
     resilience = clamp(0.75 + 0.25 * (1.0 - risk_signal), 0.55, 1.45)
 
     # Sector clearing dynamics
-    clearing_index = get(market_conditions, "sector_clearing_index", Dict{String,Float64}())
-    aggregate_ratio = Float64(get(market_conditions, "aggregate_clearing_ratio", 1.0))
+    clearing_index = market_conditions.sector_clearing_index
+    aggregate_ratio = Float64(market_conditions.aggregate_clearing_ratio)
     sector_key = coalesce(opp.sector, "unknown")
 
-    sector_adjustments = get(market_conditions, "sector_demand_adjustments", Dict{String,Any}())
+    sector_adjustments = market_conditions.sector_demand_adjustments
     sector_adjust = get(sector_adjustments, sector_key, nothing)
     if isa(sector_adjust, Dict)
         base_multiple *= Float64(get(sector_adjust, "return", 1.0))
@@ -244,7 +244,7 @@ function realized_return(
     base_mean = base_multiple * lifecycle_factor * resilience * clearing_adjustment
 
     # Uncertainty state effects
-    unc_state = get(market_conditions, "uncertainty_state", Dict{String,Any}())
+    unc_state = market_conditions.uncertainty_state
     agentic_state = if isa(unc_state, Dict)
         get(unc_state, "agentic_novelty", unc_state)
     else
@@ -308,7 +308,7 @@ function realized_return(
         C = opp.competition
 
         # Also incorporate market-level crowding (crowding_index)
-        crowding_metrics = get(market_conditions, "crowding_metrics", Dict{String,Any}())
+        crowding_metrics = market_conditions.crowding_metrics
         crowding_index = Float64(get(crowding_metrics, "crowding_index", 0.25))
 
         # Combine opportunity and market-level crowding
@@ -336,7 +336,12 @@ function realized_return(
         # LEGACY CROWDING MODEL (for backward compatibility)
         # =====================================================================
         # Crowding penalties (matching Python - no COMPETITION_INTENSITY scaling here)
-        combo_hhi = Float64(get(market_conditions, "combo_hhi", 0.0))
+        # v3.0: combo_hhi is in the extras bucket. Per the v3.0 audit this
+        # legacy reader has been returning 0.0 since uncertainty.jl:420 only
+        # ever emitted it as hardcoded 0.0 — the legacy crowding path is
+        # effectively disabled in favor of the new convexity model
+        # (USE_CAPACITY_CONVEXITY_CROWDING = true by default).
+        combo_hhi = Float64(get(market_conditions.extras, "combo_hhi", 0.0))
         reuse_penalty = coalesce(opp.crowding_penalty, 0.0)
         crowding_penalty_legacy = (0.25 * combo_hhi + 0.2 * reuse_penalty + 0.1 * reuse_pressure) * max(0.0, 1.0 - scarcity_signal)
         scarcity_bonus = 0.15 * scarcity_signal
@@ -350,7 +355,7 @@ function realized_return(
         base_mean *= structural_adjustment
 
         # Market-level crowding
-        crowding_metrics = get(market_conditions, "crowding_metrics", Dict{String,Any}())
+        crowding_metrics = market_conditions.crowding_metrics
         crowding_index = Float64(get(crowding_metrics, "crowding_index", 0.25))
 
         crowd_threshold = isnothing(config) ? 0.35 : config.RETURN_DEMAND_CROWDING_THRESHOLD
@@ -424,8 +429,8 @@ function realized_return(
     # α ≈ 3.0: Lighter tails (late-stage/buyout)
     # =========================================================================
 
-    volatility = Float64(get(market_conditions, "volatility", 0.0))
-    regime = get(market_conditions, "regime", "normal")
+    volatility = Float64(market_conditions.volatility)
+    regime = market_conditions.regime
 
     # Power law shape parameter - lower = heavier tails
     alpha = isnothing(config) ? 2.5 : config.POWER_LAW_SHAPE_A
@@ -550,7 +555,7 @@ end
 """
 Estimate market potential based on innovation attributes.
 """
-function calculate_potential(innov::Innovation, market_conditions::Dict{String,Any})::Float64
+function calculate_potential(innov::Innovation, market_conditions::Union{MarketConditions,Dict{String,Any}})::Float64
     base_potential = innov.quality * (0.5 + 0.5 * innov.novelty)
 
     type_modifiers = Dict(
@@ -561,7 +566,7 @@ function calculate_potential(innov::Innovation, market_conditions::Dict{String,A
     )
     type_factor = get(type_modifiers, innov.type, 1.0)
 
-    regime = get(market_conditions, "regime", "normal")
+    regime = market_conditions.regime
     market_factor = if regime == "growth"
         1.2
     elseif regime == "crisis"
@@ -1110,7 +1115,7 @@ Check for matured investments and process outcomes.
 function check_matured_investments!(
     portfolio::Portfolio,
     current_round::Int,
-    market_conditions::Dict{String,Any};
+    market_conditions::Union{MarketConditions,Dict{String,Any}};
     rng::Random.AbstractRNG = Random.default_rng()
 )::Vector{Dict{String,Any}}
     newly_matured = Dict{String,Any}[]
@@ -1122,11 +1127,11 @@ function check_matured_investments!(
             risk = clamp(raw_risk, 0.05, 0.95)
 
             # Market adjustments
-            regime_failure = get(market_conditions, "regime_failure_multiplier", 1.0)
+            regime_failure = market_conditions.regime_failure_multiplier
             base_failure = 0.05 + 0.5 * risk * regime_failure
 
             # Crowding adjustments
-            crowding_metrics = get(market_conditions, "crowding_metrics", Dict{String,Any}())
+            crowding_metrics = market_conditions.crowding_metrics
             crowd_idx = get(crowding_metrics, "crowding_index", 0.25)
             crowd_threshold = 0.35
             crowd_multiplier = crowd_idx > crowd_threshold ? 1.0 + 0.25 * (crowd_idx - crowd_threshold) : 1.0

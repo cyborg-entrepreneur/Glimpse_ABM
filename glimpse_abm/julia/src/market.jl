@@ -278,7 +278,7 @@ function step!(
     agent_actions::Vector{Dict{String,Any}},
     innovations::Vector{Innovation};
     matured_outcomes::Vector{Dict{String,Any}} = Dict{String,Any}[]
-)::Dict{String,Any}
+)::MarketConditions  # v3.0: returns typed MarketConditions via get_market_conditions
     market.current_round = round
     # v2.9: do NOT clear market.sector_demand_adjustments at the start of
     # market.step! anymore. realized_return reads them from market_conditions
@@ -392,37 +392,44 @@ function step!(
 end
 
 """
-Get current market conditions dictionary.
+Construct the typed `MarketConditions` payload for this round.
+
+v3.0: return a `MarketConditions` struct instead of `Dict{String,Any}`.
+Typed fields eliminate the silent-zero dataflow bug class that bit
+between v2.0 and v2.12 (investment_amount vs amount, sector_demand_adjustments
+never emitted, avg_competition never emitted, etc.).
+
+Pass `uncertainty_state` as a kwarg to attach the per-round uncertainty
+snapshot (previously mutated onto the dict AFTER construction in
+simulation.jl; now injected at construction so the struct can be
+immutable).
 """
-function get_market_conditions(market::MarketEnvironment)::Dict{String,Any}
-    # v2.12: emit avg_competition. simulation.jl:230 reads it to compute the
-    # operational-cost severity multiplier; it was consuming with a 0.0 fallback
-    # because market never emitted it. Result: the severity-competition term was
-    # always 0, so sector crowding never affected operational cost severity.
+function get_market_conditions(market::MarketEnvironment;
+                               uncertainty_state::Dict{String,Any}=Dict{String,Any}()
+                              )::MarketConditions
+    # v2.12: compute avg_competition; simulation.jl consumer used it with a
+    # 0.0 fallback before this was emitted. Typed in v3.0.
     comp_values = [o.competition for o in market.opportunities if o.discovered]
     avg_competition = isempty(comp_values) ? 0.0 : mean(comp_values)
 
-    return Dict{String,Any}(
-        "regime" => market.market_regime,
-        "volatility" => market.volatility,
-        "trend" => market.trend,
-        "momentum" => market.market_momentum,
-        "regime_return_multiplier" => market.regime_return_multiplier,
-        "regime_failure_multiplier" => market.regime_failure_multiplier,
-        "n_opportunities" => length(market.opportunities),
-        "exploration_activity" => market.exploration_activity,
-        "tier_invest_share" => market.tier_invest_share,
-        "sector_clearing_index" => market.sector_clearing_index,
-        "aggregate_clearing_ratio" => market.aggregate_clearing_ratio,
-        "crowding_metrics" => market.crowding_metrics,
-        "avg_competition" => avg_competition,
-        # v2.7: emit sector_demand_adjustments so realized_return (models.jl:218)
-        # can actually apply per-sector demand/supply scaling. Earlier the field
-        # existed on the market but was never packaged into the conditions dict —
-        # silent-zero dataflow bug identical in pattern to v2.3's amount/estimated_return
-        # key mismatches.
-        "sector_demand_adjustments" => market.sector_demand_adjustments,
-        "round" => market.current_round
+    return MarketConditions(
+        market.market_regime,
+        market.volatility,
+        market.trend,
+        market.market_momentum,
+        market.regime_return_multiplier,
+        market.regime_failure_multiplier,
+        length(market.opportunities),
+        market.exploration_activity,
+        market.current_round,
+        market.tier_invest_share,
+        market.sector_clearing_index,
+        market.aggregate_clearing_ratio,
+        market.crowding_metrics,
+        market.sector_demand_adjustments,
+        avg_competition,
+        uncertainty_state,
+        Dict{String,Any}(),  # extras — empty by default
     )
 end
 
