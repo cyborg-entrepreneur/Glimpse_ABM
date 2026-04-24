@@ -222,10 +222,14 @@ function run_single_simulation(tier::String, run_idx::Int, seed::Int)
     # Overall capital retention
     final_capital_retention = sum(final_capitals) / total_initial_equity
 
-    # Innovation metrics
+    # Innovation metrics. v3.3.4: use channel-specific counters so this
+    # script's "Innovation_Success_Rate" label is actually innovation-only
+    # (not mixed with investment-maturity successes). success_count /
+    # failure_count remain as all-channel totals for backward-compat
+    # elsewhere.
     innovations = [a.innovation_count for a in sim.agents]
-    successes = [a.success_count for a in sim.agents]
-    failures = [a.failure_count for a in sim.agents]
+    successes = [a.innovation_success_count for a in sim.agents]
+    failures = [a.innovation_failure_count for a in sim.agents]
 
     # Final niche and combination counts
     final_niches = sum(a.uncertainty_metrics.niches_discovered for a in sim.agents)

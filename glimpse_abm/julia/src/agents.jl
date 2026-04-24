@@ -317,9 +317,19 @@ mutable struct EmergentAgent
     equity_streak::Int  # consecutive rounds below sector equity ratio (v2.5 — equity_failure mechanism)
     total_invested::Float64
     total_returned::Float64
-    success_count::Int
-    failure_count::Int
-    innovation_count::Int
+    success_count::Int              # total successes (invest + innovate)
+    failure_count::Int              # total failures (invest + innovate)
+    innovation_count::Int           # total innovation attempts (not just successes)
+    # v3.3.4: separate counters so analysis scripts don't conflate channels.
+    # Prior code incremented success_count on BOTH innovation-success and
+    # investment-maturity-success, then run_fixed_tier_analysis.jl:546 used
+    # the mix as Innovation_Success_Rate — the reported rate was really
+    # "any success rate." Keep success_count/failure_count as totals for
+    # backward-compat; use these new counters for channel-specific metrics.
+    innovation_success_count::Int
+    innovation_failure_count::Int
+    investment_success_count::Int
+    investment_failure_count::Int
     failure_round::Union{Int,Nothing}  # Track when agent fails (for Kaplan-Meier survival analysis)
     failure_reason::Union{String,Nothing}  # Why agent failed (capital/insolvency)
 
@@ -429,6 +439,10 @@ function EmergentAgent(
         0,  # success_count
         0,  # failure_count
         0,  # innovation_count
+        0,  # innovation_success_count  (v3.3.4)
+        0,  # innovation_failure_count  (v3.3.4)
+        0,  # investment_success_count  (v3.3.4)
+        0,  # investment_failure_count  (v3.3.4)
         nothing,  # failure_round
         nothing,  # failure_reason
         UncertaintyResponseProfile(rng=rng),
@@ -978,8 +992,24 @@ function _execute_innovate!(
             if success
                 agent.innovation_count += 1
                 agent.success_count += 1
+                agent.innovation_success_count += 1  # v3.3.4 channel-specific
+                # v3.3.4: wire knowledge learning. learn_from_success! adds the
+                # innovation's components to the agent's knowledge set and (for
+                # high-quality innovations) creates derived knowledge that
+                # enters the shared base. This was dormant — the function was
+                # defined in knowledge.jl:499 but never called, so the
+                # knowledge pool stayed at its initial 12 components across
+                # hundreds of innovations (reviewer probe). The agentic
+                # scarcity mechanism (v3.3.3) depends on this: without new
+                # components, scarcity signal saturates near zero as existing
+                # components saturate in usage.
+                innovation.success = true  # field is read by create_derived_knowledge
+                learn_from_success!(innovation_engine.knowledge_base, agent.id, innovation)
             else
                 agent.failure_count += 1
+                agent.innovation_failure_count += 1  # v3.3.4 channel-specific
+                innovation.success = false
+                learn_from_failure!(innovation_engine.knowledge_base, agent.id, innovation; rng=agent.rng)
             end
 
             # Record detailed outcome
@@ -1249,8 +1279,10 @@ function process_matured_investments!(
             success = ret_multiple >= 1.0
             if success
                 agent.success_count += 1
+                agent.investment_success_count += 1  # v3.3.4 channel-specific
             else
                 agent.failure_count += 1
+                agent.investment_failure_count += 1  # v3.3.4 channel-specific
             end
 
             # Record return

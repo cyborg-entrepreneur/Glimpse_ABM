@@ -93,7 +93,9 @@ export attempt_innovation!
 export evaluate_innovation_success!
 export get_component_scarcity_metric
 export learn_from_success!, learn_from_failure!
-export reinforce_agent_resources!
+# v3.3.4: dropped orphan export of reinforce_agent_resources! — exists in
+# Python (knowledge.py) but never ported to Julia. No Julia caller was
+# attempting to call it, but the export would have errored on first use.
 
 # Exports - Simulation
 export EmergentSimulation
