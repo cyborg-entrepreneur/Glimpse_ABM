@@ -354,19 +354,20 @@ function EmergentAgent(
         primary_sector
     end
 
-    # Sample initial capital. Precedence (v2.9):
+    # Sample initial capital. Precedence (v2.10):
     # 1. Explicit `initial_capital` kwarg (per-agent override)
-    # 2. config.INITIAL_CAPITAL if set to a non-default value (uniform across agents)
-    # 3. sector_profile.initial_capital_range (sector-specific sample, default path)
+    # 2. config.INITIAL_CAPITAL scalar when USE_UNIFORM_INITIAL_CAPITAL=true
+    #    (scripts set the flag + the scalar to force identical starting capital)
+    # 3. sector_profile.initial_capital_range (default sector-specific sample)
     # 4. config.INITIAL_CAPITAL_RANGE (fallback if sector profile lacks the field)
-    # Earlier (v2.8) the scalar config.INITIAL_CAPITAL was ignored even when
-    # scripts set it — they'd compute multipliers against 5M while actual
-    # initial equity ranged $1.4M-$7.5M per sector. Now honored when set.
-    default_initial_capital = 5_000_000.0
+    #
+    # v2.9's sentinel-based detection (INITIAL_CAPITAL != 5M default) failed
+    # when scripts set it to the default value intending uniform capital —
+    # the explicit flag unambiguously opts in.
+    use_uniform_cap = getfield_default(config, :USE_UNIFORM_INITIAL_CAPITAL, false)
     capital = if !isnothing(initial_capital)
         initial_capital
-    elseif abs(config.INITIAL_CAPITAL - default_initial_capital) > 1.0
-        # User explicitly set INITIAL_CAPITAL away from default — honor it
+    elseif use_uniform_cap
         config.INITIAL_CAPITAL
     else
         sector_profile = get(config.SECTOR_PROFILES, sector, nothing)
@@ -556,6 +557,14 @@ Get the survival threshold for an agent based on their primary sector.
 Calibrated from BLS Business Employment Dynamics and Fed SBCS 2024.
 """
 function _get_sector_survival_threshold(agent::EmergentAgent)::Float64
+    # v2.10: honor config.USE_UNIFORM_SURVIVAL_THRESHOLD flag. When true,
+    # return the scalar (bypassing sector profiles). Earlier scripts that
+    # set config.SURVIVAL_THRESHOLD expecting a uniform 10K floor were
+    # silently overridden by sector profiles ($700K-$2.6M depending on
+    # sector) — survival rates looked artificially low in those scripts.
+    if getfield_default(agent.config, :USE_UNIFORM_SURVIVAL_THRESHOLD, false)
+        return agent.config.SURVIVAL_THRESHOLD
+    end
     sector_profile = get(agent.config.SECTOR_PROFILES, agent.primary_sector, nothing)
     if !isnothing(sector_profile) && hasproperty(sector_profile, :survival_threshold)
         return sector_profile.survival_threshold

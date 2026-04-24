@@ -92,7 +92,7 @@ function run_single_sim(tier::String; n_agents=BASE_N_AGENTS, n_rounds=BASE_N_RO
     )
 
     tier_dist = Dict(t => (t == tier ? 1.0 : 0.0) for t in ["none", "basic", "advanced", "premium"])
-    sim = EmergentSimulation(config=config, initial_tier_distribution=tier_dist)
+    sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=tier_dist)
 
     for r in 1:n_rounds
         GlimpseABM.step!(sim, r)
@@ -380,7 +380,7 @@ function run_sim_with_checkpoints(tier::String; n_agents=BASE_N_AGENTS, n_rounds
     )
 
     tier_dist = Dict(t => (t == tier ? 1.0 : 0.0) for t in ["none", "basic", "advanced", "premium"])
-    sim = EmergentSimulation(config=config, initial_tier_distribution=tier_dist)
+    sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=tier_dist)
 
     checkpoints = Dict{Int, Float64}()
     check_rounds = [20, 40, 60]

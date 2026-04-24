@@ -102,7 +102,7 @@ function run_emergent_simulation(run_idx::Int, seed::Int)
 
     # Equal initial distribution - agents will dynamically choose
     initial_dist = Dict("none" => 0.25, "basic" => 0.25, "advanced" => 0.25, "premium" => 0.25)
-    sim = EmergentSimulation(config=config, initial_tier_distribution=initial_dist)
+    sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=initial_dist)
 
     # Clear fixed_ai_level to enable dynamic selection
     for agent in sim.agents

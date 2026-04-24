@@ -96,7 +96,7 @@ function run_simulation(tier::String; seed=42, n_rounds=N_ROUNDS,
     end
 
     tier_dist = Dict(t => (t == tier ? 1.0 : 0.0) for t in AI_TIERS)
-    sim = EmergentSimulation(config=config, initial_tier_distribution=tier_dist)
+    sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=tier_dist)
 
     for r in 1:n_rounds
         GlimpseABM.step!(sim, r)
@@ -281,7 +281,7 @@ for (cap, label) in zip(capital_levels, capital_labels)
         config = EmergentConfig(N_AGENTS=N_AGENTS, N_ROUNDS=N_ROUNDS, RANDOM_SEED=seed,
                                 INITIAL_CAPITAL=cap, SURVIVAL_THRESHOLD=10_000.0)
         tier_dist = Dict(t => (t == tier ? 1.0 : 0.0) for t in AI_TIERS)
-        sim = EmergentSimulation(config=config, initial_tier_distribution=tier_dist)
+        sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=tier_dist)
         for r in 1:N_ROUNDS
             GlimpseABM.step!(sim, r)
         end
@@ -319,7 +319,7 @@ for n in pop_sizes
         config = EmergentConfig(N_AGENTS=n, N_ROUNDS=N_ROUNDS, RANDOM_SEED=seed,
                                 INITIAL_CAPITAL=5_000_000.0, SURVIVAL_THRESHOLD=10_000.0)
         tier_dist = Dict(t => (t == tier ? 1.0 : 0.0) for t in AI_TIERS)
-        sim = EmergentSimulation(config=config, initial_tier_distribution=tier_dist)
+        sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=tier_dist)
         for r in 1:N_ROUNDS
             GlimpseABM.step!(sim, r)
         end
@@ -358,7 +358,7 @@ for (rounds, label) in zip(time_horizons, time_labels)
         config = EmergentConfig(N_AGENTS=N_AGENTS, N_ROUNDS=rounds, RANDOM_SEED=seed,
                                 INITIAL_CAPITAL=5_000_000.0, SURVIVAL_THRESHOLD=10_000.0)
         tier_dist = Dict(t => (t == tier ? 1.0 : 0.0) for t in AI_TIERS)
-        sim = EmergentSimulation(config=config, initial_tier_distribution=tier_dist)
+        sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=tier_dist)
         for r in 1:rounds
             GlimpseABM.step!(sim, r)
         end
@@ -396,7 +396,7 @@ for seed_base in seed_bases
         config = EmergentConfig(N_AGENTS=N_AGENTS, N_ROUNDS=N_ROUNDS, RANDOM_SEED=seed,
                                 INITIAL_CAPITAL=5_000_000.0, SURVIVAL_THRESHOLD=10_000.0)
         tier_dist = Dict(t => (t == tier ? 1.0 : 0.0) for t in AI_TIERS)
-        sim = EmergentSimulation(config=config, initial_tier_distribution=tier_dist)
+        sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=tier_dist)
         for r in 1:N_ROUNDS
             GlimpseABM.step!(sim, r)
         end
@@ -631,7 +631,7 @@ for (test_idx, test) in enumerate(refutation_tests)
         end
 
         tier_dist = Dict(t => (t == tier ? 1.0 : 0.0) for t in AI_TIERS)
-        sim = EmergentSimulation(config=config, initial_tier_distribution=tier_dist)
+        sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=tier_dist)
 
         for r in 1:N_ROUNDS
             GlimpseABM.step!(sim, r)
@@ -705,7 +705,7 @@ function run_dynamic_adoption_test(; seed=42)
     )
 
     tier_dist = Dict(t => 0.25 for t in AI_TIERS)
-    sim = EmergentSimulation(config=config, initial_tier_distribution=tier_dist)
+    sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=tier_dist)
 
     # Enable dynamic adoption by clearing fixed_ai_level
     initial_tiers = Dict{String, Int}(t => 0 for t in AI_TIERS)

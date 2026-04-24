@@ -109,7 +109,7 @@ function run_mechanism_sim(tier::String, run_idx::Int, seed::Int)
     )
 
     tier_dist = Dict(t => (t == tier ? 1.0 : 0.0) for t in AI_TIERS)
-    sim = EmergentSimulation(config=config, initial_tier_distribution=tier_dist)
+    sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=tier_dist)
 
     # Track mechanisms over time
     survival_traj = Float64[]

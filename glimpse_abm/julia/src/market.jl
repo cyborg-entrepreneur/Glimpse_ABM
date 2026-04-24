@@ -1040,6 +1040,13 @@ end
 Update clearing metrics from agent actions.
 """
 function update_clearing_metrics!(market::MarketEnvironment, agent_actions::Vector{Dict{String,Any}})
+    # v2.10: clear stale adjustments at ENTRY so the fresh recompute at the
+    # bottom of this function actually recomputes (rather than hitting the
+    # cache early-return in get_demand_adjustments). v2.9 populated at exit
+    # but get_demand_adjustments checks `haskey` first and returns cached
+    # values — leaving adjustments frozen at whatever was first computed.
+    empty!(market.sector_demand_adjustments)
+
     sector_flows = Dict{String,Float64}()
     tier_flows = Dict{String,Float64}()
 

@@ -95,7 +95,7 @@ function run_single_sim(tier::String; seed=42)
     )
 
     tier_dist = Dict(t => (t == tier ? 1.0 : 0.0) for t in AI_TIERS)
-    sim = EmergentSimulation(config=config, initial_tier_distribution=tier_dist)
+    sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=tier_dist)
 
     # Track survival at multiple time points for early-period analysis
     survival_by_round = Float64[]

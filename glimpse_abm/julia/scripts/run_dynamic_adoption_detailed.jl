@@ -82,7 +82,7 @@ Threads.@threads for run_idx in 1:N_RUNS
     )
 
     tier_dist = Dict(t => 0.25 for t in AI_TIERS)
-    sim = EmergentSimulation(config=config, initial_tier_distribution=tier_dist)
+    sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=tier_dist)
 
     # Enable dynamic adoption by clearing fixed_ai_level
     for agent in sim.agents

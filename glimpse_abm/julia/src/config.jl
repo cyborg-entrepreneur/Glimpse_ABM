@@ -111,8 +111,17 @@ parameters preserved for exact behavioral compatibility.
     # capital across agents, pass it explicitly per-agent to EmergentAgent(...,
     # initial_capital=X). Field retained because production scripts reference it.
     INITIAL_CAPITAL::Float64 = 5_000_000.0
+    # v2.10: explicit flag to force uniform starting capital across all agents.
+    # When true, EmergentAgent constructor uses config.INITIAL_CAPITAL (scalar)
+    # instead of sampling from sector_profile.initial_capital_range. Earlier
+    # the sentinel-based detection (INITIAL_CAPITAL != 5M) failed when scripts
+    # set it to 5M — the default — intending uniform capital.
+    USE_UNIFORM_INITIAL_CAPITAL::Bool = false
     INITIAL_CAPITAL_RANGE::Tuple{Float64,Float64} = (2_500_000.0, 10_000_000.0)
     SURVIVAL_THRESHOLD::Float64 = 2_000_000.0
+    # v2.10: explicit flag. When true, check_survival! uses the scalar
+    # SURVIVAL_THRESHOLD instead of sector_profile.survival_threshold.
+    USE_UNIFORM_SURVIVAL_THRESHOLD::Bool = false
     SURVIVAL_CAPITAL_RATIO::Float64 = 0.40  # equity_failure floor (v2.5: was 0.38, now 0.40)
     INSOLVENCY_GRACE_ROUNDS::Int = 6  # was 7 months; moderately tightened (v2.5)
     RANDOM_SEED::Int = 42

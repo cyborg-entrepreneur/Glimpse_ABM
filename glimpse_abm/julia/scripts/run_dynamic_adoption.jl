@@ -85,7 +85,7 @@ function run_dynamic_simulation(; seed=42)
 
     # Create simulation with 25% initial distribution
     tier_dist = Dict(t => 0.25 for t in AI_TIERS)
-    sim = EmergentSimulation(config=config, initial_tier_distribution=tier_dist)
+    sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=tier_dist)
 
     # Record initial tier distribution
     initial_tiers = Dict{String, Int}(t => 0 for t in AI_TIERS)
