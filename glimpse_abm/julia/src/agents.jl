@@ -1953,8 +1953,14 @@ function calculate_investment_utility(
     liquidity_boost = clamp(capital_ratio - 0.8, 0.0, 1.5)
     opportunity_boost = clamp(length(opportunities) / 6.0, 0.0, 1.0)
 
-    # Ignorance adjustment
-    ignorance_adjustment = 0.5 + 0.5 / (1.0 + exp(clamp(actor_unc - 1.5, -20.0, 20.0)))
+    # v3.3: Ignorance adjustment — replaces a sigmoid centered at actor_unc=1.5
+    # whose flat-tail operating range (agents typically perceive 0.05–0.25)
+    # produced ~1.7% utility variance across tiers even though perception
+    # itself differed by 4.5×. Linear response in [0.2, 1.0] now makes the
+    # tier-differentiated Knightian-ignorance perception actually translate
+    # to utility — premium's low perceived ignorance earns a real utility
+    # premium, none's higher perceived ignorance a real penalty.
+    ignorance_adjustment = clamp(1.0 - actor_unc * 0.8, 0.2, 1.0)
 
     value = scaled_score * ignorance_adjustment * decision_conf
 
@@ -1982,7 +1988,15 @@ function calculate_investment_utility(
 
     # Uncertainty hooks
     value += 0.15 * agentic_unc
-    value -= 0.06 * recursive_unc
+    # v3.3: competitive_recursion coefficient raised from 0.06 → 0.25. The
+    # environment correctly reports massive recursion under premium (~0.98)
+    # because high-tier agents identify the same top opportunities and pile
+    # in — the paper's equilibrium-trap mechanism. Prior coefficient gave
+    # only 6% utility drag at max recursion; agents saw the crowded niches
+    # but didn't behaviorally pivot away. Stronger coefficient now feeds
+    # the trap into the pre-decision utility, not just the post-maturation
+    # return via v3.1 convexity. Calibrate K_sat downstream.
+    value -= 0.25 * recursive_unc
 
     # Risk tolerance
     risk_tolerance = Float64(get(agent.traits, "uncertainty_tolerance", 0.5))
@@ -2239,11 +2253,18 @@ function evaluate_opportunity_basic(
     # agents from hallucinations — understating premium's actual tier cost.
     if contains_hallucination
         analytical = Float64(get(agent.traits, "analytical_ability", 0.5))
-        # Base detection probability scales with analytical_ability.
-        # Low-conf hallucinations are easier to catch (suspicion-triggered);
-        # high-conf hallucinations are harder (agents trust the confident signal).
-        conf_disbelief = 1.0 - conf  # 0 when conf=1, 0.95 when conf=0.05
-        detect_prob = clamp(analytical * 0.5 + conf_disbelief * 0.3, 0.05, 0.85)
+        # v3.3: Detection is now primarily analytical-ability driven and
+        # symmetric across confidence levels. The old formula subtracted
+        # `conf_disbelief` into detect_prob, which INVERTED detection for
+        # high-confidence hallucinations — premium's confident signals were
+        # the hardest to catch. This contradicts the literature: analytical
+        # reviewers catch MORE errors in confidently-presented claims, not
+        # fewer (Moore & Healy 2008 applies to the *producer's* overconfidence,
+        # not the *consumer's* detection ability). New formula: detection
+        # scales with analytical ability plus a small floor — independent of
+        # the AI's stated confidence. Premium still pays for hallucinations
+        # when they occur; it just doesn't get an asymmetric free pass.
+        detect_prob = clamp(analytical * 0.6 + 0.15, 0.1, 0.85)
         if rand(agent.rng) < detect_prob
             # Detected — agent discounts the score (they sense something is off)
             halluc_mult = 0.75 - 0.35 * analytical
