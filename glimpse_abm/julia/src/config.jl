@@ -310,11 +310,23 @@ parameters preserved for exact behavioral compatibility.
     # K = Carrying capacity: competition level where penalties START
     # Interpretation: "effective rivals" that can coexist without pain
     # At competition < K: no crowding penalty (healthy competition)
-    # At competition = K: penalty just starts
-    # Calibrated: With 1000 agents and ~30 discovered opportunities, median
-    # competition ≈ 3.6, mean ≈ 5-7. K=5.0 ensures median competition has no
-    # penalty, while C > 5 (overcrowded) incurs meaningful penalties.
-    CROWDING_CAPACITY_K::Float64 = 8.0
+    # At competition = K: penalty just starts.
+    #
+    # v2.5 calibration: K = 1.5 (was 8.0 in earlier canonical drift).
+    # Diagnostic at N=1000 with K=8 showed max competition only reached 2.57
+    # across a 60-round run, so the convexity penalty was DEAD CODE — no
+    # opportunity ever crossed K, exp(-penalty) was always 1.0. The
+    # convergence-driven crowding mechanism (premium agents piling into the
+    # same top-ranked opps → penalty on those opps' returns) couldn't engage.
+    # Restored to v1's K=1.5 so the top ~5-15% of crowded opportunities now
+    # incur a measurable convexity penalty.
+    #
+    # Population scaling multiplies K by √(N/N_ref), so K stays correlated
+    # with the per-opp competition pressure that grows with N.
+    #   N=1K:   K = 1.50
+    #   N=10K:  K = 4.74
+    #   N=100K: K = 15.0
+    CROWDING_CAPACITY_K::Float64 = 1.5
 
     # γ = Convexity exponent: how sharply penalties increase beyond capacity
     # γ = 1: linear (gentle)
