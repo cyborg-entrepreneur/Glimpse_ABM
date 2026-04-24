@@ -39,6 +39,37 @@ decision, partially addressing the "level-0 thinking" critique. Source code
 is public on GitHub. The max_fraction sweep documents mechanism sensitivity.
 None of this was available when the paper was reviewed.
 
+**Update (post-plan, 2026-04-24 evening):** Four additional audit rounds
+landed (v3.3.1 through v3.3.4) before any revision writing started, each
+addressing concrete defects flagged by an external code reviewer:
+
+- v3.3.1: 19 analysis scripts had silent uniform-flag failure (capital
+  100M expected, 1.68-6.67M delivered); demand adjustment formula could
+  produce negative failure pressure (oversubscribed sectors functionally
+  immortal); Union signatures lied about Dict support.
+- v3.3.2: MarketConditions wasn't actually a snapshot (live dict
+  references); _execute_innovate! Dict fallback crashed
+  attempt_innovation!; clearing-ratio sign conflict between market.jl
+  and models.jl (hot markets net-penalized returns).
+- v3.3.3: uncertainty_state still not snapshotted; agentic scarcity
+  was a dead mechanism (knowledge_base never attached, function never
+  defined); novelty_potential / component_scarcity producer/consumer
+  key mismatch; capacity scale; spawned-opp double-apply; subscription
+  planner overstated cost.
+- v3.3.4: knowledge learning was dead (learn_from_success!/failure!
+  defined but never called — innovations succeeded but the knowledge
+  base never grew); niche opp double-apply (sibling of v3.3.3 spawn fix);
+  innovation vs investment success counter conflation; tier_invest_share
+  staleness on no-invest rounds; sector clearing saturation flattened
+  heterogeneity at N=1000; orphan export.
+
+Net: the paper's central Knightian mechanism is now actually wired
+end-to-end. v3.3.4 calibration produces tier ordering advanced > basic
+> premium ≈ none with cross-seed mean 0.527 (in BLS band). This is
+substantially what the paper claims to test — for the first time. Prior
+to this round of fixes, several mechanism descriptions in the paper
+described code paths that didn't actually fire.
+
 ---
 
 ## Cluster 1 — The congestion game critique (CRITICAL)

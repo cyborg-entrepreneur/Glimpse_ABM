@@ -4,14 +4,23 @@
 
 A comprehensive agent-based model (ABM) for studying how AI augmentation impacts entrepreneurial decision-making under Knightian uncertainty. This model accompanies the paper **"Into the Flux: AI Augmentation & The Paradox of Future Knowledge"** (Entrepreneurship Theory & Practice).
 
-> **Status (v3.3, 2026-04-24):** The v1 "paradox" framing below (premium < none) was an
+> **Status (v3.3.4, 2026-04-24):** The v1 "paradox" framing below was an
 > artifact of correctness bugs fixed across v2.1–v2.12. The current canonical
-> finding is a **non-monotonic tier-value story**: advanced > basic > premium > none.
-> Premium still beats none, but advanced beats premium due to convergence-driven
-> capital-saturation crowding. v3.1 replaced count-based with capital-saturation
-> convexity; v3.2 ported Python's confidence × signal_score invest sizing to Julia;
-> v3.3 wired Knightian perception into pre-decision utility. See
-> `memory/project_glimpse_arc_job.md` for the current numbers and
+> finding is **advanced > basic > premium ≈ none**. AI adoption is broadly
+> beneficial (basic and advanced both substantially beat no-AI), but top-tier
+> AI is *trapped by its own effectiveness* via convergence-crowding through
+> three mechanisms: capital saturation (v3.1), competitive recursion (v3.3),
+> and component-scarcity erosion (v3.3.3). v3.3.4 produces this ordering with
+> mean survival 0.527 in the BLS 50–55% band across three seeds.
+>
+> An ETP R&R was received 2026-04-24 (decision: major revision). Revision
+> plan at `REVISION_PLAN_v1.md`; recommendation is to pivot the headline
+> finding from fixed-tier "paradox" to dynamic-adoption equilibrium, frame
+> the contribution against congestion-game literature, and lean the
+> presented model to 4–5 load-bearing traits via ablation.
+>
+> See `~/.claude/.../memory/project_glimpse_arc_job.md` for the current
+> tier numbers and tag list, and
 > `glimpse_abm/julia/results/v32_max_fraction_sweep/ANALYSIS.md` for the
 > sensitivity analysis. The paragraphs below describe the retired v1 framing
 > and are preserved for paper context.
@@ -174,13 +183,28 @@ Info quality follows LLM scaling laws: `info_quality = 0.25 + 0.09 × log₁₀(
 - **Innovation volume:** Premium creates 11x more niches but with constant success rate (~11%)
 - **Competition:** Premium agents experience 2-3x higher crowding ratios
 
-### v3.3 canonical results (N=1000 × 60 × 4-tier fixed, seed=42, K_sat=1.5)
+### v3.3.4 canonical results (N=1000 × 60 × 4-tier fixed, K_sat=1.5, 3 seeds)
 
-- **Survival:** Advanced (61%) > Basic (51%) > Premium (42%) > None (38%)
-- **Premium/Advanced ratio:** 0.69 — premium still pays a meaningful convergence-crowding cost relative to advanced, but now beats none rather than underperforming it
-- **Mean survival:** 48% (within ±2pp of BLS 5-year benchmark 50–55%)
-- **Saturation signal live:** premium opportunities reach 5.85× K_sat at peak (mechanism firing, not dormant)
-- See `glimpse_abm/julia/results/v32_max_fraction_sweep/` for the `MAX_INVESTMENT_FRACTION` sensitivity sweep showing the mechanism is monotone in Kelly aggressiveness
+| seed | none | basic | advanced | premium | mean |
+|---|---|---|---|---|---|
+| 42 | 0.387 | 0.563 | 0.640 | 0.368 | 0.490 |
+| 43 | 0.465 | 0.588 | 0.646 | 0.538 | 0.559 |
+| 44 | 0.472 | 0.575 | 0.622 | 0.459 | 0.532 |
+
+- **Tier ordering:** Advanced > Basic > Premium ≈ None — stable across seeds
+- **Cross-seed mean:** 0.527 — squarely in BLS 5-year benchmark band (50–55%)
+- **Premium/Advanced ratio:** ~0.65 — premium pays a meaningful trap cost but isn't strictly worse than no-AI
+- **Sensitivity sweep:** `glimpse_abm/julia/results/v32_max_fraction_sweep/` shows the mechanism is monotone in `MAX_INVESTMENT_FRACTION`. Only 0.037 (the default) hits the BLS calibration band.
+
+The v3.3.x audit rounds (4 of them, addressing 17 distinct findings)
+landed end-to-end Knightian mechanism wiring: capital-saturation
+convexity (v3.1), confidence × signal sizing (v3.2), Knightian
+perception → utility pathway (v3.3), uniform-flag propagation +
+demand clamping + signature honesty (v3.3.1), snapshot isolation +
+innovate fallback + clearing-sign reconciliation (v3.3.2),
+uncertainty-state snapshot + agentic scarcity wiring + novelty/scarcity
+key emission (v3.3.3), knowledge learning + counter separation + sector
+heterogeneity normalization (v3.3.4).
 
 ### Robustness (Tables 4A-I — v1 numbers, retired)
 
