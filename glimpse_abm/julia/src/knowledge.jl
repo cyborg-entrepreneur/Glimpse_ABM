@@ -445,6 +445,55 @@ function get_average_agent_knowledge(kb::KnowledgeBase)::Float64
 end
 
 """
+Compute a scalar "component scarcity" signal in [0, 1]:
+
+  0.6 · rarity_of_usage + 0.4 · fraction_unused_by_any_agent
+
+Scarcity rises when (a) the pool has components used rarely relative to peak
+(rarity via 90th-percentile-normalised usage), or (b) a large fraction of
+components hasn't been picked up by any agent yet. Ported from
+glimpse_abm/knowledge.py:252 — v3.3.3 closes a dead-mechanism: the Julia
+scarcity dispatch at uncertainty.jl:578 referenced this function, it was
+exported from GlimpseABM, but never actually defined. The non-null
+`env.knowledge_base` path consequently threw UndefVarError at runtime —
+masked only because simulation.jl also failed to attach a knowledge_base
+to the uncertainty env, keeping the fallback-to-default branch active.
+"""
+function get_component_scarcity_metric(kb::KnowledgeBase)::Float64
+    total_pieces = length(kb.knowledge_pieces)
+    if total_pieces <= 0
+        return 0.5
+    end
+
+    usage_values = collect(values(kb.knowledge_usage))
+    rarity_component = if !isempty(usage_values)
+        usage = Float64.(usage_values)
+        # 90th percentile as effective peak (guards against single-outlier
+        # skew). quantile() on empty or all-zero input returns 0, so fall
+        # back to 1.0 to avoid divide-by-zero below.
+        effective_peak = try
+            q = quantile(usage, 0.9)
+            q > 0 ? q : 1.0
+        catch
+            1.0
+        end
+        normalised = clamp.(usage ./ max(effective_peak, 1.0), 0.0, 1.0)
+        clamp(1.0 - mean(normalised), 0.0, 1.0)
+    else
+        0.85
+    end
+
+    used_pieces = Set{String}()
+    for knowledge_ids in values(kb.agent_knowledge)
+        union!(used_pieces, knowledge_ids)
+    end
+    coverage = length(used_pieces) / total_pieces
+    unused_share = clamp(1.0 - coverage, 0.0, 1.0)
+
+    return clamp(0.6 * rarity_component + 0.4 * unused_share, 0.0, 1.0)
+end
+
+"""
 Learn from successful innovation.
 """
 function learn_from_success!(

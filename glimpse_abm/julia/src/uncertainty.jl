@@ -1033,6 +1033,14 @@ function measure_uncertainty_state!(
     env.agentic_novelty_state["drivers"] = novelty_diagnostics
     env.agentic_novelty_state["disruption_potential"] = disruption_state
     env.agentic_novelty_state["level"] = agentic_level
+    # v3.3.3: emit keys realized_return expects. Consumer at models.jl:253
+    # reads `novelty_potential`; consumer at models.jl:261 reads
+    # `component_scarcity`. Previously only internal keys ("level" /
+    # "scarcity_signal") were written, so the silent-zero fallbacks fired —
+    # novelty_signal defaulted to 0.5 for every opp, scarcity_signal
+    # effectively froze at the opp's baked-in opp.component_scarcity.
+    env.agentic_novelty_state["novelty_potential"] = agentic_level
+    env.agentic_novelty_state["component_scarcity"] = scarcity_signal
     env._novelty_diagnostics = novelty_diagnostics
 
     # Get tier-specific rates from action summary

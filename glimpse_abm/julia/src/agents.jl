@@ -1753,7 +1753,13 @@ function choose_ai_level(
             # Earlier path returned ~$19/month for premium while biller charged
             # $3500/month — a 180× under-estimate that biased emergent-mode
             # tier choice toward premium.
-            base_cost + per_use_cost * recent_activity
+            #
+            # v3.3.3: billing doesn't charge a per-use rider for subscription
+            # tiers (charge_subscription_installment! bills only the monthly
+            # rate). Adding `per_use_cost * recent_activity` here made the
+            # planner over-estimate subscription cost, biasing emergent tier
+            # choice AWAY from premium/advanced by a factor of activity.
+            base_cost
         elseif cost_type == "per_use"
             per_call = base_cost > 0 ? base_cost : per_use_cost
             per_call * recent_activity
