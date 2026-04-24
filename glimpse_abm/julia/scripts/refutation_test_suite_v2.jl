@@ -295,7 +295,7 @@ function get_test_suite_v2()
         "ZERO_COST",
         "AI is free (no subscription or usage costs)";
         config_overrides=Dict{String,Any}(
-            "AI_COST_MULTIPLIER" => 0.0,
+            "AI_COST_INTENSITY" => 0.0,
             "AI_COST_INTENSITY" => 0.0
         )
     ))
@@ -305,7 +305,7 @@ function get_test_suite_v2()
         "HALF_COST",
         "AI costs reduced by 50%";
         config_overrides=Dict{String,Any}(
-            "AI_COST_MULTIPLIER" => 0.5,
+            "AI_COST_INTENSITY" => 0.5,
             "AI_COST_INTENSITY" => 0.5
         )
     ))
@@ -355,7 +355,7 @@ function get_test_suite_v2()
         config_overrides=Dict{String,Any}(
             "DISABLE_COMPETITION_DYNAMICS" => true,
             "COMPETITION_SCALE_FACTOR" => 0.0,
-            "AI_COST_MULTIPLIER" => 0.0,
+            "AI_COST_INTENSITY" => 0.0,
             "AI_COST_INTENSITY" => 0.0,
             "RECURSION_WEIGHTS" => Dict(
                 "crowd_weight" => 0.0,

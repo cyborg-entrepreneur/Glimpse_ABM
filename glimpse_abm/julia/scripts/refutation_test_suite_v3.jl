@@ -288,7 +288,7 @@ function get_comprehensive_test_suite()
         "AI is completely free (no costs)",
         "COST";
         config_overrides=Dict{String,Any}(
-            "AI_COST_MULTIPLIER" => 0.0,
+            "AI_COST_INTENSITY" => 0.0,
             "AI_COST_INTENSITY" => 0.0
         )
     ))
@@ -298,7 +298,7 @@ function get_comprehensive_test_suite()
         "AI costs reduced to 25%",
         "COST";
         config_overrides=Dict{String,Any}(
-            "AI_COST_MULTIPLIER" => 0.25,
+            "AI_COST_INTENSITY" => 0.25,
             "AI_COST_INTENSITY" => 0.25
         )
     ))
@@ -308,7 +308,7 @@ function get_comprehensive_test_suite()
         "AI costs reduced to 50%",
         "COST";
         config_overrides=Dict{String,Any}(
-            "AI_COST_MULTIPLIER" => 0.5,
+            "AI_COST_INTENSITY" => 0.5,
             "AI_COST_INTENSITY" => 0.5
         )
     ))
@@ -318,7 +318,7 @@ function get_comprehensive_test_suite()
         "AI costs reduced to 75%",
         "COST";
         config_overrides=Dict{String,Any}(
-            "AI_COST_MULTIPLIER" => 0.75,
+            "AI_COST_INTENSITY" => 0.75,
             "AI_COST_INTENSITY" => 0.75
         )
     ))
@@ -399,7 +399,7 @@ function get_comprehensive_test_suite()
         config_overrides=Dict{String,Any}(
             "DISABLE_COMPETITION_DYNAMICS" => true,
             "COMPETITION_SCALE_FACTOR" => 0.0,
-            "AI_COST_MULTIPLIER" => 0.0,
+            "AI_COST_INTENSITY" => 0.0,
             "AI_COST_INTENSITY" => 0.0
         )
     ))
@@ -421,7 +421,7 @@ function get_comprehensive_test_suite()
         "COMBINED_FAV";
         config_overrides=Dict{String,Any}(
             "COMPETITION_SCALE_FACTOR" => 0.5,
-            "AI_COST_MULTIPLIER" => 0.0,
+            "AI_COST_INTENSITY" => 0.0,
             "AI_COST_INTENSITY" => 0.0
         )
     ))
@@ -435,7 +435,7 @@ function get_comprehensive_test_suite()
         config_overrides=Dict{String,Any}(
             "DISABLE_COMPETITION_DYNAMICS" => true,
             "COMPETITION_SCALE_FACTOR" => 0.0,
-            "AI_COST_MULTIPLIER" => 0.0,
+            "AI_COST_INTENSITY" => 0.0,
             "AI_COST_INTENSITY" => 0.0,
             "RECURSION_WEIGHTS" => Dict(
                 "crowd_weight" => 0.0,

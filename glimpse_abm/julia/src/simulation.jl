@@ -274,6 +274,20 @@ function step!(sim::EmergentSimulation, round::Int)
             ai_tier = get(m, "ai_level", get_ai_level(agent))
             success = get(m, "success", false)
             update_tier_belief!(agent.ai_learning, ai_tier, success)
+            # v2.7: wire update_state_from_outcome! so AI-trust and
+            # experience-driven trait evolution actually run. The function
+            # was defined (agents.jl:update_state_from_outcome!) but had no
+            # callers — agent trait/trust learning was dead. An outcome is
+            # "AI-accurate" if the estimated_return at investment was within
+            # 25% of the realized return_multiple.
+            if ai_tier != "none"
+                est = Float64(get(m, "estimated_return", 1.0))
+                actual = Float64(get(m, "return_multiple", 1.0))
+                ai_accurate = est > 0 && abs(actual - est) / max(abs(est), 0.1) < 0.25
+                update_state_from_outcome!(agent, m; ai_was_accurate=ai_accurate)
+            else
+                update_state_from_outcome!(agent, m; ai_was_accurate=nothing)
+            end
         end
         append!(all_matured, matured)
         # Check survival after matured investments (matches Python line 1003)

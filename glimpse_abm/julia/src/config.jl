@@ -95,7 +95,12 @@ parameters preserved for exact behavioral compatibility.
     # ========================================================================
     # AGENT CONFIGURATION
     # ========================================================================
-    AGENT_AI_MODE::String = "emergent"
+    # v2.7 default changed "emergent" → "fixed" for ATE-correctness of scripts
+    # that assume fixed-tier (the main-analysis design). Emergent mode is the
+    # robustness-check design — explicitly opt in per-run. Earlier "emergent"
+    # default let run_fixed_tier_analysis + run_comprehensive_analysis silently
+    # run in emergent mode because they never set AGENT_AI_MODE.
+    AGENT_AI_MODE::String = "fixed"
     N_AGENTS::Int = 1000
     # NOTE on initial-capital precedence (corrected 2026-04-23):
     # The EmergentAgent constructor honors `initial_capital` kwarg first, then
@@ -203,9 +208,10 @@ parameters preserved for exact behavioral compatibility.
         "premium" => 0.05
     )
 
-    # AI cost multiplier (for testing zero/reduced AI costs)
-    # Default: 1.0 (full costs); 0.0 = free AI
-    AI_COST_MULTIPLIER::Float64 = 1.0
+    # v2.7: AI_COST_MULTIPLIER DELETED — was duplicate of AI_COST_INTENSITY
+    # (config.jl:135) but never actually read by src/ billing code. Robustness
+    # scripts that set AI_COST_MULTIPLIER were silent no-ops. Scripts updated
+    # to use AI_COST_INTENSITY in the same commit.
     INVESTMENT_SUCCESS_ROI_THRESHOLD::Float64 = 0.017  # Monthly threshold (was 0.05 quarterly)
     BURN_HISTORY_WINDOW::Int = 9  # 9 months (was 3 quarters)
     BURN_FAILURE_THRESHOLD::Float64 = 0.12

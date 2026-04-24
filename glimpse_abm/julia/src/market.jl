@@ -347,13 +347,20 @@ function step!(
         # Calculate AI usage share (proportion of agents using AI)
         ai_usage_share = count(a -> get(a, "ai_level_used", "none") != "none", agent_actions) / max(1, total_actions)
 
+        # v2.7: preserve boom_streak across the rebuild. Earlier this block
+        # replaced the whole dict wholesale, wiping boom_streak (written at
+        # ~line 720 by update_market_dynamics!). Dynamic black-swan probability
+        # therefore never escalated past streak=1 because the streak reset each
+        # round before the next update could read it.
+        prior_boom_streak = get(market.crowding_metrics, "boom_streak", 0.0)
         market.crowding_metrics = Dict(
             "crowding_index" => crowding_index,
             "share_invest" => share_invest,
             "share_innovate" => share_innovate,
             "share_explore" => share_explore,
             "share_maintain" => share_maintain,
-            "ai_usage_share" => ai_usage_share
+            "ai_usage_share" => ai_usage_share,
+            "boom_streak" => prior_boom_streak
         )
     end
 
@@ -393,6 +400,12 @@ function get_market_conditions(market::MarketEnvironment)::Dict{String,Any}
         "sector_clearing_index" => market.sector_clearing_index,
         "aggregate_clearing_ratio" => market.aggregate_clearing_ratio,
         "crowding_metrics" => market.crowding_metrics,
+        # v2.7: emit sector_demand_adjustments so realized_return (models.jl:218)
+        # can actually apply per-sector demand/supply scaling. Earlier the field
+        # existed on the market but was never packaged into the conditions dict —
+        # silent-zero dataflow bug identical in pattern to v2.3's amount/estimated_return
+        # key mismatches.
+        "sector_demand_adjustments" => market.sector_demand_adjustments,
         "round" => market.current_round
     )
 end
@@ -1089,8 +1102,15 @@ function get_opportunities_for_agent(
     market::MarketEnvironment,
     agent
 )::Vector{Opportunity}
-    # Start with discovered opportunities
-    visible_opps = [opp for opp in market.opportunities if opp.discovered]
+    # Start with discovered opportunities PLUS any opps this agent created
+    # themselves (niche / innovation-spawn), which may still be discovered=false
+    # to the rest of the market. v2.7: creator-only visibility mechanism —
+    # creator can invest in their own creation immediately; others find it
+    # only through the normal AI-tier-aware discovery probability below.
+    agent_id = hasproperty(agent, :id) ? agent.id : nothing
+    visible_opps = [opp for opp in market.opportunities
+                    if opp.discovered ||
+                       (!isnothing(agent_id) && opp.created_by == agent_id)]
 
     # AI-based discovery of undiscovered opportunities
     ai_level = get_ai_level(agent)
@@ -1220,13 +1240,12 @@ function create_niche_opportunity(
         latent_return_potential=clamp(latent_return, 0.5, 25.0),
         latent_failure_potential=clamp(latent_failure, 0.1, 0.95),
         complexity=rand(market.rng, Uniform(0.4, 0.8)),
-        # Creator sees their own niche immediately; other agents discover it
-        # through the normal visibility filter (get_opportunities_for_agent).
-        # This unblocks the intended flow: an explorer invests in the niche
-        # they just created. Previously discovered=false hid the opp from
-        # everyone including the creator until some other agent happened to
-        # stumble across it via the discovery_prob roll.
-        discovered=true,
+        # v2.7: discovered=false. Creator-only visibility is handled in
+        # get_opportunities_for_agent via a `created_by == agent.id` override.
+        # Earlier v2.3 set discovered=true which leaked the opp to every agent
+        # instantly — the paper's mechanism assumes gradual AI-tier-aware
+        # discovery, not broadcast.
+        discovered=false,
         discovery_round=round_num,
         # Field on the Opportunity struct is `created_by` (models.jl:78); the
         # earlier `creator_id=` kwarg name was wrong and would error if this
@@ -1324,10 +1343,10 @@ function spawn_opportunity_from_innovation!(
         latent_return_potential=clamp(latent_return, 0.5, 25.0),
         latent_failure_potential=clamp(latent_failure, 0.1, 0.95),
         complexity=clamp(0.3 + innovation.quality * 0.3, 0.3, 1.0),
-        # Creator sees their own innovation-spawned opportunity. Other agents
-        # discover it through the normal AI-tier-aware visibility filter.
-        # See matching rationale in create_niche_opportunity.
-        discovered=true,
+        # v2.7: discovered=false — creator visibility handled via created_by
+        # override in get_opportunities_for_agent (see niche-opportunity fn
+        # for rationale).
+        discovered=false,
         discovery_round=market.current_round,
         created_by=innovation.creator_id,
         config=market.config,

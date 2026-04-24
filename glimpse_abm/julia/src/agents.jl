@@ -1186,7 +1186,13 @@ function process_matured_investments!(
                 "success" => success,
                 "round_matured" => round,
                 "estimated_return" => estimated_return,
-                "competition_at_maturity" => competition_level
+                "competition_at_maturity" => competition_level,
+                # v2.7: emit tier-at-investment so simulation.jl:274's
+                # update_tier_belief! attributes the outcome to the tier that
+                # actually made the investment (not the agent's current tier).
+                # Investment dict stores the at-investment ai_level; falls back
+                # to the agent's current tier if missing (shouldn't happen).
+                "ai_level" => get(investment, "ai_level", get_ai_level(agent)),
             ))
         else
             push!(remaining_investments, investment)
@@ -1646,8 +1652,13 @@ function choose_ai_level(
         per_use_cost = Float64(cfg.per_use_cost) * cost_intensity
 
         total_cost = if cost_type == "subscription"
-            per_round = base_cost / amort_horizon
-            per_round + per_use_cost * recent_activity
+            # v2.7 parity with actual billing (start_subscription_schedule!):
+            # subscription charges the full monthly cost per round, so the
+            # planner's per-round cost is base_cost (not base_cost/amort_horizon).
+            # Earlier path returned ~$19/month for premium while biller charged
+            # $3500/month — a 180× under-estimate that biased emergent-mode
+            # tier choice toward premium.
+            base_cost + per_use_cost * recent_activity
         elseif cost_type == "per_use"
             per_call = base_cost > 0 ? base_cost : per_use_cost
             per_call * recent_activity
@@ -1791,11 +1802,17 @@ function calculate_investment_utility(
     max_score = 0.0
     avg_score = 0.0
     for opp in opportunities
-        est_return = if !isnothing(info_system)
+        # v2.7: propagate the full Information triple (est_return, est_uncertainty,
+        # confidence, contains_hallucination) so evaluate_opportunity_basic can use
+        # the tier-aware uncertainty + confidence in its scoring. Earlier only
+        # estimated_return was used, understating premium's info-quality advantage.
+        est_return = opp.latent_return_potential
+        est_uncertainty = nothing
+        conf = nothing
+        contains_halluc = false
+        if !isnothing(info_system)
             # Only deduct per-use cost on cache MISS. Re-reading a cached info
             # object is not a new API call — the agent already paid for it.
-            # Without this check, utility-eval + portfolio-ranking both charge
-            # for the same opportunity in the same round (double-billing).
             cached_before = haskey(info_system.information_cache,
                                    (opp.id, ai_level, agent.id))
             info = get_information(info_system, opp, ai_level;
@@ -1803,13 +1820,17 @@ function calculate_investment_utility(
             if !cached_before && per_use_charge > 0
                 set_capital!(agent, get_capital(agent) - per_use_charge)
             end
-            info.estimated_return
-        else
-            opp.latent_return_potential
+            est_return = info.estimated_return
+            est_uncertainty = info.estimated_uncertainty
+            conf = info.confidence
+            contains_halluc = info.contains_hallucination
         end
 
         base_score = evaluate_opportunity_basic(agent, opp, market_conditions;
-                                                estimated_return=est_return)
+                                                estimated_return=est_return,
+                                                estimated_uncertainty=est_uncertainty,
+                                                confidence=conf,
+                                                contains_hallucination=contains_halluc)
 
         # AI tier advantage now reflects perceived (not latent) return.
         noise_reduction = info_quality * 0.3
@@ -2080,17 +2101,52 @@ function evaluate_opportunity_basic(
     agent::EmergentAgent,
     opportunity::Opportunity,
     market_conditions::Dict{String,Any};
-    estimated_return::Union{Float64,Nothing} = nothing
+    estimated_return::Union{Float64,Nothing} = nothing,
+    estimated_uncertainty::Union{Float64,Nothing} = nothing,
+    confidence::Union{Float64,Nothing} = nothing,
+    contains_hallucination::Bool = false,
 )::Float64
     # Expected profit margin: use AI-tier-aware estimate when provided,
-    # else fall back to the hidden latent value (diagnostic path only)
+    # else fall back to the hidden latent value (diagnostic path only).
     expected_return = isnothing(estimated_return) ? opportunity.latent_return_potential : estimated_return
     expected_margin = expected_return - 1.0
-    # Use complexity as a proxy for uncertainty
-    uncertainty = opportunity.complexity
-    uncertainty_adjusted = expected_margin * (1.0 - uncertainty * 0.5)
+
+    # v2.7: Use the AI-tier-aware uncertainty estimate when provided. Premium
+    # AI doesn't just produce a better return estimate — it also produces a
+    # better assessment of HOW uncertain that estimate is. High-quality AI
+    # narrows perceived uncertainty; low-quality AI (or no AI) falls back to
+    # opp.complexity as a crude proxy. Ignoring estimated_uncertainty in
+    # pre-v2.7 scoring understated premium's info-quality advantage.
+    perceived_uncertainty = if !isnothing(estimated_uncertainty)
+        # Blend AI-estimated uncertainty with opp.complexity (which captures
+        # intrinsic difficulty independent of AI assessment).
+        0.6 * estimated_uncertainty + 0.4 * opportunity.complexity
+    else
+        opportunity.complexity
+    end
+    uncertainty_adjusted = expected_margin * (1.0 - perceived_uncertainty * 0.5)
 
     score = uncertainty_adjusted * (1.0 + get(agent.traits, "uncertainty_tolerance", 0.5))
+
+    # v2.7: confidence weighting. The agent's conviction in their estimate
+    # scales the score's magnitude — low-confidence signals should have
+    # less influence on decisions (uncertainty_tolerance captures the agent's
+    # general appetite for ambiguity, confidence captures how much they trust
+    # THIS specific AI call). Default 0.5 when no confidence info available.
+    conf = isnothing(confidence) ? 0.5 : clamp(confidence, 0.05, 0.99)
+    # At conf = 0.5, no change. At conf = 0.99, +15% score. At conf = 0.05, -25%.
+    score *= 0.75 + 0.5 * conf
+
+    # v2.7: hallucination penalty. If the Information object was flagged as
+    # a hallucination, heavily discount the score — the agent should sense
+    # something is off even if they can't articulate what. Scaled by
+    # analytical_ability (low-analytical agents may not catch it).
+    if contains_hallucination
+        analytical = Float64(get(agent.traits, "analytical_ability", 0.5))
+        # analytical=0.0: penalty multiplier 0.75; analytical=1.0: multiplier 0.4
+        halluc_mult = 0.75 - 0.35 * analytical
+        score *= halluc_mult
+    end
 
     # Regime multiplier
     regime = get(market_conditions, "regime", "normal")
@@ -2265,8 +2321,22 @@ function evaluate_portfolio_opportunities(
 
     for opp in opp_pool
         est_return = get(estimated_returns, opp.id, opp.latent_return_potential)
+        # v2.7: pull the full Information object when available so scoring uses
+        # AI-tier-aware uncertainty + confidence + hallucination flags.
+        est_unc = nothing
+        conf = nothing
+        contains_halluc = false
+        if haskey(info_cache_local, opp.id)
+            inf = info_cache_local[opp.id]
+            est_unc = inf.estimated_uncertainty
+            conf = inf.confidence
+            contains_halluc = inf.contains_hallucination
+        end
         base_score = evaluate_opportunity_basic(agent, opp, market_conditions;
-                                                estimated_return=est_return)
+                                                estimated_return=est_return,
+                                                estimated_uncertainty=est_unc,
+                                                confidence=conf,
+                                                contains_hallucination=contains_halluc)
         final_score = apply_uncertainty_adjustments(agent, base_score, opp, perception)
 
         eval_record = Dict{String,Any}(

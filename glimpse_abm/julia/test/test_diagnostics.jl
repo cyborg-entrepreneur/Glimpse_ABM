@@ -252,15 +252,23 @@ end
     end
 
     # ------------------------------------------------------------------
-    # 12. Niche / spawn opportunity is visible to its creator
+    # 12. Niche / spawn opportunity is visible to its creator (via override)
     # ------------------------------------------------------------------
-    @testset "niche opportunity is discovered=true so creator can see it" begin
+    @testset "niche opportunity is visible to creator via created_by override" begin
         cfg = EmergentConfig(N_AGENTS=2, RANDOM_SEED=42)
         market = MarketEnvironment(cfg; rng=MersenneTwister(42))
-        # Manually create a niche
         niche_opp = GlimpseABM.create_niche_opportunity(market, "tech", 1, 5)
-        @test niche_opp.discovered == true
+        # v2.7: discovered starts false; creator sees via created_by override.
+        @test niche_opp.discovered == false
         @test niche_opp.created_by == 1
+        # Creator-visibility check: agent with id=1 should see this opp in
+        # get_opportunities_for_agent even though discovered=false.
+        traits = Dict("exploration_tendency"=>0.5, "market_awareness"=>0.5,
+                      "ai_trust"=>0.5, "uncertainty_tolerance"=>0.5)
+        creator = EmergentAgent(1, cfg; primary_sector="tech", fixed_ai_level="none",
+                                rng=MersenneTwister(42))
+        visible = GlimpseABM.get_opportunities_for_agent(market, creator)
+        @test niche_opp.id in [o.id for o in visible]
     end
 
     # ------------------------------------------------------------------

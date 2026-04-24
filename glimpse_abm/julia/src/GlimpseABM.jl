@@ -104,12 +104,14 @@ export KnightianUncertaintyEnvironment
 # Exports - Functions
 export run!
 export step!
-export initialize_agents, initialize_agents!
+export initialize_agents!  # v2.7: removed `initialize_agents` (non-bang form never existed)
 export save_results
 export load_results
 
 # Exports - Agent distress tracking
-export check_survival!, evaluate_failure_conditions!, update_burn_history!
+# v2.7: removed evaluate_failure_conditions! (Python-only) and update_burn_history!
+# (deleted with EnhancedSimulation in v2.2). Neither existed in Julia.
+export check_survival!
 export get_capital, set_capital!, get_ai_level
 
 # Exports - Emergent uncertainty (agent-level metrics)
