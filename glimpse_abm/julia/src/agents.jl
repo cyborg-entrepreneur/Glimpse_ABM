@@ -354,7 +354,13 @@ function EmergentAgent(
         primary_sector
     end
 
-    # Sample initial capital from sector-specific range (NVCA 2024 calibrated)
+    # Sample initial capital from sector-specific range (NVCA 2024 calibrated).
+    # Precedence: explicit `initial_capital` kwarg → sector_profile.initial_capital_range
+    # → config.INITIAL_CAPITAL_RANGE (never config.INITIAL_CAPITAL). Scripts that
+    # set config.INITIAL_CAPITAL hoping to force a uniform starting capital are
+    # silently ignored — the scalar field is documentation only. Pass
+    # `initial_capital=X` to this constructor to force a specific value per agent,
+    # or modify the sector profile's initial_capital_range to shift the range.
     capital = if isnothing(initial_capital)
         sector_profile = get(config.SECTOR_PROFILES, sector, nothing)
         if !isnothing(sector_profile) && hasproperty(sector_profile, :initial_capital_range)
@@ -1178,6 +1184,7 @@ function process_matured_investments!(
                 competition_level
             )
 
+            invested_tier = get(investment, "ai_level", get_ai_level(agent))
             push!(matured_outcomes, Dict{String,Any}(
                 "investment" => investment,
                 "investment_amount" => invested_amount,
@@ -1190,9 +1197,12 @@ function process_matured_investments!(
                 # v2.7: emit tier-at-investment so simulation.jl:274's
                 # update_tier_belief! attributes the outcome to the tier that
                 # actually made the investment (not the agent's current tier).
-                # Investment dict stores the at-investment ai_level; falls back
-                # to the agent's current tier if missing (shouldn't happen).
-                "ai_level" => get(investment, "ai_level", get_ai_level(agent)),
+                "ai_level" => invested_tier,
+                # v2.8: emit ai_used for update_state_from_outcome! which
+                # gates AI-trust learning on this key. Without it,
+                # update_ai_trust! never fires for matured outcomes even when
+                # the investment was made using AI.
+                "ai_used" => invested_tier != "none",
             ))
         else
             push!(remaining_investments, investment)
@@ -1484,14 +1494,16 @@ function apply_subscription_carry!(
     round::Int
 )::Float64
     total = 0.0
-    credit_line = agent.config.AI_CREDIT_LINE_ROUNDS
 
+    # v2.8: removed 24-round credit-line grace period. Planning
+    # (estimate_ai_cost, choose_ai_level) returns full monthly cost from
+    # round 1; this path used to waive advanced/premium charges for the
+    # first AI_CREDIT_LINE_ROUNDS=24 rounds, creating plan-vs-bill
+    # inconsistency and distorting early-round dynamic tier selection.
+    # Agents now pay subscription from round 1 matching the "series-A/B
+    # rounds with 24-36 month runway" calibration (runway comes from
+    # initial capital, not from free AI).
     for level in collect(keys(agent.subscription_accounts))
-        # Allow credit line grace period for advanced/premium tiers
-        if credit_line > 0 && round <= credit_line && level in ("advanced", "premium")
-            continue
-        end
-
         total += charge_subscription_installment!(agent, level)
     end
 
@@ -2137,15 +2149,30 @@ function evaluate_opportunity_basic(
     # At conf = 0.5, no change. At conf = 0.99, +15% score. At conf = 0.05, -25%.
     score *= 0.75 + 0.5 * conf
 
-    # v2.7: hallucination penalty. If the Information object was flagged as
-    # a hallucination, heavily discount the score — the agent should sense
-    # something is off even if they can't articulate what. Scaled by
-    # analytical_ability (low-analytical agents may not catch it).
+    # v2.8: hallucination DETECTABILITY, not ground-truth penalty.
+    # `contains_hallucination` is the hidden fact that the Information object
+    # was generated as a hallucination. Agents don't directly know this — they
+    # can only DETECT it probabilistically. Detection probability scales with
+    # analytical_ability + the confidence dissonance (high-confidence
+    # hallucinations are actually HARDER to catch, matching the literature on
+    # overconfidence: see Moore & Healy 2008). Earlier v2.7 applied the penalty
+    # directly from the ground-truth flag, which artificially protected
+    # agents from hallucinations — understating premium's actual tier cost.
     if contains_hallucination
         analytical = Float64(get(agent.traits, "analytical_ability", 0.5))
-        # analytical=0.0: penalty multiplier 0.75; analytical=1.0: multiplier 0.4
-        halluc_mult = 0.75 - 0.35 * analytical
-        score *= halluc_mult
+        # Base detection probability scales with analytical_ability.
+        # Low-conf hallucinations are easier to catch (suspicion-triggered);
+        # high-conf hallucinations are harder (agents trust the confident signal).
+        conf_disbelief = 1.0 - conf  # 0 when conf=1, 0.95 when conf=0.05
+        detect_prob = clamp(analytical * 0.5 + conf_disbelief * 0.3, 0.05, 0.85)
+        if rand(agent.rng) < detect_prob
+            # Detected — agent discounts the score (they sense something is off)
+            halluc_mult = 0.75 - 0.35 * analytical
+            score *= halluc_mult
+        end
+        # UN-detected hallucinations apply no penalty here; the realized
+        # return will reflect the bad decision downstream through the
+        # investment-maturation path.
     end
 
     # Regime multiplier
@@ -2582,11 +2609,13 @@ function update_state_from_outcome!(
     outcome::Dict{String,Any};
     ai_was_accurate::Union{Bool,Nothing} = nothing
 )
-    # Update capital if returned
-    if haskey(outcome, "capital_returned")
-        capital_returned = Float64(outcome["capital_returned"])
-        set_capital!(agent, get_capital(agent) + capital_returned)
-    end
+    # v2.8: capital credit REMOVED from this function. The caller is
+    # responsible for applying capital changes BEFORE calling this — in the
+    # matured-investment path process_matured_investments! already credits
+    # capital_returned at agents.jl:~1151. Earlier (v2.7) this function
+    # credited capital AGAIN, causing double-counting on every matured
+    # investment. The function's job is purely state evolution (AI-trust
+    # learning + trait evolution), not bookkeeping.
 
     # Track AI accuracy
     ai_used = get(outcome, "ai_used", false)

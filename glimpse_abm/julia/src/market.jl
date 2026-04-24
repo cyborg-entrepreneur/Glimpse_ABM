@@ -1131,6 +1131,16 @@ function get_opportunities_for_agent(
             continue
         end
 
+        # v2.8: skip the discovery roll for opps this agent CREATED. They're
+        # already in visible_opps via the creator-id override above; rolling
+        # discovery and setting opp.discovered=true here would leak the
+        # creator's private niche/spawn opportunity to the whole market on
+        # the first creator roll. Others can still discover it through their
+        # own rolls in subsequent rounds.
+        if !isnothing(agent_id) && opp.created_by == agent_id
+            continue
+        end
+
         sector_knowledge = get(knowledge_map, opp.sector, 0.0)
         if sector_knowledge <= 0
             continue
