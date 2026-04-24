@@ -193,9 +193,8 @@ function _create_realistic_opportunity(
         market, sector; quality_roll=quality_roll
     )
 
-    # Apply regime modifiers
-    latent_return *= market.regime_return_multiplier
-    latent_failure *= market.regime_failure_multiplier
+    # Regime effects are applied only at realization (in realized_return),
+    # not at creation, to avoid double-counting regime multipliers.
 
     # Clamp values
     latent_return = clamp(latent_return, 0.5, 25.0)
@@ -294,11 +293,23 @@ function step!(
     push!(market.total_investment_by_round, total_investment)
 
     # Update competition levels (uses COMPETITION_SCALE_FACTOR for robustness testing)
-    # Normalize competition delta by population size to keep consistent pressure across scales
-    # Reference population is 100 agents; with 1000 agents, delta is 10x smaller
-    reference_population = 100.0
-    actual_population = Float64(market.config.N_AGENTS)
-    population_normalized_delta = 0.1 * (reference_population / actual_population)
+    # Normalize competition delta to preserve calibrated total pressure per opportunity.
+    #
+    # Original calibration at N=1K with reference_population=100:
+    #   delta = 0.1 * (100/1000) = 0.01 per agent
+    #   ~25 agents invest per opp → total pressure = 25 × 0.01 = 0.25 ✓
+    #
+    # For larger N, scale delta by 1/√(N/1000) from the calibrated baseline:
+    #   N=10K:  delta = 0.01/√10 = 0.00316, ~76 agents/opp → pressure = 0.24
+    #   N=100K: delta = 0.01/√100 = 0.001, ~446 agents/opp → pressure = 0.45
+    #
+    # Total pressure rises moderately with N (more agents per opp) but stays
+    # in the same order of magnitude. The √N scaling prevents both the original
+    # bug (1/N scaling → pressure vanishes) and the overcorrection (√N from
+    # wrong reference → pressure explodes at baseline).
+    calibrated_delta = 0.01  # delta at N=1000 (do not change — this is the calibrated value)
+    scale_from_ref = Float64(market.config.N_AGENTS) / 1000.0
+    population_normalized_delta = calibrated_delta / sqrt(max(1.0, scale_from_ref))
 
     for action in agent_actions
         if get(action, "action", "") == "invest"
@@ -463,7 +474,12 @@ function update_opportunity_competition!(market::MarketEnvironment, opp::Opportu
     # Theoretical basis: Cournot competition (profits ∝ 1/n²) and
     # market microstructure (Kyle 1985: price impact ∝ √order_flow)
     intensity = get_sector_competition_intensity(market, opp.sector)
-    opp.competition = max(0.0, opp.competition + delta * intensity)
+
+    # Apply per-round decay to prevent unbounded competition accumulation.
+    # Without decay, competition only ever increases, which becomes degenerate
+    # at large N where hundreds of agents pile into each opportunity every round.
+    decay = market.config.COMPETITION_DECAY_RATE
+    opp.competition = max(0.0, opp.competition * (1.0 - decay) + delta * intensity)
 end
 
 # ============================================================================
@@ -846,9 +862,10 @@ function manage_opportunities!(
     target_cap = get_scaled_opportunities(market.config, market.n_agents)
 
     # Calculate desired new opportunities
-    young_opps = count(o -> o.age < 5, market.opportunities)
-    poisson_new = rand(market.rng, Poisson(max(0.0, length(market.opportunities) * 0.02)))
-    desired_new = max(0, target_cap - length(market.opportunities) + poisson_new - young_opps)
+    discovered_count = count(o -> o.discovered, market.opportunities)
+    young_discovered = count(o -> o.discovered && o.age < 5, market.opportunities)
+    poisson_new = rand(market.rng, Poisson(max(0.0, discovered_count * 0.02)))
+    desired_new = max(0, target_cap - discovered_count + poisson_new - young_discovered)
     push!(market.new_ventures_by_round, desired_new)
 
     # Create new opportunities with sector balancing
@@ -1062,8 +1079,8 @@ function get_opportunities_for_agent(
     # AI-based discovery of undiscovered opportunities
     ai_level = get_ai_level(agent)
     profile = get(market.config.AI_LEVELS, ai_level, market.config.AI_LEVELS["none"])
-    info_quality = Float64(get(profile, "info_quality", 0.0))
-    info_breadth = Float64(get(profile, "info_breadth", 0.0))
+    info_quality = Float64(profile.info_quality)
+    info_breadth = Float64(profile.info_breadth)
     ai_factor = 1.0 + info_quality * 2.0 + info_breadth * 1.5
     ai_factor = clamp(ai_factor, 0.8, 4.5)
 
@@ -1083,7 +1100,7 @@ function get_opportunities_for_agent(
             continue
         end
 
-        discovery_prob = base_prob * (1.0 + sector_knowledge * 2.0) * ai_factor
+        discovery_prob = base_prob * (1.0 + sector_knowledge * 3.0) * ai_factor
         if rand(market.rng) < discovery_prob
             opp.discovered = true
             opp.discovery_round = market.current_round
@@ -1109,8 +1126,8 @@ function get_perceived_opportunities(
     end
 
     profile = get(market.config.AI_LEVELS, ai_level, market.config.AI_LEVELS["none"])
-    info_quality = Float64(get(profile, "info_quality", 0.0))
-    info_breadth = Float64(get(profile, "info_breadth", 0.0))
+    info_quality = Float64(profile.info_quality)
+    info_breadth = Float64(profile.info_breadth)
 
     base_visible = (3 + info_breadth * 60.0) * (1.0 + info_quality)
     max_visible = Int(max(3, min(length(all_opportunities), round(base_visible))))
@@ -1178,8 +1195,9 @@ function create_niche_opportunity(
     capital_req *= mods["capital_mult"]
 
     demand_adjustments = get_demand_adjustments(market, branch_name)
-    latent_return *= demand_adjustments["return"] * market.regime_return_multiplier
-    latent_failure *= demand_adjustments["failure"] * market.regime_failure_multiplier
+    # Regime effects applied only at realization to avoid double-counting.
+    latent_return *= demand_adjustments["return"]
+    latent_failure *= demand_adjustments["failure"]
 
     niche_opp = Opportunity(
         id="niche_$(branch_name)_$(round_num)_$(rand(market.rng, 1000:9999))",
@@ -1259,8 +1277,9 @@ function spawn_opportunity_from_innovation!(
     latent_failure = clamp(0.5 * latent_failure + 0.5 * base_failure_signal, 0.05, 0.95)
 
     demand_adjustments = get_demand_adjustments(market, branch_name)
-    latent_return *= demand_adjustments["return"] * market.regime_return_multiplier
-    latent_failure *= demand_adjustments["failure"] * market.regime_failure_multiplier
+    # Regime effects applied only at realization to avoid double-counting.
+    latent_return *= demand_adjustments["return"]
+    latent_failure *= demand_adjustments["failure"]
 
     opp_id = "spawn_$(innovation.id)_$(rand(market.rng, 1000:9999))"
 

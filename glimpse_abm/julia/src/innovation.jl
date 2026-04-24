@@ -673,14 +673,14 @@ function evaluate_innovation_success!(
         innovation.sector = "tech"
     end
 
-    # Find competing innovations
+    # Find competing innovations — sector-filtered for O(K_sector) instead of O(K_total)
+    min_round = innovation.round_created - 5
+    sector = something(innovation.sector, "tech")
     competing_innovations = [
         inn for inn in market_innovations
         if inn.id != innovation.id &&
-           inn.round_created >= innovation.round_created - 5 &&
-           !isnothing(inn.sector) &&
-           !isnothing(innovation.sector) &&
-           inn.sector == innovation.sector
+           inn.round_created >= min_round &&
+           something(inn.sector, "") == sector
     ]
 
     # Get sector-specific competition intensity (Census HHI-calibrated)

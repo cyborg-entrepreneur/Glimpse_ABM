@@ -287,9 +287,18 @@ function step!(sim::EmergentSimulation, round::Int)
                 neighbor_agents = rand(sim.rng, other_agents, n_neighbors)
             end
 
+            # Per-agent opportunity filter (added 2026-04-23): use the
+            # AI-tier-aware visibility set instead of the global pool. Mirrors
+            # enhanced_step!'s pattern (lines ~1634, 1674, 1710). Falls back
+            # to the global pool if filter returns empty.
+            agent_opportunities = get_opportunities_for_agent(sim.market, agent)
+            if isempty(agent_opportunities)
+                agent_opportunities = available_opportunities
+            end
+
             outcome = make_decision!(
                 agent,
-                available_opportunities,
+                agent_opportunities,
                 market_conditions,
                 sim.market,
                 round;
@@ -319,9 +328,15 @@ function step!(sim::EmergentSimulation, round::Int)
                 neighbor_agents = rand(sim.rng, other_agents, n_neighbors)
             end
 
+            # Per-agent opportunity filter (added 2026-04-23): tier-aware visibility.
+            agent_opportunities = get_opportunities_for_agent(sim.market, agent)
+            if isempty(agent_opportunities)
+                agent_opportunities = available_opportunities
+            end
+
             outcome = make_decision!(
                 agent,
-                available_opportunities,
+                agent_opportunities,
                 market_conditions,
                 sim.market,
                 round;
@@ -352,10 +367,16 @@ function step!(sim::EmergentSimulation, round::Int)
                 end
             end
 
+            # Per-agent opportunity filter (added 2026-04-23): tier-aware visibility.
+            agent_opportunities = get_opportunities_for_agent(sim.market, agent)
+            if isempty(agent_opportunities)
+                agent_opportunities = available_opportunities
+            end
+
             # Use make_decision! which properly integrates AI level effects
             outcome = make_decision!(
                 agent,
-                available_opportunities,
+                agent_opportunities,
                 market_conditions,
                 sim.market,
                 round;
@@ -449,6 +470,25 @@ function step!(sim::EmergentSimulation, round::Int)
     end
 
     market_state = step!(sim.market, round, agent_actions, innovations; matured_outcomes=all_matured)
+
+    # Phase 5.5: Opportunity lifecycle management (added 2026-04-23)
+    # Build per-round opportunity demand from agent invest actions and call
+    # manage_opportunities! to age opportunities, decay competition (* 0.9),
+    # and remove dead opportunities. Previously this function existed in
+    # market.jl but was never called from the EmergentSimulation step path,
+    # so crowding pressure accumulated monotonically across rounds.
+    opportunity_demand = Dict{String,Int}()
+    total_investment = 0.0
+    for action in agent_actions
+        if get(action, "action", "") == "invest"
+            opp_id = string(get(action, "opportunity_id", ""))
+            if !isempty(opp_id)
+                opportunity_demand[opp_id] = get(opportunity_demand, opp_id, 0) + 1
+                total_investment += Float64(get(action, "investment_amount", 0.0))
+            end
+        end
+    end
+    manage_opportunities!(sim.market, round, opportunity_demand, total_investment)
 
     # Phase 6: Update uncertainty measurements
     record_ai_signals!(sim.uncertainty_env, round, agent_actions)
@@ -1583,6 +1623,11 @@ function enhanced_step!(sim::EnhancedSimulation, round::Int)
 
         # Update agent state from outcome
         update_state_from_outcome!(agent, outcome)
+        # Update uncertainty response learning from matured investment outcomes
+        update_from_outcome!(
+            agent.uncertainty_response, uncertainty_state,
+            "invest", outcome, market_conditions
+        )
         enforce_survival_threshold!(agent, sim.config, round)
     end
 
@@ -1770,6 +1815,11 @@ function enhanced_step!(sim::EnhancedSimulation, round::Int)
         if action_type != "invest"
             outcome = calculate_action_outcome(action, market_conditions, round)
             update_state_from_outcome!(agent, outcome)
+            # Update uncertainty response learning from action outcomes
+            update_from_outcome!(
+                agent.uncertainty_response, uncertainty_state,
+                action_type, outcome, market_conditions
+            )
             enforce_survival_threshold!(agent, sim.config, round)
         end
     end

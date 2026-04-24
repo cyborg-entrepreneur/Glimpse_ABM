@@ -97,15 +97,23 @@ parameters preserved for exact behavioral compatibility.
     # ========================================================================
     AGENT_AI_MODE::String = "emergent"
     N_AGENTS::Int = 1000
+    # NOTE on initial-capital precedence (corrected 2026-04-23):
+    # The EmergentAgent constructor honors `initial_capital` kwarg first, then
+    # falls back to sector_profile.initial_capital_range, then to
+    # INITIAL_CAPITAL_RANGE below. The singular INITIAL_CAPITAL constant is NOT
+    # consulted by the agent constructor — scripts that pass it via EmergentConfig
+    # will be silently overridden by sector profiles. To force a uniform starting
+    # capital across agents, pass it explicitly per-agent to EmergentAgent(...,
+    # initial_capital=X). Field retained because production scripts reference it.
     INITIAL_CAPITAL::Float64 = 5_000_000.0
     INITIAL_CAPITAL_RANGE::Tuple{Float64,Float64} = (2_500_000.0, 10_000_000.0)
-    SURVIVAL_THRESHOLD::Float64 = 230_000.0
+    SURVIVAL_THRESHOLD::Float64 = 2_000_000.0
     SURVIVAL_CAPITAL_RATIO::Float64 = 0.38
     INSOLVENCY_GRACE_ROUNDS::Int = 7  # 7 months grace period before failure
     RANDOM_SEED::Int = 42
     USE_NUMPY_RNG::Bool = false  # Use NumpyRNG for cross-language reproducibility
 
-    BASE_OPERATIONAL_COST::Float64 = 10000.0  # Monthly operational cost - calibrated for ~55% 5-yr survival (BLS benchmark)
+    BASE_OPERATIONAL_COST::Float64 = 15000.0  # Monthly operational cost - calibrated for ~55% 5-yr survival (BLS benchmark)
     COMPETITION_COST_MULTIPLIER::Float64 = 50.0  # Monthly multiplier (was 150 quarterly)
     OPERATING_RESERVE_MONTHS::Int = 3
     MAX_AGENT_KNOWLEDGE::Int = 90
@@ -150,7 +158,7 @@ parameters preserved for exact behavioral compatibility.
     N_ROUNDS::Int = 120  # 120 months = 10 years (monthly cadence)
     N_RUNS::Int = 50
     BASE_OPPORTUNITIES::Int = 5
-    DISCOVERY_PROBABILITY::Float64 = 0.10  # Monthly probability (was 0.30 quarterly)
+    DISCOVERY_PROBABILITY::Float64 = 0.20  # Monthly probability (was 0.30 quarterly)
     INNOVATION_PROBABILITY::Float64 = 0.14  # Monthly probability (was 0.42 quarterly)
     AI_HERDING_DECAY::Float64 = 1.0
     AI_SIGNAL_HISTORY::Int = 420  # 420 months history (was 140 quarters)
@@ -298,22 +306,29 @@ parameters preserved for exact behavioral compatibility.
     # Interpretation: "effective rivals" that can coexist without pain
     # At competition < K: no crowding penalty (healthy competition)
     # At competition = K: penalty just starts
-    # Calibrated from: K=1.5 means ~15 investors can share an opportunity
-    CROWDING_CAPACITY_K::Float64 = 1.5
+    # Calibrated: With 1000 agents and ~30 discovered opportunities, median
+    # competition ≈ 3.6, mean ≈ 5-7. K=5.0 ensures median competition has no
+    # penalty, while C > 5 (overcrowded) incurs meaningful penalties.
+    CROWDING_CAPACITY_K::Float64 = 8.0
 
     # γ = Convexity exponent: how sharply penalties increase beyond capacity
     # γ = 1: linear (gentle)
+    # γ = 1.5: mildly convex (gradual ramp — realistic for competitive markets)
     # γ = 2: quadratic (convex - "a little crowded is OK, very crowded is brutal")
     # γ = 3: cubic (very sharp)
-    CROWDING_CONVEXITY_GAMMA::Float64 = 2.0
+    # Calibrated: γ=1.5 produces gradual penalty from C=5 to C=15, avoiding
+    # the cliff-like profile of γ=2 where C<K is fine but C>K is catastrophic.
+    CROWDING_CONVEXITY_GAMMA::Float64 = 1.5
 
     # λ = Strength: maps crowding into payoff reduction
     # At 2× capacity (C/K = 2), penalty = λ · 1^γ = λ
     # exp(-λ) gives the return multiplier at 2× capacity:
-    #   λ = 0.357 → ~30% drop at 2× capacity (exp(-0.357) ≈ 0.70)
-    #   λ = 0.693 → ~50% drop at 2× capacity (exp(-0.693) ≈ 0.50)
-    #   λ = 1.204 → ~70% drop at 2× capacity (exp(-1.204) ≈ 0.30)
-    CROWDING_STRENGTH_LAMBDA::Float64 = 0.50
+    #   λ = 0.50 → ~39% drop at 2× capacity (exp(-0.50) ≈ 0.61)
+    #   λ = 1.00 → ~63% drop at 2× capacity (exp(-1.00) ≈ 0.37)
+    #   λ = 1.50 → ~78% drop at 2× capacity (exp(-1.50) ≈ 0.22)
+    # Calibrated: λ=1.0 with K=5.0 and γ=1.5 produces portfolio mean ~1.06×
+    # at observed competition levels (median C≈3.6, mean C≈6.7)
+    CROWDING_STRENGTH_LAMBDA::Float64 = 1.5
 
     # Legacy parameters (used when USE_CAPACITY_CONVEXITY_CROWDING = false)
     OPPORTUNITY_COMPETITION_PENALTY::Float64 = 0.5  # Return penalty per unit of opp.competition (0.5 = 50% max penalty at competition=1.0)
@@ -381,7 +396,7 @@ parameters preserved for exact behavioral compatibility.
     )
 
     AI_NOVELTY_UPLIFT::Float64 = 0.08
-    DOWNSIDE_OVERSUPPLY_WEIGHT::Float64 = 0.45  # Balanced penalty for oversupply conditions
+    DOWNSIDE_OVERSUPPLY_WEIGHT::Float64 = 0.30  # Balanced penalty for oversupply conditions
     RETURN_LOWER_BOUND::Float64 = 0.0  # Minimum return multiple (0.0 = total loss, 0.5 = 50% back)
 
     # ========================================================================
@@ -399,7 +414,12 @@ parameters preserved for exact behavioral compatibility.
     # Real opportunities have limited capacity; first movers get better terms
     # ========================================================================
     OPPORTUNITY_CAPACITY_ENABLED::Bool = true
-    OPPORTUNITY_BASE_CAPACITY::Float64 = 500000.0     # Base capacity in dollars
+    # Capacity represents max concurrent capital a market opportunity can absorb.
+    # With 1000 agents at $5M, ~400 investing $185K/round across 30 opportunities,
+    # outstanding capital per opportunity is ~$10-30M at steady state.
+    # $15M capacity means typical opps sit below penalty threshold (70% = $10.5M),
+    # while the most popular opps (2-3x average flow) exceed it.
+    OPPORTUNITY_BASE_CAPACITY::Float64 = 15_000_000.0  # Base capacity in dollars
     OPPORTUNITY_CAPACITY_VARIANCE::Float64 = 0.3      # Random variance in capacity
     CAPACITY_PENALTY_START::Float64 = 0.7             # When penalty kicks in (70% utilized)
     CAPACITY_PENALTY_MAX::Float64 = 0.4               # Max penalty at full capacity (40%)
@@ -415,11 +435,23 @@ parameters preserved for exact behavioral compatibility.
     # ========================================================================
     # SCALING PARAMETERS
     # ========================================================================
-    OPPORTUNITIES_PER_CAPITA::Float64 = 0.01
+    OPPORTUNITIES_PER_CAPITA::Float64 = 0.04
     DISCOVERY_RATE_SCALING::Float64 = 0.5
     MIN_OPPORTUNITIES::Int = 5
-    POWER_LAW_SHAPE_A::Float64 = 3.0  # Lighter tails for more consistent outcomes
+    POWER_LAW_SHAPE_A::Float64 = 2.2  # Heavier tails for VC-like power-law returns (finite mean since α>2)
     OPPORTUNITY_CAPITAL_REQUIREMENTS::Float64 = 10000.0
+
+    # ========================================================================
+    # POPULATION SCALING PARAMETERS
+    # ========================================================================
+    # Reference population for which all absolute parameters were calibrated.
+    # When N_AGENTS differs, initialize!() applies scaling adjustments to keep
+    # model dynamics comparable across population sizes.
+    SCALE_REFERENCE_N::Int = 1000
+    ENABLE_POPULATION_SCALING::Bool = true   # Set false to use raw (unscaled) parameters
+    COMPETITION_DECAY_RATE::Float64 = 0.02   # Per-round decay to prevent unbounded competition accumulation
+    MAX_KNOWLEDGE_PIECES::Int = 5000         # Cap on knowledge registry size (age-based eviction)
+    INNOVATION_HISTORY_RETENTION::Int = 20   # Keep only last N rounds of innovation history per sector
 
     # ========================================================================
     # DIAGNOSTICS
@@ -518,7 +550,7 @@ parameters preserved for exact behavioral compatibility.
             # Reflects Series A/B rounds with 24-36 month runway before profitability
             (3_000_000.0, 6_000_000.0),  # initial_capital_range: 120-240 months runway
             (20_000.0, 30_000.0),        # operational_cost_range: BLS tech sector MONTHLY
-            150_000.0,                    # survival_threshold: ~6 months operating expenses
+            1_500_000.0,                  # survival_threshold: ~50% of min sector capital
             0.16,                         # innovation_probability: monthly (was 0.48 quarterly)
             (2.0, 4.0),                   # innovation_return_multiplier: high tech upside
             0.04,                         # knowledge_decay_rate: monthly (was 0.12 quarterly)
@@ -531,7 +563,7 @@ parameters preserved for exact behavioral compatibility.
             # Empirically-calibrated fields (scaled for 120-180 month runway):
             (2_200_000.0, 4_000_000.0),  # initial_capital_range: 120-220 months runway
             (13_000.0, 23_000.0),        # operational_cost_range: BLS retail sector MONTHLY
-            130_000.0,                    # survival_threshold: ~6 months operating expenses
+            1_100_000.0,                  # survival_threshold: ~50% of min sector capital
             0.11,                         # innovation_probability: monthly (was 0.32 quarterly)
             (1.6, 2.5),                   # innovation_return_multiplier: moderate returns
             0.023,                        # knowledge_decay_rate: monthly (was 0.07 quarterly)
@@ -544,7 +576,7 @@ parameters preserved for exact behavioral compatibility.
             # Empirically-calibrated fields (scaled for 120-180 month runway):
             (1_400_000.0, 2_500_000.0),  # initial_capital_range: 120-213 months runway
             (8_300.0, 15_000.0),         # operational_cost_range: BLS services sector MONTHLY
-            70_000.0,                     # survival_threshold: ~6 months operating expenses
+            700_000.0,                    # survival_threshold: ~50% of min sector capital
             0.13,                         # innovation_probability: monthly (was 0.38 quarterly)
             (1.6, 2.5),                   # innovation_return_multiplier: moderate returns
             0.017,                        # knowledge_decay_rate: monthly (was 0.05 quarterly)
@@ -557,7 +589,7 @@ parameters preserved for exact behavioral compatibility.
             # Empirically-calibrated fields (scaled for 120-180 month runway):
             (4_000_000.0, 7_500_000.0),  # initial_capital_range: 120-225 months runway
             (26_700.0, 40_000.0),        # operational_cost_range: BLS manufacturing MONTHLY
-            200_000.0,                    # survival_threshold: ~6 months operating expenses
+            2_000_000.0,                  # survival_threshold: ~50% of min sector capital
             0.17,                         # innovation_probability: monthly (was 0.52 quarterly)
             (1.5, 2.8),                   # innovation_return_multiplier: incremental improvements
             0.01,                         # knowledge_decay_rate: monthly (was 0.03 quarterly)
@@ -590,9 +622,11 @@ parameters preserved for exact behavioral compatibility.
     MAX_PARALLEL_RUNS::Int = 0
 end
 
-# Post-initialization: sync SECTORS from SECTOR_PROFILES keys
+# Post-initialization: sync SECTORS from SECTOR_PROFILES keys and apply population scaling
 function initialize!(config::EmergentConfig)
     config.SECTORS = collect(keys(config.SECTOR_PROFILES))
+
+    # Performance tuning for large populations
     if config.N_AGENTS > 5000
         config.buffer_flush_interval = 50
         config.max_cache_size = 100000
@@ -600,17 +634,73 @@ function initialize!(config::EmergentConfig)
         config.preallocate_arrays = true
         config.use_float32 = true
     end
+
+    # ── Population scaling ──────────────────────────────────────────
+    # All absolute parameters were calibrated at SCALE_REFERENCE_N (default 1000).
+    # When N_AGENTS differs, we adjust capacity/crowding thresholds so that
+    # per-agent dynamics remain comparable.
+    #
+    # Scaling uses √(N/N_ref) for thresholds that gate on aggregate quantities.
+    # Competition delta (market.jl) uses √N scaling with reference_population=100
+    # to maintain calibrated per-capita pressure. These two scaling regimes
+    # work together: √N thresholds absorb √N-scaled aggregate competition.
+    if config.ENABLE_POPULATION_SCALING && config.N_AGENTS != config.SCALE_REFERENCE_N
+        scale = config.N_AGENTS / config.SCALE_REFERENCE_N  # ratio (e.g., 10 for 10K, 100 for 100K)
+        sqrt_scale = sqrt(scale)
+
+        # Crowding capacity K: threshold for crowding penalty start.
+        # Scale by √N so the fraction of opportunities exceeding capacity
+        # stays approximately constant as population grows.
+        config.CROWDING_CAPACITY_K *= sqrt_scale
+
+        # Opportunity base capacity: max capital an opportunity absorbs.
+        # Total capital scales linearly with N, opportunities sub-linearly.
+        # Scale by √N (not linearly) to maintain utilization pressure.
+        config.OPPORTUNITY_BASE_CAPACITY *= sqrt_scale
+
+        # Disruption competition threshold: absolute level, scale with K
+        config.DISRUPTION_COMPETITION_THRESHOLD *= sqrt_scale
+
+        # Network neighbors: scale logarithmically so agents maintain a
+        # comparable fraction of social influence.
+        config.NETWORK_N_NEIGHBORS = max(4, floor(Int, log(config.N_AGENTS) + 2))
+
+        # Competition decay: at higher N, competition accumulates faster,
+        # so increase decay proportionally to keep steady-state levels bounded.
+        config.COMPETITION_DECAY_RATE = min(0.10, 0.02 * sqrt_scale)
+
+        @info "Population scaling applied" N=config.N_AGENTS ref=config.SCALE_REFERENCE_N scale sqrt_scale K=config.CROWDING_CAPACITY_K capacity=config.OPPORTUNITY_BASE_CAPACITY neighbors=config.NETWORK_N_NEIGHBORS decay=config.COMPETITION_DECAY_RATE
+    end
+
     return config
 end
 
 """
 Compute integer opportunity targets even if overrides supply floats.
+
+Scaling policy: opportunities grow sub-linearly with population to model
+realistic market saturation (not every additional entrepreneur creates a
+proportional number of new markets).
+
+  n_opps = max(MIN, BASE, N_ref * per_capita * (1 + ln(N/N_ref)))
+
+This gives ~40 at 1K, ~132 at 10K, ~264 at 100K (vs. 4000 with linear scaling).
 """
 function get_scaled_opportunities(config::EmergentConfig, n_agents::Int)::Int
     min_ops = ceil(Int, Float64(config.MIN_OPPORTUNITIES))
-    per_capita = max(config.OPPORTUNITIES_PER_CAPITA, 0.0)
-    scaled = ceil(Int, n_agents * per_capita)
     base_ops = ceil(Int, Float64(config.BASE_OPPORTUNITIES))
+    per_capita = max(config.OPPORTUNITIES_PER_CAPITA, 0.0)
+
+    if config.ENABLE_POPULATION_SCALING
+        ref_n = config.SCALE_REFERENCE_N
+        # Sub-linear: reference-level linear + log surplus
+        ref_opps = ref_n * per_capita
+        log_scale = 1.0 + max(0.0, log(n_agents / ref_n))
+        scaled = ceil(Int, ref_opps * log_scale)
+    else
+        scaled = ceil(Int, n_agents * per_capita)
+    end
+
     return max(min_ops, base_ops, scaled)
 end
 

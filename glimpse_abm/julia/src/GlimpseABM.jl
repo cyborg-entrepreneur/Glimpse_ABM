@@ -64,6 +64,7 @@ export apply_calibration_profile
 export get_calibration_profile
 export load_calibration_profile
 export CALIBRATION_LIBRARY
+export initialize!, get_scaled_opportunities
 
 # Exports - Models
 export Opportunity

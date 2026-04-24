@@ -138,8 +138,25 @@ end
 
 """
 Add knowledge to the knowledge base.
+
+Includes two scaling safeguards:
+1. Knowledge base cap: when the registry exceeds MAX_KNOWLEDGE_PIECES, the
+   oldest/least-used entries are evicted to keep memory and O(K²) cache
+   updates bounded.
+2. Lazy compatibility: when the registry is large (>500), skip full cache
+   rebuild and compute compatibility on-demand in select_knowledge_combination.
 """
 function add_knowledge!(kb::KnowledgeBase, knowledge::Knowledge; ai_discovered::Bool=false)
+    # ── Evict old knowledge if at capacity ──
+    max_pieces = if !isnothing(kb.config)
+        kb.config.MAX_KNOWLEDGE_PIECES
+    else
+        5000
+    end
+    if length(kb.knowledge_registry) >= max_pieces
+        _evict_oldest_knowledge!(kb)
+    end
+
     kb.knowledge_pieces[knowledge.id] = knowledge
 
     # Add to domain index
@@ -160,16 +177,70 @@ function add_knowledge!(kb::KnowledgeBase, knowledge::Knowledge; ai_discovered::
         push!(kb.knowledge_graph[parent_id], knowledge.id)
     end
 
-    # Update compatibility cache
-    for other in kb.knowledge_registry
-        score = compute_compatibility(knowledge, other)
-        kb.compatibility_cache[(knowledge.id, other.id)] = score
-        kb.compatibility_cache[(other.id, knowledge.id)] = score
+    # Update compatibility cache — use lazy mode for large registries
+    if length(kb.knowledge_registry) <= 500
+        for other in kb.knowledge_registry
+            score = compute_compatibility(knowledge, other)
+            kb.compatibility_cache[(knowledge.id, other.id)] = score
+            kb.compatibility_cache[(other.id, knowledge.id)] = score
+        end
+    else
+        # Large registry: only compute compatibility with same-domain knowledge
+        domain_peers = get(kb.domain_knowledge, knowledge.domain, Knowledge[])
+        for other in domain_peers
+            if other.id != knowledge.id
+                score = compute_compatibility(knowledge, other)
+                kb.compatibility_cache[(knowledge.id, other.id)] = score
+                kb.compatibility_cache[(other.id, knowledge.id)] = score
+            end
+        end
     end
     kb.compatibility_cache[(knowledge.id, knowledge.id)] = 1.0
 
     push!(kb.knowledge_registry, knowledge)
     kb.knowledge_usage[knowledge.id] = get(kb.knowledge_usage, knowledge.id, 0)
+end
+
+"""
+Evict the oldest, least-used knowledge pieces to stay under the cap.
+Removes ~10% of the registry each time to avoid frequent evictions.
+Base knowledge (discovered_round == 0) is never evicted.
+"""
+function _evict_oldest_knowledge!(kb::KnowledgeBase)
+    n_to_remove = max(1, length(kb.knowledge_registry) ÷ 10)
+
+    # Score: lower = more evictable (old + unused)
+    scored = [(k, k.discovered_round + get(kb.knowledge_usage, k.id, 0) * 10)
+              for k in kb.knowledge_registry if k.discovered_round > 0]
+    sort!(scored, by=x -> x[2])
+
+    removed_ids = Set{String}()
+    for i in 1:min(n_to_remove, length(scored))
+        k = scored[i][1]
+        push!(removed_ids, k.id)
+    end
+
+    # Remove from all data structures
+    filter!(k -> !(k.id in removed_ids), kb.knowledge_registry)
+    for kid in removed_ids
+        delete!(kb.knowledge_pieces, kid)
+        delete!(kb.knowledge_usage, kid)
+        # Clean domain index
+        for (domain, vec) in kb.domain_knowledge
+            filter!(k -> k.id != kid, vec)
+        end
+        # Clean graph
+        delete!(kb.knowledge_graph, kid)
+        for (_, children) in kb.knowledge_graph
+            delete!(children, kid)
+        end
+        # Clean cache entries (batch at end is faster but this is infrequent)
+        for cache_key in collect(keys(kb.compatibility_cache))
+            if cache_key[1] == kid || cache_key[2] == kid
+                delete!(kb.compatibility_cache, cache_key)
+            end
+        end
+    end
 end
 
 """

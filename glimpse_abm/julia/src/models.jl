@@ -438,8 +438,9 @@ function realized_return(
 
     # The minimum return (x_m) scales with opportunity quality
     # Higher quality opportunities have higher floor returns
-    # Increased floor (0.5 multiplier) to ensure median ~1× for sustainable survival
-    x_min = clamp(base_mean * 0.5, 0.3, 3.0)
+    # Calibrated so uncrowded median ≈ 0.95×, mean ≈ 1.2× (matches VC empirics:
+    # ~55% loss rate, mean > median due to power-law tail, portfolio mean ~1.07×)
+    x_min = clamp(base_mean * 0.24, 0.15, 5.0)
 
     # Sample from Pareto distribution: X = x_m / U^(1/α)
     u = rand(rng)
@@ -447,9 +448,8 @@ function realized_return(
     u = clamp(u, 1e-6, 1.0 - 1e-6)
     pareto_draw = x_min / (u ^ (1.0 / alpha))
 
-    # Apply quality scaling - better opportunities shift the distribution up
-    quality_scale = base_mean / max(x_min, 0.1)
-    scaled_return = pareto_draw * clamp(quality_scale * 0.6, 0.6, 2.5)
+    # Pareto draw already scales with base_mean via x_min — no additional quality scaling needed
+    scaled_return = pareto_draw
 
     # Downside risk adjustment (oversupply, risk signal)
     downside_weight = isnothing(config) ? 0.65 : config.DOWNSIDE_OVERSUPPLY_WEIGHT

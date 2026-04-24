@@ -475,8 +475,12 @@ function check_survival!(agent::EmergentAgent, round::Int)::Bool
 
     # Apply AI trust-based liquidity relief (matches Python agents.py:930-933)
     # Agents with high AI trust can maintain lower liquidity reserves
+    # Use get_ai_level() to honor fixed_ai_level for fixed-tier runs
+    # (current_ai_level is "none" until first make_decision! call, which
+    # happens AFTER check_survival! in the step path — so fixed-tier
+    # premium agents were silently missing this relief)
     liquidity_floor = survival_threshold
-    ai_level = agent.current_ai_level
+    ai_level = get_ai_level(agent)
     if ai_level != "none"
         trust = clamp(agent.traits["ai_trust"], 0.0, 1.0)
         discount = clamp(agent.config.AI_TRUST_RESERVE_DISCOUNT, 0.0, 0.9)
@@ -1062,6 +1066,12 @@ function process_matured_investments!(
             set_capital!(agent, get_capital(agent) + capital_returned)
             agent.total_returned += capital_returned
 
+            # Release invested capital from opportunity capacity tracking
+            # (total_invested should reflect current outstanding capital, not lifetime cumulative)
+            if hasfield(typeof(opp), :total_invested)
+                opp.total_invested = max(0.0, opp.total_invested - invested_amount)
+            end
+
             success = ret_multiple >= 1.0
             if success
                 agent.success_count += 1
@@ -1302,9 +1312,18 @@ end
 
 """
 Start a subscription schedule for a given AI level.
-Charges the full quarterly cost per round (monthly cost × 3 months).
-Since rounds = quarters and AI costs are documented as monthly fees,
-we convert: Premium at 3500/month = 10500 per quarter.
+
+Charges the documented monthly subscription cost per round. The simulation
+runs on a monthly cadence (config.jl: N_ROUNDS = 120 months = 10 years;
+operational costs and discount rates throughout are explicitly monthly), so
+each round = one month of subscription. Premium at \$3500/month therefore
+charges \$3500 per round.
+
+Corrected 2026-04-23: previous implementation multiplied by 3.0 ("convert
+monthly to quarterly"), under the incorrect assumption that rounds were
+quarters. That assumption conflicted with config-level documentation and
+overcharged premium agents 3× (\$10,500 vs \$3,500 per round). The 3.0
+multiplier has been removed.
 """
 function start_subscription_schedule!(
     agent::EmergentAgent,
@@ -1317,22 +1336,20 @@ function start_subscription_schedule!(
         return
     end
 
-    # Convert monthly cost to quarterly cost (rounds = quarters = 3 months)
-    quarterly_cost = monthly_cost * 3.0
-
     # Scale costs by AI_COST_INTENSITY (for robustness testing)
     cost_intensity = agent.config.AI_COST_INTENSITY
-    quarterly_cost = quarterly_cost * cost_intensity
+    per_round_cost = monthly_cost * cost_intensity
 
     # Set up subscription to charge EVERY round (no amortization)
+    # Each round = one month per config.N_ROUNDS documentation
     agent.subscription_accounts[ai_level] = 1  # Active subscription
-    agent.subscription_rates[ai_level] = quarterly_cost  # Full quarterly cost
+    agent.subscription_rates[ai_level] = per_round_cost  # Monthly cost per round
     agent.subscription_deferral_remaining[ai_level] = 0
 end
 
 """
 Charge one subscription installment for a given AI level.
-Deducts the full quarterly cost from agent capital EVERY round.
+Deducts the documented monthly cost from agent capital each round.
 Returns the amount charged.
 """
 function charge_subscription_installment!(
@@ -1353,7 +1370,7 @@ function charge_subscription_installment!(
         return 0.0
     end
 
-    # CHARGE THE SUBSCRIPTION - deduct full quarterly cost from capital
+    # CHARGE THE SUBSCRIPTION - deduct documented monthly cost from capital
     set_capital!(agent, get_capital(agent) - rate)
 
     # Subscription remains active (charge EVERY round, no amortization)
@@ -1898,15 +1915,31 @@ end
 # ============================================================================
 
 """
-Basic opportunity evaluation without full information system.
+Basic opportunity evaluation.
+
+By default the agent's *perceived* return (`estimated_return`) drives the
+score. When `estimated_return` is omitted, falls back to
+`opportunity.latent_return_potential` (the hidden ground truth) — kept for
+diagnostic / test paths that don't want AI-tier noise injected.
+
+Corrected 2026-04-23: previously this function ALWAYS used
+`opportunity.latent_return_potential`, which meant agents of every AI tier
+ranked opportunities by the same hidden ground truth and the
+information-quality mechanism the paper claimed to test was bypassed
+entirely. The `estimated_return` parameter (set by
+`evaluate_portfolio_opportunities` from `InformationSystem.get_information`)
+is now the canonical input.
 """
 function evaluate_opportunity_basic(
     agent::EmergentAgent,
     opportunity::Opportunity,
-    market_conditions::Dict{String,Any}
+    market_conditions::Dict{String,Any};
+    estimated_return::Union{Float64,Nothing} = nothing
 )::Float64
-    # Expected profit margin (using latent return potential)
-    expected_margin = opportunity.latent_return_potential - 1.0
+    # Expected profit margin: use AI-tier-aware estimate when provided,
+    # else fall back to the hidden latent value (diagnostic path only)
+    expected_return = isnothing(estimated_return) ? opportunity.latent_return_potential : estimated_return
+    expected_margin = expected_return - 1.0
     # Use complexity as a proxy for uncertainty
     uncertainty = opportunity.complexity
     uncertainty_adjusted = expected_margin * (1.0 - uncertainty * 0.5)
@@ -1973,6 +2006,7 @@ function evaluate_portfolio_opportunities(
     market_conditions::Dict{String,Any},
     perception::Dict{String,Any};
     ai_level::String = "none",
+    info_system::Union{InformationSystem,Nothing} = nothing,
     early_signals::Union{Dict{String,Int},Nothing} = nothing,
     signal_weight::Float64 = 0.15
 )::Vector{Dict{String,Any}}
@@ -1981,75 +2015,85 @@ function evaluate_portfolio_opportunities(
     end
 
     evaluations = Dict{String,Any}[]
-
-    # Evaluate ALL opportunities - no artificial cutoffs
-    # Herding emerges NATURALLY from information quality:
-    # - Premium agents have low noise → all rank the SAME opportunities as best → convergence
-    # - None agents have high noise → rank DIFFERENT opportunities as best → distribution
-    #
-    # NOVELTY INVERSION: Premium's advantage is INVERTED for novel opportunities
-    # - For established opportunities: Premium has low noise (accurate)
-    # - For novel opportunities: Premium has HIGH noise (patterns don't apply)
-    # This reflects "the more important the innovation, the less predictable it is" (Rescher)
     opp_pool = copy(opportunities)
-    if length(opp_pool) > 1
-        # Get actual AI config parameters
-        ai_config = get(agent.config.AI_LEVELS, ai_level, nothing)
-        info_quality = isnothing(ai_config) ? 0.25 : Float64(ai_config.info_quality)
 
-        # Base noise scale inversely proportional to info quality
-        # Premium (0.97): base_noise = 0.015 → accurate for established opportunities
-        # None (0.25):    base_noise = 0.375 → noisy for all opportunities
-        base_noise_scale = 0.5 * (1.0 - info_quality)
+    # ─────────────────────────────────────────────────────────────────
+    # Compute AI-tier-aware per-opportunity estimates (corrected 2026-04-23)
+    #
+    # Previously this block computed `estimated_returns` then sorted the opp
+    # pool by estimate, and the evaluation loop below used `latent_return_potential`
+    # via `evaluate_opportunity_basic` — so the tier-noisy estimates were
+    # discarded and ALL tiers ranked by the same hidden ground truth. The
+    # information-quality mechanism the paper claims to test was bypassed.
+    #
+    # Now: when `info_system` is provided (production path), use
+    # `get_information(opp, ai_level)` to produce hallucination-injected,
+    # tier-noisy estimates from the InformationSystem. When `info_system` is
+    # nothing (test/diagnostic path), use the inline tier-noise model below
+    # which preserves the previous numerical behavior except that the
+    # estimates now ACTUALLY drive `final_score` via `evaluate_opportunity_basic`.
+    #
+    # Herding emerges NATURALLY from information quality:
+    # - Premium agents have low noise → rank similar opportunities as best
+    # - None agents have high noise → rank diverse opportunities as best
+    # NOVELTY INVERSION: Premium's advantage inverts for novel opportunities
+    # (the more important the innovation, the less predictable it is — Rescher)
+    # ─────────────────────────────────────────────────────────────────
 
-        # Novelty noise inversion factor from config
-        inversion_factor = getfield_default(agent.config, :NOVELTY_NOISE_INVERSION_FACTOR, 0.4)
+    estimated_returns = Dict{String,Float64}()
 
-        # Sort by ESTIMATED returns with novelty-dependent noise
-        estimated_returns = Dict{String,Float64}()
+    if !isnothing(info_system)
+        # Production path: full InformationSystem with hallucination chain
         for opp in opp_pool
-            # Get opportunity novelty score (0.0 = established, 1.0 = very novel)
-            opp_novelty = hasfield(typeof(opp), :novelty_score) ? opp.novelty_score : 0.0
-
-            # For NOVEL opportunities, Premium's advantage inverts:
-            # - Established (novelty=0): effective_noise = base_noise_scale (Premium accurate)
-            # - Novel (novelty=1): effective_noise = base_noise_scale + info_quality * inversion_factor
-            #   Premium at novelty=1: 0.015 + 0.97 * 0.4 = 0.403 (HIGHER than None's 0.375!)
-            #   None at novelty=1: 0.375 + 0.25 * 0.4 = 0.475 (slightly higher)
-            novelty_noise_penalty = opp_novelty * info_quality * inversion_factor
-
-            effective_noise = base_noise_scale + novelty_noise_penalty
-            noise = randn(agent.rng) * effective_noise
-            base_estimate = opp.latent_return_potential + noise
-
-            # Apply early signals boost (information cascade / sequential decision visibility)
-            # All tiers respond uniformly to early investor signals - let herding emerge naturally
+            info = get_information(info_system, opp, ai_level;
+                                   agent_id=agent.id, rng=agent.rng)
+            est = info.estimated_return
             if !isnothing(early_signals)
                 signal_count = get(early_signals, opp.id, 0)
                 if signal_count > 0
-                    # Uniform signal boost for all tiers - no hardcoded herding susceptibility
                     signal_boost = signal_count * signal_weight * 0.1
-                    base_estimate *= (1.0 + signal_boost)
+                    est *= (1.0 + signal_boost)
                 end
             end
-
-            estimated_returns[opp.id] = base_estimate
+            estimated_returns[opp.id] = est
         end
-        sort!(opp_pool, by=o -> estimated_returns[o.id], rev=true)
-
-        # NO CUTOFF - agents evaluate all opportunities and pick the best according to their estimates
+    elseif length(opp_pool) > 1
+        # Diagnostic/test path: inline tier-noise estimate (no hallucinations)
+        ai_config = get(agent.config.AI_LEVELS, ai_level, nothing)
+        info_quality = isnothing(ai_config) ? 0.25 : Float64(ai_config.info_quality)
+        base_noise_scale = 0.5 * (1.0 - info_quality)
+        inversion_factor = getfield_default(agent.config, :NOVELTY_NOISE_INVERSION_FACTOR, 0.4)
+        for opp in opp_pool
+            opp_novelty = hasfield(typeof(opp), :novelty_score) ? opp.novelty_score : 0.0
+            novelty_noise_penalty = opp_novelty * info_quality * inversion_factor
+            effective_noise = base_noise_scale + novelty_noise_penalty
+            noise = randn(agent.rng) * effective_noise
+            est = opp.latent_return_potential + noise
+            if !isnothing(early_signals)
+                signal_count = get(early_signals, opp.id, 0)
+                if signal_count > 0
+                    signal_boost = signal_count * signal_weight * 0.1
+                    est *= (1.0 + signal_boost)
+                end
+            end
+            estimated_returns[opp.id] = est
+        end
+    else
+        # Single-opportunity edge case: no tier noise needed
+        for opp in opp_pool
+            estimated_returns[opp.id] = opp.latent_return_potential
+        end
     end
 
-    for opp in opp_pool
-        base_score = evaluate_opportunity_basic(agent, opp, market_conditions)
-        final_score = apply_uncertainty_adjustments(agent, base_score, opp, perception)
+    # ─────────────────────────────────────────────────────────────────
+    # Evaluate each opportunity using the AI-tier-aware estimate
+    # ─────────────────────────────────────────────────────────────────
 
-        # Get estimated return (if computed during sorting, otherwise use latent return)
-        est_return = if @isdefined(estimated_returns) && haskey(estimated_returns, opp.id)
-            estimated_returns[opp.id]
-        else
-            opp.latent_return_potential
-        end
+    for opp in opp_pool
+        est_return = get(estimated_returns, opp.id, opp.latent_return_potential)
+        base_score = evaluate_opportunity_basic(agent, opp, market_conditions;
+                                                estimated_return=est_return)
+        final_score = apply_uncertainty_adjustments(agent, base_score, opp, perception)
 
         push!(evaluations, Dict{String,Any}(
             "opportunity" => opp,
@@ -2060,7 +2104,7 @@ function evaluate_portfolio_opportunities(
         ))
     end
 
-    # Sort by score descending
+    # Single sort by final_score (which now reflects AI-tier-aware estimate)
     sort!(evaluations, by=e -> e["final_score"], rev=true)
 
     return evaluations
@@ -2186,6 +2230,7 @@ function make_decision!(
         evals = evaluate_portfolio_opportunities(
             agent, opportunities, market_conditions, perception;
             ai_level=ai_level,
+            info_system=info_system,
             early_signals=early_signals,
             signal_weight=signal_weight
         )
