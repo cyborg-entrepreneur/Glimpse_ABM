@@ -710,7 +710,7 @@ function execute_action!(
     estimated_return::Union{Float64,Nothing} = nothing,
     ai_info::Union{Information,Nothing} = nothing,
     innovation_engine::Union{InnovationEngine,Nothing} = nothing,
-    market_conditions::Union{MarketConditions,Dict{String,Any},Nothing} = nothing,
+    market_conditions::Union{MarketConditions,Nothing} = nothing,
     uncertainty_perception::Union{Dict{String,Any},Nothing} = nothing,
     # v3.2: confidence and signal_score flow from the decision layer
     # (perception + evaluate_portfolio_opportunities) into invest sizing.
@@ -899,7 +899,7 @@ function _execute_innovate!(
     round::Int,
     outcome::Dict{String,Any};
     innovation_engine::Union{InnovationEngine,Nothing} = nothing,
-    market_conditions::Union{MarketConditions,Dict{String,Any},Nothing} = nothing,
+    market_conditions::Union{MarketConditions,Nothing} = nothing,
     uncertainty_perception::Union{Dict{String,Any},Nothing} = nothing
 )::Dict{String,Any}
     capital = get_capital(agent)
@@ -935,8 +935,12 @@ function _execute_innovate!(
     # USE KNOWLEDGE-BASED INNOVATION SYSTEM (if available)
     # =========================================================================
     if !isnothing(innovation_engine)
-        # Use the full knowledge recombination system
-        mkt_cond = isnothing(market_conditions) ? Dict{String,Any}("regime" => "normal") : market_conditions
+        # v3.3.2: if the caller didn't pass a MarketConditions snapshot,
+        # construct one from the current market state. Prior fallback used
+        # Dict("regime"=>"normal"), which crashed attempt_innovation!
+        # (signature: ::MarketConditions) with a MethodError. We have the
+        # live market handle here — use it.
+        mkt_cond = isnothing(market_conditions) ? get_market_conditions(market) : market_conditions
 
         # Attempt to create an innovation through knowledge recombination
         innovation = attempt_innovation!(
@@ -1205,7 +1209,7 @@ function process_matured_investments!(
     agent::EmergentAgent,
     market::MarketEnvironment,
     round::Int;
-    market_conditions::Union{MarketConditions,Dict{String,Any},Nothing} = nothing
+    market_conditions::Union{MarketConditions,Nothing} = nothing
 )::Vector{Dict{String,Any}}
     if !agent.alive
         return Dict{String,Any}[]

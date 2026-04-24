@@ -412,17 +412,25 @@ function get_market_conditions(market::MarketEnvironment;
     comp_values = [o.competition for o in market.opportunities if o.discovered]
     avg_competition = isempty(comp_values) ? 0.0 : mean(comp_values)
 
+    # v3.3.2: copy dict fields so MarketConditions is a true snapshot. Prior
+    # versions stored the market's mutable dicts by reference — when the
+    # market advanced a round and updated `tier_invest_share` or
+    # `sector_demand_adjustments`, any MarketConditions instances handed out
+    # that round silently saw the NEW values too. `struct MarketConditions`
+    # was immutable but its Dict contents weren't. Reviewer probe showed
+    # `same_dict_ref=true`. Shallow copies are sufficient for
+    # Dict{String,Float64}; sector_demand_adjustments is nested so deepcopy.
     return MarketConditions(
         market.market_regime,
         market.volatility,
         market.regime_return_multiplier,
         market.regime_failure_multiplier,
         market.current_round,
-        market.tier_invest_share,
-        market.sector_clearing_index,
+        copy(market.tier_invest_share),
+        copy(market.sector_clearing_index),
         market.aggregate_clearing_ratio,
-        market.crowding_metrics,
-        market.sector_demand_adjustments,
+        copy(market.crowding_metrics),
+        deepcopy(market.sector_demand_adjustments),
         avg_competition,
         uncertainty_state,
         Dict{String,Any}(),  # extras — empty by default

@@ -201,6 +201,7 @@ using DataFrames
     include("test_confidence_sizing.jl")
     include("test_knightian_pathway.jl")
     include("test_demand_clamp.jl")
+    include("test_snapshot.jl")
 
 end
 

@@ -212,9 +212,10 @@ function realized_return(
     lifecycle_factor = get(lifecycle_multipliers, opp.lifecycle_stage, 1.0)
     resilience = clamp(0.75 + 0.25 * (1.0 - risk_signal), 0.55, 1.45)
 
-    # Sector clearing dynamics
-    clearing_index = market_conditions.sector_clearing_index
-    aggregate_ratio = Float64(market_conditions.aggregate_clearing_ratio)
+    # Sector clearing dynamics. sector_demand_adjustments (from
+    # market.jl:get_demand_adjustments) already encodes the demand/supply
+    # clearing_ratio signal with the correct sign and clamped to sane bounds,
+    # so we read it once here. v3.3.2 deleted a redundant second pass below.
     sector_key = coalesce(opp.sector, "unknown")
 
     sector_adjustments = market_conditions.sector_demand_adjustments
@@ -224,26 +225,22 @@ function realized_return(
         risk_signal = clamp(risk_signal * Float64(get(sector_adjust, "failure", 1.0)), 0.05, 0.95)
     end
 
-    sector_ratio = if !isempty(clearing_index)
-        Float64(get(clearing_index, sector_key, aggregate_ratio))
-    else
-        aggregate_ratio
-    end
-    if !isfinite(sector_ratio)
-        sector_ratio = 1.0
-    end
-
-    oversupply = max(0.0, sector_ratio - 1.0)
-    undersupply = max(0.0, 1.0 - sector_ratio)
+    # v3.3.2: deleted a redundant second clearing-ratio adjustment block that
+    # operated on the same `sector_ratio = demand/supply` signal but with
+    # opposite sign from market.jl's get_demand_adjustments. Hot markets
+    # (ratio > 1) got boosted in sector_adjust above (correct) and then
+    # penalized here as "oversupply" (incorrect semantic label). The two
+    # multiplicative signals partially cancelled and combined with the
+    # [0.1, 3.5] clamp could produce net-negative outcomes — reviewer probe
+    # showed ratio=31.57 produced LOWER mean return than an empty market.
+    # sector_demand_adjustments is now the single source of truth for the
+    # clearing-ratio signal; RETURN_OVERSUPPLY_PENALTY /
+    # RETURN_UNDERSUPPLY_BONUS config fields are retained for possible
+    # future use but no longer read by realized_return.
 
     config = opp.config
-    oversupply_penalty = isnothing(config) ? 0.5 : config.RETURN_OVERSUPPLY_PENALTY
-    undersupply_bonus = isnothing(config) ? 0.3 : config.RETURN_UNDERSUPPLY_BONUS
 
-    clearing_adjustment = 1.0 - oversupply_penalty * oversupply + undersupply_bonus * undersupply
-    clearing_adjustment = clamp(clearing_adjustment, 0.1, 3.5)
-
-    base_mean = base_multiple * lifecycle_factor * resilience * clearing_adjustment
+    base_mean = base_multiple * lifecycle_factor * resilience
 
     # Uncertainty state effects
     unc_state = market_conditions.uncertainty_state
@@ -429,9 +426,22 @@ function realized_return(
     # Pareto draw already scales with base_mean via x_min — no additional quality scaling needed
     scaled_return = pareto_draw
 
-    # Downside risk adjustment (oversupply, risk signal)
+    # Downside risk adjustment — risk signal plus a hot-market variance term.
+    # Hot markets (demand > supply) expose the investor to more contested-
+    # entry outcomes, so downside widens. Capped at 2× baseline because
+    # further ratio growth doesn't add meaningfully more variance at the
+    # individual-opportunity level (the expected-value boost from
+    # sector_demand_adjustments is already doing that work).
+    sector_key_local = coalesce(opp.sector, "unknown")
+    raw_ratio = if !isempty(market_conditions.sector_clearing_index)
+        Float64(get(market_conditions.sector_clearing_index, sector_key_local,
+                    market_conditions.aggregate_clearing_ratio))
+    else
+        Float64(market_conditions.aggregate_clearing_ratio)
+    end
+    hot_market_pressure = clamp(raw_ratio - 1.0, 0.0, 2.0)
     downside_weight = isnothing(config) ? 0.65 : config.DOWNSIDE_OVERSUPPLY_WEIGHT
-    downside = clamp(0.2 + risk_signal * 0.4 + downside_weight * oversupply, 0.0, 2.0)
+    downside = clamp(0.2 + risk_signal * 0.4 + downside_weight * hot_market_pressure, 0.0, 2.0)
 
     # Beta shock for additional variance
     shock = rand(rng, Beta(1.5, 2.5))
