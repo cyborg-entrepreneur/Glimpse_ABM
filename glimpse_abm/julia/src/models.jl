@@ -285,46 +285,36 @@ function realized_return(
 
     if use_capacity_convexity
         # =====================================================================
-        # CAPACITY-CONVEXITY CROWDING MODEL (New unified approach)
+        # CAPITAL-SATURATION CONVEXITY CROWDING (v3.1)
         # =====================================================================
-        # Formula: penalty = λ · max(0, C/K - 1)^γ
+        # Formula: penalty = λ · max(0, S/K_sat - 1)^γ
         #          net_return = base_return · exp(-penalty)
+        # where S = opp.total_invested / opp.capacity (capital saturation ratio)
         #
-        # Properties:
-        # - No penalty until crowding exceeds capacity K (healthy competition OK)
-        # - Convex penalty beyond capacity (γ=2: "a little crowded is OK, very crowded is brutal")
-        # - Exponential decay keeps returns positive
-        #
-        # Theoretical basis:
-        # - Carrying capacity (K): ecological/economic concept of sustainable competition
-        # - Convexity (γ): marginal harm from crowding increases with crowding level
-        # - Exponential form: standard in utility theory, ensures positive returns
+        # v3.1 change: replaced `C = opp.competition` (count of competitors)
+        # with capital-saturation. Ten $10k investments and one $10M investment
+        # now have materially different penalty profiles — the economically
+        # correct crowding signal is dollar saturation, not headcount.
+        # Subsumes both the count-based convexity and the old linear capacity
+        # penalty. See plan mossy-sparking-wreath.md for the derivation.
         # =====================================================================
-        K = hasfield(typeof(config), :CROWDING_CAPACITY_K) ? config.CROWDING_CAPACITY_K : 1.5
+        K_sat = hasfield(typeof(config), :CROWDING_CAPACITY_RATIO_K) ? config.CROWDING_CAPACITY_RATIO_K : 1.2
         γ = hasfield(typeof(config), :CROWDING_CONVEXITY_GAMMA) ? config.CROWDING_CONVEXITY_GAMMA : 2.0
         λ = hasfield(typeof(config), :CROWDING_STRENGTH_LAMBDA) ? config.CROWDING_STRENGTH_LAMBDA : 0.50
 
-        # Competition from opportunity-level crowding
-        C = opp.competition
+        # Capital saturation ratio: how full is the niche relative to capacity?
+        saturation = (hasfield(typeof(opp), :capacity) && opp.capacity > 0.0) ?
+            (opp.total_invested / opp.capacity) : 0.0
 
-        # Also incorporate market-level crowding (crowding_index)
+        # Market-level crowding still contributes (rising tide across sectors),
+        # but with a smaller weight than it got against the count-based C.
         crowding_metrics = market_conditions.crowding_metrics
         crowding_index = Float64(get(crowding_metrics, "crowding_index", 0.25))
+        effective_sat = saturation + crowding_index * 0.3
 
-        # Combine opportunity and market-level crowding
-        # Market crowding adds to effective competition when everyone is doing same thing
-        effective_C = C + crowding_index * 0.5
-
-        # Calculate penalty: λ · max(0, C/K - 1)^γ
-        excess_crowding = max(0.0, effective_C / K - 1.0)
-        crowding_penalty = λ * (excess_crowding ^ γ)
-
-        # Apply exponential decay to returns: exp(-penalty)
-        # This keeps returns positive and gives nice scaling properties
-        crowding_multiplier = exp(-crowding_penalty)
-
-        # Apply penalty to base_mean
-        base_mean *= crowding_multiplier
+        excess = max(0.0, effective_sat / K_sat - 1.0)
+        crowding_penalty = λ * (excess ^ γ)
+        base_mean *= exp(-crowding_penalty)
 
         # Scarcity and novelty adjustments (reduced weight since crowding now unified)
         scarcity_bonus = 0.10 * scarcity_signal
@@ -378,38 +368,10 @@ function realized_return(
     end
 
     # =========================================================================
-    # CAPACITY CONSTRAINTS (Separate from Crowding)
+    # (v3.1: Linear capacity penalty removed — subsumed by the capital-
+    #  saturation convexity above, which now applies the same
+    #  total_invested/capacity signal in a smooth convex form.)
     # =========================================================================
-    # NOTE: This is COMPLEMENTARY to the crowding model above, not redundant.
-    # - CROWDING: Penalizes based on NUMBER of competitors (competition field)
-    # - CAPACITY: Penalizes based on CAPITAL INVESTED (total_invested field)
-    #
-    # Both can apply: an opportunity can have few competitors but be capital-saturated,
-    # or many competitors with plenty of capacity remaining.
-    #
-    # Real opportunities have limited capacity. First movers get better terms.
-    # As investment approaches capacity, returns diminish.
-    capacity_enabled = !isnothing(config) &&
-        hasfield(typeof(config), :OPPORTUNITY_CAPACITY_ENABLED) &&
-        config.OPPORTUNITY_CAPACITY_ENABLED
-
-    if capacity_enabled && hasfield(typeof(opp), :capacity) && opp.capacity > 0
-        utilization = opp.total_invested / opp.capacity
-        penalty_start = !isnothing(config) && hasfield(typeof(config), :CAPACITY_PENALTY_START) ?
-            config.CAPACITY_PENALTY_START : 0.7
-        penalty_max = !isnothing(config) && hasfield(typeof(config), :CAPACITY_PENALTY_MAX) ?
-            config.CAPACITY_PENALTY_MAX : 0.4
-
-        if utilization > penalty_start && penalty_start < 1.0
-            # Linear penalty from penalty_start to 1.0
-            # At 70% utilized: 0% capacity penalty
-            # At 100% utilized: max penalty (e.g., 40%)
-            denom = 1.0 - penalty_start
-            excess = denom > 0.001 ? (utilization - penalty_start) / denom : 1.0
-            capacity_penalty = 1.0 - clamp(excess, 0.0, 1.0) * penalty_max
-            base_mean *= clamp(capacity_penalty, 1.0 - penalty_max, 1.0)
-        end
-    end
 
     # =========================================================================
     # POWER LAW RETURN DISTRIBUTION

@@ -362,6 +362,19 @@ parameters preserved for exact behavioral compatibility.
     # at observed competition levels (median C≈3.6, mean C≈6.7)
     CROWDING_STRENGTH_LAMBDA::Float64 = 1.5
 
+    # v3.1 — Capital-saturation convexity threshold.
+    # K_sat is the saturation ratio (total_invested / capacity) above which
+    # the convexity penalty starts. Unlike CROWDING_CAPACITY_K above (which
+    # operates on count-of-competitors and scales with √N), K_sat is a
+    # capital-ratio and does NOT scale with N — capacity and invested capital
+    # both scale together, so the ratio is population-invariant.
+    #   K_sat = 1.0 → penalty starts at full capacity
+    #   K_sat = 1.2 → penalty starts 20% above capacity (niche slightly saturated)
+    # Calibration sweep (N=100, seed=42, 4 tiers): K_sat=1.2 preserves v2.12
+    # ordering `advanced > basic > none > premium` with aggregate survival 43%,
+    # closest to v3.0's 42.5%. Phase 5 tunes this at N=1000.
+    CROWDING_CAPACITY_RATIO_K::Float64 = 1.2
+
     # Legacy parameters (used when USE_CAPACITY_CONVEXITY_CROWDING = false)
     OPPORTUNITY_COMPETITION_PENALTY::Float64 = 0.5  # Return penalty per unit of opp.competition (0.5 = 50% max penalty at competition=1.0)
     OPPORTUNITY_COMPETITION_THRESHOLD::Float64 = 0.2  # Competition level above which penalty starts applying
@@ -443,18 +456,14 @@ parameters preserved for exact behavioral compatibility.
 
     # ========================================================================
     # CAPACITY CONSTRAINT PARAMETERS
-    # Real opportunities have limited capacity; first movers get better terms
-    # ========================================================================
-    OPPORTUNITY_CAPACITY_ENABLED::Bool = true
-    # Capacity represents max concurrent capital a market opportunity can absorb.
+    # Capacity represents max concurrent capital an opportunity can absorb.
     # With 1000 agents at $5M, ~400 investing $185K/round across 30 opportunities,
     # outstanding capital per opportunity is ~$10-30M at steady state.
-    # $15M capacity means typical opps sit below penalty threshold (70% = $10.5M),
-    # while the most popular opps (2-3x average flow) exceed it.
+    # The capital-saturation convexity (models.jl) uses total_invested/capacity
+    # as its crowding signal.
+    # ========================================================================
     OPPORTUNITY_BASE_CAPACITY::Float64 = 15_000_000.0  # Base capacity in dollars
-    OPPORTUNITY_CAPACITY_VARIANCE::Float64 = 0.3      # Random variance in capacity
-    CAPACITY_PENALTY_START::Float64 = 0.7             # When penalty kicks in (70% utilized)
-    CAPACITY_PENALTY_MAX::Float64 = 0.4               # Max penalty at full capacity (40%)
+    OPPORTUNITY_CAPACITY_VARIANCE::Float64 = 0.3       # Random variance in capacity
 
     # ========================================================================
     # SEQUENTIAL DECISION PARAMETERS
