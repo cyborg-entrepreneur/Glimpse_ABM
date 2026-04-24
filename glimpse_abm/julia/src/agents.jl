@@ -644,6 +644,7 @@ function execute_action!(
     round::Int;
     opportunity::Union{Opportunity,Nothing} = nothing,
     estimated_return::Union{Float64,Nothing} = nothing,
+    ai_info::Union{Information,Nothing} = nothing,
     innovation_engine::Union{InnovationEngine,Nothing} = nothing,
     market_conditions::Union{Dict{String,Any},Nothing} = nothing,
     uncertainty_perception::Union{Dict{String,Any},Nothing} = nothing
@@ -657,7 +658,8 @@ function execute_action!(
     )
 
     if action == "invest" && !isnothing(opportunity)
-        outcome = _execute_invest!(agent, opportunity, market, round, outcome; estimated_return=estimated_return)
+        outcome = _execute_invest!(agent, opportunity, market, round, outcome;
+            estimated_return=estimated_return, ai_info=ai_info)
     elseif action == "innovate"
         outcome = _execute_innovate!(agent, market, round, outcome;
             innovation_engine=innovation_engine,
@@ -684,7 +686,8 @@ function _execute_invest!(
     market::MarketEnvironment,
     round::Int,
     outcome::Dict{String,Any};
-    estimated_return::Union{Float64,Nothing} = nothing
+    estimated_return::Union{Float64,Nothing} = nothing,
+    ai_info::Union{Information,Nothing} = nothing
 )::Dict{String,Any}
     capital = get_capital(agent)
     max_invest = capital * agent.config.MAX_INVESTMENT_FRACTION
@@ -760,6 +763,16 @@ function _execute_invest!(
     outcome["competition_at_investment"] = opportunity.competition
     outcome["info_quality_used"] = info_quality
     outcome["estimated_return"] = est_ret
+
+    # Propagate InformationSystem metadata so record_ai_signals! and
+    # downstream analytics can see per-tier hallucination / confidence
+    # patterns. Without this the uncertainty-telemetry layer read zero
+    # hallucinations for every tier regardless of actual info quality.
+    if !isnothing(ai_info)
+        outcome["ai_contains_hallucination"] = ai_info.contains_hallucination
+        outcome["ai_confidence"] = ai_info.confidence
+        outcome["ai_actual_accuracy"] = ai_info.actual_accuracy
+    end
 
     # Track for emergent agentic novelty (derivative = following, not novel = creating)
     record_creative_action!(agent.uncertainty_metrics; derivative_adoption=is_derivative)
@@ -854,6 +867,10 @@ function _execute_innovate!(
             outcome["knowledge_components"] = innovation.knowledge_components
             outcome["ai_assisted"] = innovation.ai_assisted
             outcome["ai_domains_used"] = innovation.ai_domains_used
+            # Propagate remaining Innovation fields so simulation.jl can fully
+            # reconstruct the Innovation object without losing semantic content.
+            outcome["innovation_sector"] = innovation.sector
+            outcome["combination_signature"] = innovation.combination_signature
 
             # Track for emergent agentic novelty
             record_creative_action!(agent.uncertainty_metrics; new_combination=innovation.is_new_combination)
@@ -1310,11 +1327,15 @@ function estimate_ai_cost(
     cost_intensity = agent.config.AI_COST_INTENSITY
 
     if cost_type == "subscription"
-        base_cost = Float64(ai_config.cost) * cost_intensity
-        per_use = Float64(ai_config.per_use_cost) * cost_intensity
-        # Amortize subscription over rounds
-        amort_rounds = max(1, agent.config.AI_SUBSCRIPTION_AMORTIZATION_ROUNDS)
-        return base_cost / amort_rounds + per_use * max(expected_calls, 0.0)
+        # Match actual charging: full monthly subscription cost per round
+        # (see start_subscription_schedule! at agents.jl:~1345 — the monthly
+        # cost is billed once per round, no per-use rider). Previously this
+        # estimator returned `base_cost / amort_rounds + per_use * expected_calls`,
+        # which told the planner the subscription was effectively free for
+        # subscription-type tiers; then the biller charged the full monthly
+        # cost each round. Agents adopted premium because "cheap" and then
+        # got surprised by a 180x higher bill.
+        return Float64(ai_config.cost) * cost_intensity
     elseif cost_type == "per_use"
         return Float64(ai_config.cost) * cost_intensity * max(expected_calls, 0.0)
     end
@@ -1417,8 +1438,22 @@ function apply_subscription_carry!(
 end
 
 """
+Cancel the subscription schedule for a specific AI level.
+"""
+function cancel_subscription_schedule!(agent::EmergentAgent, ai_level::String)
+    delete!(agent.subscription_accounts, ai_level)
+    delete!(agent.subscription_rates, ai_level)
+    delete!(agent.subscription_deferral_remaining, ai_level)
+end
+
+"""
 Ensure subscription schedule is active for the given AI level.
 Call this whenever an agent adopts or switches to a subscription-based AI tier.
+
+For emergent-mode agents, this also cancels any previously-active subscription
+to a DIFFERENT tier — an agent who drops from premium to advanced should stop
+being charged for premium. Previously the agent accumulated simultaneous
+subscriptions across every tier they ever used.
 """
 function ensure_subscription_schedule!(
     agent::EmergentAgent,
@@ -1428,6 +1463,13 @@ function ensure_subscription_schedule!(
 
     if isnothing(ai_config)
         return
+    end
+
+    # Cancel any active subscription to a DIFFERENT tier.
+    for active_tier in collect(keys(agent.subscription_accounts))
+        if active_tier != ai_level && get(agent.subscription_accounts, active_tier, 0) > 0
+            cancel_subscription_schedule!(agent, active_tier)
+        end
     end
 
     if ai_config.cost_type != "subscription" || ai_config.cost <= 0
@@ -1694,9 +1736,15 @@ function calculate_investment_utility(
     avg_score = 0.0
     for opp in opportunities
         est_return = if !isnothing(info_system)
+            # Only deduct per-use cost on cache MISS. Re-reading a cached info
+            # object is not a new API call — the agent already paid for it.
+            # Without this check, utility-eval + portfolio-ranking both charge
+            # for the same opportunity in the same round (double-billing).
+            cached_before = haskey(info_system.information_cache,
+                                   (opp.id, ai_level, agent.id))
             info = get_information(info_system, opp, ai_level;
                                    agent_id=agent.id, rng=agent.rng)
-            if per_use_charge > 0
+            if !cached_before && per_use_charge > 0
                 set_capital!(agent, get_capital(agent) - per_use_charge)
             end
             info.estimated_return
@@ -2083,6 +2131,12 @@ function evaluate_portfolio_opportunities(
     # ─────────────────────────────────────────────────────────────────
 
     estimated_returns = Dict{String,Float64}()
+    # Stash Information objects for per-opp propagation into invest-action outcomes.
+    # record_ai_signals! (uncertainty.jl:347) reads ai_contains_hallucination /
+    # ai_confidence / ai_actual_accuracy from the action dict; earlier these
+    # fields were never populated so hallucination telemetry saw zero regardless
+    # of tier.
+    info_cache_local = Dict{String,Information}()
 
     if !isnothing(info_system)
         # Production path: full InformationSystem with hallucination chain.
@@ -2100,8 +2154,13 @@ function evaluate_portfolio_opportunities(
         end
 
         for opp in opp_pool
+            # Deduct per-use cost on cache MISS only (see calculate_investment_utility
+            # for rationale — prevents double-charging across utility + ranking).
+            cached_before = haskey(info_system.information_cache,
+                                   (opp.id, ai_level, agent.id))
             info = get_information(info_system, opp, ai_level;
                                    agent_id=agent.id, rng=agent.rng)
+            info_cache_local[opp.id] = info
             est = info.estimated_return
             if !isnothing(early_signals)
                 signal_count = get(early_signals, opp.id, 0)
@@ -2112,7 +2171,7 @@ function evaluate_portfolio_opportunities(
             end
             estimated_returns[opp.id] = est
 
-            if per_use_charge > 0
+            if !cached_before && per_use_charge > 0
                 set_capital!(agent, get_capital(agent) - per_use_charge)
             end
         end
@@ -2154,13 +2213,21 @@ function evaluate_portfolio_opportunities(
                                                 estimated_return=est_return)
         final_score = apply_uncertainty_adjustments(agent, base_score, opp, perception)
 
-        push!(evaluations, Dict{String,Any}(
+        eval_record = Dict{String,Any}(
             "opportunity" => opp,
             "final_score" => final_score,
             "ai_level_used" => ai_level,
             "estimated_return" => est_return,
-            "competition_at_evaluation" => hasfield(typeof(opp), :competition) ? opp.competition : 0.0
-        ))
+            "competition_at_evaluation" => hasfield(typeof(opp), :competition) ? opp.competition : 0.0,
+        )
+        if haskey(info_cache_local, opp.id)
+            inf = info_cache_local[opp.id]
+            eval_record["ai_info"] = inf
+            eval_record["ai_contains_hallucination"] = inf.contains_hallucination
+            eval_record["ai_confidence"] = inf.confidence
+            eval_record["ai_actual_accuracy"] = inf.actual_accuracy
+        end
+        push!(evaluations, eval_record)
     end
 
     # Single sort by final_score (which now reflects AI-tier-aware estimate)
@@ -2297,9 +2364,11 @@ function make_decision!(
             best_eval = evals[1]
             best_opp = best_eval["opportunity"]
             estimated_return = get(best_eval, "estimated_return", best_opp.latent_return_potential)
+            ai_info_for_invest = get(best_eval, "ai_info", nothing)
             execute_action!(agent, "invest", market, round_num;
                 opportunity=best_opp,
                 estimated_return=estimated_return,
+                ai_info=ai_info_for_invest isa Information ? ai_info_for_invest : nothing,
                 innovation_engine=innovation_engine,
                 market_conditions=market_conditions,
                 uncertainty_perception=perception)

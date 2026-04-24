@@ -102,7 +102,18 @@ function EmergentSimulation(;
         tier_probs = [1.0, 0.0, 0.0, 0.0]
     end
 
-    # Create agents with distributed initial tiers
+    # Create agents with distributed initial tiers. Two modes:
+    # - AGENT_AI_MODE="fixed" (main paper analyses): lock each agent at their
+    #   sampled tier by setting fixed_ai_level=<tier>. get_ai_level() returns
+    #   this, choose_ai_level is never called, tier is permanent.
+    # - AGENT_AI_MODE="emergent" (robustness checks): leave fixed_ai_level=nothing
+    #   so make_decision!'s else-branch (agents.jl:2210) calls choose_ai_level
+    #   each round. current_ai_level starts at the sampled initial_tier but
+    #   evolves dynamically.
+    # Previously the constructor unconditionally set fixed_ai_level=initial_tier,
+    # which locked emergent-mode agents at their starting tier (even when
+    # initial_tier="none") — emergent mode was effectively disabled.
+    agent_ai_mode = getfield_default(config, :AGENT_AI_MODE, "fixed")
     agents = EmergentAgent[]
     for i in 1:config.N_AGENTS
         # Sample initial tier based on distribution
@@ -116,8 +127,16 @@ function EmergentSimulation(;
                 break
             end
         end
-        agent = EmergentAgent(i, config; rng=rng, fixed_ai_level=initial_tier)
-        # Initialize subscription schedule for fixed AI tier (ensures costs are charged)
+        fixed_kw = agent_ai_mode == "emergent" ? nothing : initial_tier
+        agent = EmergentAgent(i, config; rng=rng, fixed_ai_level=fixed_kw)
+        # Emergent agents start at the sampled tier but can switch; fixed
+        # agents stay at initial_tier permanently.
+        if agent_ai_mode == "emergent" && initial_tier != "none"
+            agent.current_ai_level = initial_tier
+        end
+        # Initialize subscription schedule for the starting tier (fixed-tier
+        # agents will use this tier all run; emergent agents may later cancel
+        # and start different ones via ensure_subscription_schedule!).
         if initial_tier != "none"
             ensure_subscription_schedule!(agent, initial_tier)
         end
@@ -185,6 +204,18 @@ Matches Python _step order: operating costs -> matured investments -> decisions 
 """
 function step!(sim::EmergentSimulation, round::Int)
     sim.current_round = round
+    # Stamp the market with the current round BEFORE discovery runs so that
+    # opportunities discovered this round get the correct discovery_round.
+    # Previously discovery-phase writes used the stale market.current_round
+    # from the prior step (or 0 at start).
+    sim.market.current_round = round
+
+    # Invalidate the InformationSystem cache at the start of each round.
+    # The cache key is (opp.id, ai_level, agent_id) but opportunity state
+    # (competition, lifecycle_stage, disrupted_count) evolves across rounds,
+    # so stale estimates from round N-1 leak into round N decisions. Clearing
+    # here forces a fresh Information draw per round per agent.
+    empty!(sim.info_system.information_cache)
 
     # Get current uncertainty state and market conditions
     uncertainty_state = get_uncertainty_state(sim.uncertainty_env)
@@ -436,6 +467,10 @@ function step!(sim::EmergentSimulation, round::Int)
                 dd isa Vector{String} ? dd : String[string(x) for x in dd]
             end
             scarcity_v = get(action, "innovation_scarcity", nothing)
+            impact_v = get(action, "market_impact", nothing)
+            sector_v = get(action, "innovation_sector", nothing)
+            combo_sig_v = get(action, "combination_signature", nothing)
+            success_v = get(action, "success", nothing)
 
             innov = Innovation(
                 id=innov_id,
@@ -448,6 +483,11 @@ function step!(sim::EmergentSimulation, round::Int)
                 ai_level_used=String(get(action, "ai_level_used", "none")),
                 ai_assisted=ai_assisted,
                 ai_domains_used=ai_domains_used,
+                sector=isnothing(sector_v) ? nothing : String(sector_v),
+                combination_signature=isnothing(combo_sig_v) ? nothing : String(combo_sig_v),
+                cash_multiple=Float64(get(action, "cash_multiple", 1.5)),
+                market_impact=isnothing(impact_v) ? nothing : Float64(impact_v),
+                success=isnothing(success_v) ? nothing : Bool(success_v),
                 scarcity=isnothing(scarcity_v) ? nothing : Float64(scarcity_v),
                 is_new_combination=Bool(get(action, "is_new_combination", false)),
             )
@@ -502,8 +542,11 @@ function step!(sim::EmergentSimulation, round::Int)
     # from EmergentSimulation, so the realism layer was effectively dead code.
     update_clearing_metrics!(sim.market, agent_actions)
     invest_actions = filter(a -> get(a, "action", "") == "invest", agent_actions)
+    # Actions emit the invested amount under "amount" (agents.jl:715, 729).
+    # Fall back to "investment_amount" for compatibility with matured-outcome
+    # records (agents.jl:1110) that use a different key.
     total_investment_for_dynamics = sum(
-        Float64(get(a, "investment_amount", 0.0)) for a in invest_actions;
+        Float64(get(a, "amount", get(a, "investment_amount", 0.0))) for a in invest_actions;
         init=0.0
     )
     n_ai_invest = count(a -> normalize_ai_label(get(a, "ai_level_used", "none")) != "none",
@@ -525,7 +568,8 @@ function step!(sim::EmergentSimulation, round::Int)
             opp_id = string(get(action, "opportunity_id", ""))
             if !isempty(opp_id)
                 opportunity_demand[opp_id] = get(opportunity_demand, opp_id, 0) + 1
-                total_investment += Float64(get(action, "investment_amount", 0.0))
+                # Actions emit invested capital under "amount" (agents.jl:715).
+                total_investment += Float64(get(action, "amount", get(action, "investment_amount", 0.0)))
             end
         end
     end
@@ -612,7 +656,8 @@ function compile_round_stats(
                 capital_returned["innovate"] += rec
             end
         elseif act_type == "explore"
-            cost = Float64(get(action, "cost", 0.0))
+            # Actions emit the spent amount under "explore_cost" (agents.jl:1025).
+            cost = Float64(get(action, "explore_cost", get(action, "cost", 0.0)))
             capital_deployed["explore"] += cost
             # Exploration doesn't have direct capital return
         end

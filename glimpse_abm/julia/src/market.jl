@@ -210,7 +210,8 @@ function _create_realistic_opportunity(
         config=market.config,
         sector=sector,
         capital_requirements=capital_req,
-        time_to_maturity=maturity
+        time_to_maturity=maturity,
+        rng=market.rng,
     )
 end
 
@@ -679,7 +680,13 @@ function update_market_dynamics!(
     invest_actions = filter(a -> get(a, "action", "") == "invest", agent_actions)
     qualities = Float64[]
     for action in invest_actions
-        expected = get(action, "expected_return", nothing)
+        # Actions emit the agent's perceived return under "estimated_return"
+        # (agents.jl:719). Older callers that packaged decision details under
+        # "chosen_opportunity_details" are still supported as a fallback.
+        expected = get(action, "estimated_return", nothing)
+        if isnothing(expected)
+            expected = get(action, "expected_return", nothing)
+        end
         if isnothing(expected)
             details = get(action, "chosen_opportunity_details", Dict())
             expected = get(details, "estimated_return", nothing)
@@ -909,11 +916,18 @@ function manage_opportunities!(
         _index_opportunity!(market, new_opp)
     end
 
-    # Age all opportunities and decay competition
-    # Competition decays as investors exit or market conditions normalize
+    # Age all opportunities, decay competition, and update lifecycle stage.
+    # Adoption rate is approximated from opportunity_demand (number of agents
+    # investing this round) / n_agents — a proxy for market penetration.
+    # Without this update_lifecycle! call, every opportunity stayed "emerging"
+    # forever, even when mature or declining by the adoption threshold.
+    n_agents_f = Float64(max(1, market.n_agents))
     for opp in market.opportunities
         opp.age += 1
         opp.competition = max(0.0, opp.competition * 0.9)
+        demand_count = Float64(get(opportunity_demand, opp.id, 0))
+        adoption_rate = clamp(demand_count / n_agents_f, 0.0, 1.0)
+        update_lifecycle!(opp, adoption_rate)
     end
 
     # Remove dead opportunities
@@ -1206,7 +1220,13 @@ function create_niche_opportunity(
         latent_return_potential=clamp(latent_return, 0.5, 25.0),
         latent_failure_potential=clamp(latent_failure, 0.1, 0.95),
         complexity=rand(market.rng, Uniform(0.4, 0.8)),
-        discovered=false,
+        # Creator sees their own niche immediately; other agents discover it
+        # through the normal visibility filter (get_opportunities_for_agent).
+        # This unblocks the intended flow: an explorer invests in the niche
+        # they just created. Previously discovered=false hid the opp from
+        # everyone including the creator until some other agent happened to
+        # stumble across it via the discovery_prob roll.
+        discovered=true,
         discovery_round=round_num,
         # Field on the Opportunity struct is `created_by` (models.jl:78); the
         # earlier `creator_id=` kwarg name was wrong and would error if this
@@ -1215,7 +1235,8 @@ function create_niche_opportunity(
         sector=branch_name,
         capital_requirements=capital_req,
         time_to_maturity=maturity,
-        config=market.config
+        config=market.config,
+        rng=market.rng,
     )
 
     push!(market.opportunities, niche_opp)
@@ -1303,7 +1324,10 @@ function spawn_opportunity_from_innovation!(
         latent_return_potential=clamp(latent_return, 0.5, 25.0),
         latent_failure_potential=clamp(latent_failure, 0.1, 0.95),
         complexity=clamp(0.3 + innovation.quality * 0.3, 0.3, 1.0),
-        discovered=false,
+        # Creator sees their own innovation-spawned opportunity. Other agents
+        # discover it through the normal AI-tier-aware visibility filter.
+        # See matching rationale in create_niche_opportunity.
+        discovered=true,
         discovery_round=market.current_round,
         created_by=innovation.creator_id,
         config=market.config,
@@ -1311,7 +1335,8 @@ function spawn_opportunity_from_innovation!(
         capital_requirements=capital_req,
         time_to_maturity=maturity,
         novelty_score=innov_novelty,  # Novel opportunities from innovations
-        capacity=opp_capacity
+        capacity=opp_capacity,
+        rng=market.rng,
     )
 
     push!(market.opportunities, opportunity)
