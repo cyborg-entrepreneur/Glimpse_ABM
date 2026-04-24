@@ -159,7 +159,7 @@ Attempt to create an innovation.
 function attempt_innovation!(
     engine::InnovationEngine,
     agent::Any,  # EmergentAgent - using Any to avoid circular dependency
-    market_conditions::Union{MarketConditions,Dict{String,Any}},
+    market_conditions::MarketConditions,
     round::Int;
     ai_level::String="none",
     uncertainty_perception::Union{Dict{String,Any},Nothing}=nothing,
@@ -365,7 +365,7 @@ function determine_innovation_type(
     engine::InnovationEngine,
     knowledge_pieces::Vector{Knowledge},
     agent_traits::Dict{String,Float64},
-    market_conditions::Union{MarketConditions,Dict{String,Any}};
+    market_conditions::MarketConditions;
     ai_assisted::Bool=false,
     experience_units::Float64=0.0,
     rng::AbstractRNG=Random.default_rng()
@@ -663,7 +663,7 @@ Evaluate innovation success.
 function evaluate_innovation_success!(
     engine::InnovationEngine,
     innovation::Innovation,
-    market_conditions::Union{MarketConditions,Dict{String,Any}},
+    market_conditions::MarketConditions,
     market_innovations::Vector{Innovation};
     rng::AbstractRNG=Random.default_rng()
 )::Tuple{Bool,Float64,Float64}

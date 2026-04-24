@@ -78,7 +78,9 @@ function run_single_simulation(tier::String, run_idx::Int, seed::Int, test::Refu
         N_ROUNDS=N_ROUNDS,
         RANDOM_SEED=seed,
         INITIAL_CAPITAL=5_000_000.0,
-        SURVIVAL_THRESHOLD=10_000.0
+        SURVIVAL_THRESHOLD=10_000.0,
+        USE_UNIFORM_INITIAL_CAPITAL=true,
+        USE_UNIFORM_SURVIVAL_THRESHOLD=true
     )
 
     # Apply execution success multipliers

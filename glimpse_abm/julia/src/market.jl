@@ -676,16 +676,32 @@ function get_demand_adjustments(market::MarketEnvironment, sector::String)::Dict
     failure_pressure = 1.0 + market.config.FAILURE_DEMAND_PRESSURE * crowd_excess^2
     failure_pressure *= 1.0 - 0.2 * crowd_relief^2
 
-    # Supply/demand adjustments
+    # Supply/demand adjustments. clearing_ratio = demand / supply, so:
+    #   ratio > 1 → demand exceeds supply (hot market) → returns up, but also
+    #     higher failure rate because many who tried couldn't secure entry
+    #     (fixed v3.3.1: was giving hot markets LOWER failure, which let the
+    #     realized_return clamp make oversubscribed sectors immortal — reviewer
+    #     probe saw failure=-9.36)
+    #   ratio < 1 → supply exceeds demand (soft market) → returns down, failure
+    #     also somewhat elevated (the environment is tough, even if capacity exists)
     if clearing_ratio > 1.0
-        undersupply = clearing_ratio - 1.0
-        return_penalty *= 1.0 + 0.45 * undersupply
-        failure_pressure *= 1.0 - 0.35 * undersupply
+        excess_demand = clearing_ratio - 1.0
+        return_penalty *= 1.0 + 0.45 * excess_demand
+        failure_pressure *= 1.0 + 0.20 * excess_demand
     else
-        oversupply_gap = 1.0 - clearing_ratio
-        return_penalty *= 1.0 - 0.7 * oversupply_gap
-        failure_pressure *= 1.0 + 0.6 * oversupply_gap
+        excess_supply = 1.0 - clearing_ratio
+        return_penalty *= 1.0 - 0.7 * excess_supply
+        failure_pressure *= 1.0 + 0.30 * excess_supply
     end
+
+    # v3.3.1: clamp both signals to sane positive ranges. Pre-v3.3.1 the
+    # compound formulas could produce return_penalty=15.67 and
+    # failure_pressure=-9.36 in crowded sectors (reviewer probe). The
+    # negative failure then got clamp-saved to 0.05 in models.jl:224,
+    # leaving oversubscribed sectors functionally immortal — an obvious
+    # artifact.
+    return_penalty  = clamp(return_penalty,  0.10, 3.00)
+    failure_pressure = clamp(failure_pressure, 0.10, 3.00)
 
     adjustments = Dict{String,Float64}(
         "return" => return_penalty,

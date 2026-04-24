@@ -105,7 +105,9 @@ function run_mechanism_sim(tier::String, run_idx::Int, seed::Int)
         N_ROUNDS=N_ROUNDS,
         RANDOM_SEED=seed,
         INITIAL_CAPITAL=5_000_000.0,
-        SURVIVAL_THRESHOLD=10_000.0
+        SURVIVAL_THRESHOLD=10_000.0,
+        USE_UNIFORM_INITIAL_CAPITAL=true,
+        USE_UNIFORM_SURVIVAL_THRESHOLD=true
     )
 
     tier_dist = Dict(t => (t == tier ? 1.0 : 0.0) for t in AI_TIERS)

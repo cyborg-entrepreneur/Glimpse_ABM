@@ -601,7 +601,7 @@ Select an action based on uncertainty perception and agent state.
 """
 function select_action(
     agent::EmergentAgent,
-    market_conditions::Union{MarketConditions,Dict{String,Any}},
+    market_conditions::MarketConditions,
     uncertainty_state::Dict{String,Any};
     available_opportunities::Vector{Opportunity} = Opportunity[]
 )::String
@@ -1856,7 +1856,7 @@ Calculate investment utility given opportunities and perception.
 function calculate_investment_utility(
     agent::EmergentAgent,
     opportunities::Vector{Opportunity},
-    market_conditions::Union{MarketConditions,Dict{String,Any}},
+    market_conditions::MarketConditions,
     perception::Dict{String,Any};
     ai_level::String = "none",
     info_system::Union{InformationSystem,Nothing} = nothing
@@ -2016,7 +2016,7 @@ Now uses AI tier for decision-making advantage.
 """
 function calculate_innovation_utility(
     agent::EmergentAgent,
-    market_conditions::Union{MarketConditions,Dict{String,Any}},
+    market_conditions::MarketConditions,
     perception::Dict{String,Any};
     ai_level::String = "none"
 )::Float64
@@ -2144,7 +2144,7 @@ Calculate maintain utility.
 """
 function calculate_maintain_utility(
     agent::EmergentAgent,
-    market_conditions::Union{MarketConditions,Dict{String,Any}},
+    market_conditions::MarketConditions,
     perception::Dict{String,Any};
     estimated_cost::Float64 = 0.0
 )::Float64
@@ -2205,7 +2205,7 @@ is now the canonical input.
 function evaluate_opportunity_basic(
     agent::EmergentAgent,
     opportunity::Opportunity,
-    market_conditions::Union{MarketConditions,Dict{String,Any}};
+    market_conditions::MarketConditions;
     estimated_return::Union{Float64,Nothing} = nothing,
     estimated_uncertainty::Union{Float64,Nothing} = nothing,
     confidence::Union{Float64,Nothing} = nothing,
@@ -2337,7 +2337,7 @@ agents trust visible signals more (rational herding / information cascades).
 function evaluate_portfolio_opportunities(
     agent::EmergentAgent,
     opportunities::Vector{Opportunity},
-    market_conditions::Union{MarketConditions,Dict{String,Any}},
+    market_conditions::MarketConditions,
     perception::Dict{String,Any};
     ai_level::String = "none",
     info_system::Union{InformationSystem,Nothing} = nothing,
@@ -2504,7 +2504,7 @@ Make a complete decision including AI level selection and action choice.
 function make_decision!(
     agent::EmergentAgent,
     opportunities::Vector{Opportunity},
-    market_conditions::Union{MarketConditions,Dict{String,Any}},
+    market_conditions::MarketConditions,
     market::MarketEnvironment,
     round_num::Int;
     uncertainty_env::Union{KnightianUncertaintyEnvironment,Nothing} = nothing,

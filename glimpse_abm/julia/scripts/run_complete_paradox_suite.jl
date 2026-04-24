@@ -82,7 +82,9 @@ function create_config(; n_agents=N_AGENTS, n_rounds=N_ROUNDS, seed=42)
         N_ROUNDS=n_rounds,
         RANDOM_SEED=seed,
         INITIAL_CAPITAL=100_000_000.0,
-        SURVIVAL_THRESHOLD=10_000.0
+        SURVIVAL_THRESHOLD=10_000.0,
+        USE_UNIFORM_INITIAL_CAPITAL=true,
+        USE_UNIFORM_SURVIVAL_THRESHOLD=true
     )
 end
 

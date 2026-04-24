@@ -1227,7 +1227,7 @@ function perceive_uncertainty(
     env::KnightianUncertaintyEnvironment,
     agent_traits::Dict{String,Float64},
     visible_opportunities::Vector,
-    market_conditions::Union{MarketConditions,Dict{String,Any}};
+    market_conditions::MarketConditions;
     ai_level::String = "none",
     agent_knowledge::Set{String} = Set{String}(),
     sector_knowledge::Dict{String,Float64} = Dict{String,Float64}(),
