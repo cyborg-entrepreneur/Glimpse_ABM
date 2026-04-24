@@ -4,21 +4,33 @@
 
 A comprehensive agent-based model (ABM) for studying how AI augmentation impacts entrepreneurial decision-making under Knightian uncertainty. This model accompanies the paper **"Into the Flux: AI Augmentation & The Paradox of Future Knowledge"** (Entrepreneurship Theory & Practice).
 
-## The Paradox of Future Knowledge
+> **Status (v3.3, 2026-04-24):** The v1 "paradox" framing below (premium < none) was an
+> artifact of correctness bugs fixed across v2.1–v2.12. The current canonical
+> finding is a **non-monotonic tier-value story**: advanced > basic > premium > none.
+> Premium still beats none, but advanced beats premium due to convergence-driven
+> capital-saturation crowding. v3.1 replaced count-based with capital-saturation
+> convexity; v3.2 ported Python's confidence × signal_score invest sizing to Julia;
+> v3.3 wired Knightian perception into pre-decision utility. See
+> `memory/project_glimpse_arc_job.md` for the current numbers and
+> `glimpse_abm/julia/results/v32_max_fraction_sweep/ANALYSIS.md` for the
+> sensitivity analysis. The paragraphs below describe the retired v1 framing
+> and are preserved for paper context.
+
+## The Paradox of Future Knowledge (v1 framing — retired)
 
 > "At the heart of these dynamics is a paradox of future knowledge in competitive markets where the pursuit of entrepreneurial foresight systematically generates the uncertainties it seeks to resolve."
 
-**Central Finding:** AI augmentation paradoxically *reduces* entrepreneurial survival rates through an **innovation equilibrium trap**:
+**Original claim (since retired):** AI augmentation paradoxically *reduces* entrepreneurial survival rates through an **innovation equilibrium trap**:
 
 ```
 Superior AI Information → Strategic Convergence → Market Crowding → Reduced Returns → Lower Survival
 ```
 
-Premium AI agents (with near-perfect information) consistently underperform human-only agents by 8-14 percentage points in survival rates. This counterintuitive result emerges because:
+Premium AI agents (with near-perfect information) consistently underperform human-only agents by 8-14 percentage points in survival rates. *(This result was driven by bugs: 3× subscription overcharge, InformationSystem bypass, missing crowding decay, etc. — fixed in v2.x.)*
 
 1. **First-order benefit:** AI reduces actor ignorance through superior information processing
 2. **Second-order cost:** AI amplifies competitive recursion as agents converge on similar opportunities
-3. **Net effect:** The competitive costs outweigh the informational benefits
+3. **Net effect (v1):** The competitive costs outweigh the informational benefits (**the mechanism is real at v3.3 but no longer inverts the ordering — advanced now dominates, premium underperforms advanced but still beats none**)
 
 ## Theoretical Foundation
 
@@ -155,30 +167,40 @@ Info quality follows LLM scaling laws: `info_quality = 0.25 + 0.09 × log₁₀(
 
 ## Key Results (from paper)
 
-### Fixed-Tier Experiments (Tables 3A-K)
+### Fixed-Tier Experiments (original Tables 3A-K — v1 numbers, retired)
 
-- **Survival:** None (60%) > Basic (52%) > Advanced (45%) > Premium (35%)
-- **Treatment effect:** Premium AI reduces survival by ~23 percentage points vs None
+- **v1 survival ordering:** None (60%) > Basic (52%) > Advanced (45%) > Premium (35%)
+- **v1 treatment effect claim:** Premium AI reduces survival by ~23 percentage points vs None
 - **Innovation volume:** Premium creates 11x more niches but with constant success rate (~11%)
 - **Competition:** Premium agents experience 2-3x higher crowding ratios
 
-### Robustness (Tables 4A-I)
+### v3.3 canonical results (N=1000 × 60 × 4-tier fixed, seed=42, K_sat=1.5)
 
-- 15/15 robustness tests confirm the paradox
-- Effect persists across capital levels, population sizes, time horizons
-- Placebo and permutation tests confirm causal attribution
+- **Survival:** Advanced (61%) > Basic (51%) > Premium (42%) > None (38%)
+- **Premium/Advanced ratio:** 0.69 — premium still pays a meaningful convergence-crowding cost relative to advanced, but now beats none rather than underperforming it
+- **Mean survival:** 48% (within ±2pp of BLS 5-year benchmark 50–55%)
+- **Saturation signal live:** premium opportunities reach 5.85× K_sat at peak (mechanism firing, not dormant)
+- See `glimpse_abm/julia/results/v32_max_fraction_sweep/` for the `MAX_INVESTMENT_FRACTION` sensitivity sweep showing the mechanism is monotone in Kelly aggressiveness
+
+### Robustness (Tables 4A-I — v1 numbers, retired)
+
+- *Original claim:* 15/15 robustness tests confirmed the paradox.
+- *Current status:* the v1 "paradox" was driven by fixed bugs. The v3.3 trap mechanism (convergence → saturation → convexity penalty) is real but produces a softer ordering: advanced beats premium, premium beats none.
 
 ### Mechanism Analysis (Tables 5A-I)
 
-- Behavioral shift: AI increases innovation share (27% → 32%)
-- Crowding mediates the negative effect on survival
-- Within-tier analysis confirms competition as mechanism
+- **v3.3 mechanism chain (code now instantiates this):**
+  1. Tier-differentiated AI produces tier-differentiated `actor_ignorance` perception (premium 0.05 vs none 0.24 — 4.5× spread)
+  2. Linear `ignorance_adjustment` translates that into 17% investment-utility differential
+  3. High-tier agents converge on similar top opps → `competitive_recursion` perception rises (premium 0.28 vs none 0.13)
+  4. Raised recursion coefficient (-0.25) hits pre-decision utility
+  5. v3.1 capital-saturation convexity hits post-maturation returns
+  6. Net: premium's ignorance benefit is partially offset by convergence-crowding cost → advanced (medium info quality, less convergence) is the sweet spot
 
-### Refutation Tests (Tables 6A-C)
+### Refutation Tests (Tables 6A-C — v1 numbers, retired)
 
-- 31 extreme conditions tested (execution boosts up to 10x, quality boosts up to +50%)
-- **Paradox persists in all conditions**
-- Even "all favorable" conditions (no crowding, free AI, max boosts) show negative effect
+- *Original claim:* 31 extreme conditions tested; paradox persists in all.
+- *Current status:* superseded by v2.6 calibration retirement of the paradox; the robustness question now is whether the convergence-crowding ordering survives sensitivity analysis — see `v32_max_fraction_sweep` for the empirical answer.
 
 ## Documentation
 

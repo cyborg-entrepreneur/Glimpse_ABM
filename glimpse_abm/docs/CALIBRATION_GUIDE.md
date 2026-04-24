@@ -229,16 +229,25 @@ All rate parameters are calibrated for monthly resolution:
 | `BLACK_SWAN_PROBABILITY` | 0.017 | ~18%/year | ±50% |
 | `MARKET_SHIFT_PROBABILITY` | 0.03 | ~30%/year | ±30% |
 
-### Competition Parameters (Critical for Paradox)
+### Competition Parameters (Critical for Tier-Ordering Gap)
 
-These parameters directly affect the paradox magnitude:
+These parameters directly affect the advanced > premium gap that replaced
+the v1 paradox. The v3.1 capital-saturation convexity subsumed the old
+linear-capacity penalty; tuning is now done via the convexity trio
+(`K_sat`, γ, λ) plus base capacity.
 
-| Parameter | Default | Effect on Paradox | Tuning Notes |
+| Parameter | Default | Effect on Tier Gap | Tuning Notes |
 |-----------|---------|-------------------|--------------|
-| `OPPORTUNITY_COMPETITION_PENALTY` | 0.5 | ↑ increases gap | Core crowding mechanism |
-| `CAPACITY_PENALTY_MAX` | 0.4 | ↑ increases gap | Maximum return dilution |
-| `CAPACITY_PENALTY_START` | 0.7 | ↓ increases gap | Earlier penalty onset |
-| `OPPORTUNITY_BASE_CAPACITY` | 500,000 | ↓ increases gap | Smaller capacity = more crowding |
+| `CROWDING_CAPACITY_RATIO_K` | 1.5 | ↓ increases gap | Saturation threshold — lower K, penalty engages earlier, premium suffers more (added v3.1) |
+| `CROWDING_CONVEXITY_GAMMA` | 1.5 | ↑ increases gap | Sharper convexity past threshold |
+| `CROWDING_STRENGTH_LAMBDA` | 1.5 | ↑ increases gap | Magnitude of penalty |
+| `OPPORTUNITY_BASE_CAPACITY` | 15,000,000 | ↓ increases gap | Smaller capacity = higher saturation ratios |
+| `OPPORTUNITY_COMPETITION_PENALTY` | 0.5 | legacy (off by default) | Only used when `USE_CAPACITY_CONVEXITY_CROWDING=false` |
+
+See `glimpse_abm/julia/results/v32_max_fraction_sweep/` for the
+`MAX_INVESTMENT_FRACTION` sensitivity sweep characterizing when the
+convergence-crowding mechanism dominates vs is subsidiary to capital-
+preservation effects.
 
 ### Custom Calibration File
 
@@ -252,8 +261,8 @@ Create a JSON file for custom parameter overrides:
   "overrides": {
     "BASE_OPERATIONAL_COST": 18000,
     "SURVIVAL_CAPITAL_RATIO": 0.40,
-    "OPPORTUNITY_COMPETITION_PENALTY": 0.55,
-    "CAPACITY_PENALTY_MAX": 0.45
+    "CROWDING_CAPACITY_RATIO_K": 1.2,
+    "CROWDING_STRENGTH_LAMBDA": 1.7
   },
   "target_metrics": {
     "survival_rate_10yr": {"target": 0.50, "tolerance": 0.05},
@@ -336,14 +345,14 @@ Target competition ratios by tier:
 ### Tuning for Paradox Magnitude
 
 If paradox is **too weak** (gap < 8pp):
-- Increase `OPPORTUNITY_COMPETITION_PENALTY`
-- Decrease `OPPORTUNITY_BASE_CAPACITY`
-- Increase `CAPACITY_PENALTY_MAX`
+- Decrease `CROWDING_CAPACITY_RATIO_K` (saturation threshold engages earlier)
+- Increase `CROWDING_STRENGTH_LAMBDA` (larger penalty magnitude)
+- Decrease `OPPORTUNITY_BASE_CAPACITY` (higher saturation ratios)
 
 If paradox is **too strong** (gap > 14pp):
-- Decrease `OPPORTUNITY_COMPETITION_PENALTY`
+- Increase `CROWDING_CAPACITY_RATIO_K`
+- Decrease `CROWDING_STRENGTH_LAMBDA`
 - Increase `OPPORTUNITY_BASE_CAPACITY`
-- Decrease `CAPACITY_PENALTY_MAX`
 
 ---
 

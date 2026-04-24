@@ -178,11 +178,13 @@ These parameters are critical for reproducing the AI paradox.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `OPPORTUNITY_CAPACITY_ENABLED` | true | Enable capacity-based crowding |
-| `OPPORTUNITY_BASE_CAPACITY` | 500,000 | Base investment capacity per opportunity |
-| `OPPORTUNITY_CAPACITY_VARIANCE` | 0.3 | Variance in opportunity capacities |
-| `CAPACITY_PENALTY_START` | 0.7 | Utilization threshold for penalties |
-| `CAPACITY_PENALTY_MAX` | 0.4 | Maximum return penalty at full capacity |
+| `OPPORTUNITY_BASE_CAPACITY` | 15,000,000 | Base capital an opportunity can absorb (monthly saturation reference). *Bumped from 500K in v3.1 to match Julia.* |
+| `OPPORTUNITY_CAPACITY_VARIANCE` | 0.3 | Random variance in per-opportunity capacity |
+| `CROWDING_CAPACITY_RATIO_K` | 1.5 | Capital-saturation ratio (`total_invested / capacity`) above which the convexity penalty engages. Population-invariant — does NOT scale with √N. *(added v3.1, calibrated to 1.5 at v3.2)* |
+| `CROWDING_CONVEXITY_GAMMA` | 1.5 | Convexity exponent γ for crowding penalty |
+| `CROWDING_STRENGTH_LAMBDA` | 1.5 | Strength coefficient λ for crowding penalty |
+
+*v3.1 change:* `OPPORTUNITY_CAPACITY_ENABLED`, `CAPACITY_PENALTY_START`, and `CAPACITY_PENALTY_MAX` were removed along with the linear capacity penalty they gated. The capital-saturation convexity now handles the same `total_invested/capacity` signal smoothly via the single convexity formula `penalty = λ · max(0, S/K_sat − 1)^γ`.
 
 ### Competition Dynamics
 

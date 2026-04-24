@@ -165,14 +165,23 @@ class MarketEnvironment:
 - `total_invested`: Current investment level
 - `competition_ratio`: Number of investors / capacity
 
-**Crowding Mechanism**:
+**Crowding Mechanism** (v3.1 — capital-saturation convexity):
 ```python
-# When capacity utilization exceeds threshold, returns are penalized
-if utilization > CAPACITY_PENALTY_START:
-    excess = (utilization - CAPACITY_PENALTY_START) / (1.0 - CAPACITY_PENALTY_START)
-    penalty = excess * CAPACITY_PENALTY_MAX
-    adjusted_return = base_return * (1.0 - penalty)
+# Capital saturation ratio: how full is the niche relative to capacity?
+saturation = opp.total_invested / opp.capacity
+effective_sat = saturation + crowding_index * 0.3  # market-level term
+
+# Convex penalty above K_sat threshold (1.5 by default)
+excess = max(0, effective_sat / K_sat - 1.0)
+penalty = lam * (excess ** gamma)
+adjusted_return = base_return * exp(-penalty)
 ```
+
+Replaces the pre-v3.1 linear capacity penalty (`CAPACITY_PENALTY_START/MAX`
+removed) and the pre-v3.1 count-based convexity (which used
+`opp.competition` headcount rather than dollar saturation). Parameters:
+`CROWDING_CAPACITY_RATIO_K`, `CROWDING_CONVEXITY_GAMMA`,
+`CROWDING_STRENGTH_LAMBDA`.
 
 ### AI Tiers
 
@@ -430,11 +439,11 @@ Full-scale configuration anchored to empirical benchmarks:
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| `OPPORTUNITY_CAPACITY_ENABLED` | true | Enable capacity constraints |
-| `OPPORTUNITY_BASE_CAPACITY` | 500,000 | Base capacity per opportunity |
-| `CAPACITY_PENALTY_START` | 0.7 | Utilization threshold for penalties |
-| `CAPACITY_PENALTY_MAX` | 0.4 | Maximum return penalty |
-| `OPPORTUNITY_COMPETITION_PENALTY` | 0.5 | Additional competition penalty |
+| `OPPORTUNITY_BASE_CAPACITY` | 15,000,000 | Base capital an opportunity absorbs (v3.1: bumped from 500K to match Julia) |
+| `CROWDING_CAPACITY_RATIO_K` | 1.5 | Saturation ratio above which convexity penalty engages (v3.1) |
+| `CROWDING_CONVEXITY_GAMMA` | 1.5 | Convexity exponent γ |
+| `CROWDING_STRENGTH_LAMBDA` | 1.5 | Penalty strength coefficient λ |
+| `OPPORTUNITY_COMPETITION_PENALTY` | 0.5 | Legacy count-based penalty (used only when `USE_CAPACITY_CONVEXITY_CROWDING=false`) |
 
 ### Innovation Parameters
 
