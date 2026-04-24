@@ -502,6 +502,14 @@ class EmergentConfig:
     # v2.5 parity with Julia (was 0.50)
     CROWDING_STRENGTH_LAMBDA: float = 1.5
 
+    # v3.1 — Capital-saturation convexity threshold.
+    # K_sat is the saturation ratio (total_invested / capacity) above which
+    # the convexity penalty starts. Capital-ratio is population-invariant
+    # (capacity and invested capital both scale with N), so unlike
+    # CROWDING_CAPACITY_K (count-based) this does NOT scale with √N.
+    # Matches Julia config.jl. Phase 5 tunes this at N=1000.
+    CROWDING_CAPACITY_RATIO_K: float = 1.2
+
     # Legacy parameters (used when USE_CAPACITY_CONVEXITY_CROWDING = False)
     DISABLE_COMPETITION_DYNAMICS: bool = False  # Master switch to disable competition effects
     OPPORTUNITY_COMPETITION_PENALTY: float = 0.5  # Return penalty from crowded opportunities
@@ -515,12 +523,11 @@ class EmergentConfig:
     DISRUPTION_COMPETITION_THRESHOLD: float = 10.0  # Competition level triggering disruption vulnerability
     NOVELTY_NOISE_INVERSION_FACTOR: float = 0.4  # Noise scaling for novel opportunities
 
-    # Opportunity capacity constraints
-    OPPORTUNITY_CAPACITY_ENABLED: bool = True  # Enable capacity-based crowding
-    OPPORTUNITY_BASE_CAPACITY: float = 500000.0  # Base investment capacity per opportunity
-    OPPORTUNITY_CAPACITY_VARIANCE: float = 0.3  # Variance in opportunity capacities
-    CAPACITY_PENALTY_START: float = 0.7  # Utilization level at which crowding penalty begins
-    CAPACITY_PENALTY_MAX: float = 0.4  # Maximum penalty at full capacity
+    # Opportunity capacity — used by the capital-saturation convexity (v3.1).
+    # Matches Julia parity (was 500000 pre-v3.1; count-based crowding didn't
+    # read capacity, so the drift was silent).
+    OPPORTUNITY_BASE_CAPACITY: float = 15_000_000.0  # Base capacity in dollars
+    OPPORTUNITY_CAPACITY_VARIANCE: float = 0.3       # Random variance in capacity
 
     # Sequential decision mechanics (early vs late movers)
     SEQUENTIAL_DECISIONS_ENABLED: bool = True  # Enable sequential decision rounds
