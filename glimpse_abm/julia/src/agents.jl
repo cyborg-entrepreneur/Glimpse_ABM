@@ -711,7 +711,11 @@ function execute_action!(
     ai_info::Union{Information,Nothing} = nothing,
     innovation_engine::Union{InnovationEngine,Nothing} = nothing,
     market_conditions::Union{MarketConditions,Dict{String,Any},Nothing} = nothing,
-    uncertainty_perception::Union{Dict{String,Any},Nothing} = nothing
+    uncertainty_perception::Union{Dict{String,Any},Nothing} = nothing,
+    # v3.2: confidence and signal_score flow from the decision layer
+    # (perception + evaluate_portfolio_opportunities) into invest sizing.
+    confidence::Union{Float64,Nothing} = nothing,
+    signal_score::Union{Float64,Nothing} = nothing
 )::Dict{String,Any}
     outcome = Dict{String,Any}(
         "action" => action,
@@ -723,7 +727,8 @@ function execute_action!(
 
     if action == "invest" && !isnothing(opportunity)
         outcome = _execute_invest!(agent, opportunity, market, round, outcome;
-            estimated_return=estimated_return, ai_info=ai_info)
+            estimated_return=estimated_return, ai_info=ai_info,
+            confidence=confidence, signal_score=signal_score)
     elseif action == "innovate"
         outcome = _execute_innovate!(agent, market, round, outcome;
             innovation_engine=innovation_engine,
@@ -751,11 +756,48 @@ function _execute_invest!(
     round::Int,
     outcome::Dict{String,Any};
     estimated_return::Union{Float64,Nothing} = nothing,
-    ai_info::Union{Information,Nothing} = nothing
+    ai_info::Union{Information,Nothing} = nothing,
+    # v3.2: confidence and signal_score scale the dollar amount so that
+    # agents who perceive less uncertainty (higher confidence) and higher
+    # expected quality (higher signal_score) deploy more capital per bet,
+    # mirroring Python agents.py:2881. nothing = legacy flat sizing.
+    confidence::Union{Float64,Nothing} = nothing,
+    signal_score::Union{Float64,Nothing} = nothing
 )::Dict{String,Any}
     capital = get_capital(agent)
-    max_invest = capital * agent.config.MAX_INVESTMENT_FRACTION
-    invest_amount = min(max_invest, opportunity.capital_requirements)
+    max_fraction = agent.config.MAX_INVESTMENT_FRACTION
+    target_fraction = hasfield(typeof(agent.config), :TARGET_INVESTMENT_FRACTION) ?
+        agent.config.TARGET_INVESTMENT_FRACTION : max_fraction
+    min_fraction = hasfield(typeof(agent.config), :MIN_FUNDING_FRACTION) ?
+        agent.config.MIN_FUNDING_FRACTION : 0.25
+
+    max_invest = capital * max_fraction
+
+    if isnothing(confidence) || isnothing(signal_score)
+        # Legacy path (pre-v3.2): flat sizing. Preserved for internal callers
+        # that don't have the evaluation context handy (tests, replay paths).
+        invest_amount = min(max_invest, opportunity.capital_requirements)
+    else
+        # v3.2 confidence × signal sizing (mirrors Python):
+        #   desired = capital · target_fraction · confidence · signal_score
+        #   amount  = min(desired, max_invest)
+        # Confidence range [0.15, 0.95] matches Python's perception clip.
+        c = clamp(confidence, 0.15, 0.95)
+        s = max(0.0, signal_score)
+        desired = capital * target_fraction * c * s
+        invest_amount = min(desired, max_invest)
+
+        # Minimum funding floor: if the opportunity needs a minimum stake and
+        # the agent can afford it, don't under-size below the stake floor.
+        required = opportunity.capital_requirements
+        min_required = required > 0.0 ? required * min_fraction : 0.0
+        if required > 0.0 && invest_amount < min_required && capital >= min_required
+            invest_amount = min(max_invest, min_required)
+        end
+
+        invest_amount = min(invest_amount, capital)
+        invest_amount = max(0.0, invest_amount)
+    end
 
     if invest_amount <= 0 || invest_amount > capital
         outcome["success"] = false
@@ -2560,13 +2602,19 @@ function make_decision!(
             best_opp = best_eval["opportunity"]
             estimated_return = get(best_eval, "estimated_return", best_opp.latent_return_potential)
             ai_info_for_invest = get(best_eval, "ai_info", nothing)
+            # v3.2: extract confidence (from perception) and signal_score
+            # (from evaluation) so _execute_invest! can size the bet by them.
+            decision_conf = Float64(get(perception, "decision_confidence", 0.5))
+            final_score = Float64(get(best_eval, "final_score", 0.0))
             execute_action!(agent, "invest", market, round_num;
                 opportunity=best_opp,
                 estimated_return=estimated_return,
                 ai_info=ai_info_for_invest isa Information ? ai_info_for_invest : nothing,
                 innovation_engine=innovation_engine,
                 market_conditions=market_conditions,
-                uncertainty_perception=perception)
+                uncertainty_perception=perception,
+                confidence=decision_conf,
+                signal_score=final_score)
         else
             execute_action!(agent, "maintain", market, round_num;
                 innovation_engine=innovation_engine,
