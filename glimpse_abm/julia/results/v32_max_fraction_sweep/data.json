@@ -1,0 +1,63 @@
+{
+  "metadata": {
+    "version": "v3.2-confidence-sizing",
+    "commit": "beaf27f",
+    "run_date": "2026-04-24",
+    "n_agents": 1000,
+    "n_rounds": 60,
+    "agent_ai_mode": "fixed",
+    "seeds": [42, 43, 44],
+    "target_fraction_fixed": 0.033,
+    "k_sat_fixed": 1.5,
+    "gamma_fixed": 1.5,
+    "lambda_fixed": 1.5,
+    "elapsed_sec": 326.9,
+    "notes": "max_fraction sensitivity sweep for v3.2 confidence × signal sizing. target_fraction held at 0.033; K_sat held at 1.5. Each cell is 3-seed mean ± std."
+  },
+  "results": [
+    {
+      "max_fraction": 0.037,
+      "tiers": {
+        "none":     {"survival_mean": 0.400, "survival_std": 0.002, "sat_max_mean": 6.42},
+        "basic":    {"survival_mean": 0.538, "survival_std": 0.020, "sat_max_mean": 6.15},
+        "advanced": {"survival_mean": 0.562, "survival_std": 0.022, "sat_max_mean": 4.62},
+        "premium":  {"survival_mean": 0.425, "survival_std": 0.019, "sat_max_mean": 5.79}
+      },
+      "mean_survival": 0.481,
+      "premium_over_advanced": 0.756
+    },
+    {
+      "max_fraction": 0.07,
+      "tiers": {
+        "none":     {"survival_mean": 0.124, "survival_std": 0.022, "sat_max_mean": 13.37},
+        "basic":    {"survival_mean": 0.259, "survival_std": 0.024, "sat_max_mean": 14.17},
+        "advanced": {"survival_mean": 0.380, "survival_std": 0.032, "sat_max_mean": 6.38},
+        "premium":  {"survival_mean": 0.246, "survival_std": 0.037, "sat_max_mean": 12.36}
+      },
+      "mean_survival": 0.252,
+      "premium_over_advanced": 0.647
+    },
+    {
+      "max_fraction": 0.10,
+      "tiers": {
+        "none":     {"survival_mean": 0.051, "survival_std": 0.009, "sat_max_mean": 7.74},
+        "basic":    {"survival_mean": 0.130, "survival_std": 0.006, "sat_max_mean": 6.33},
+        "advanced": {"survival_mean": 0.158, "survival_std": 0.016, "sat_max_mean": 9.67},
+        "premium":  {"survival_mean": 0.079, "survival_std": 0.040, "sat_max_mean": 10.39}
+      },
+      "mean_survival": 0.105,
+      "premium_over_advanced": 0.500
+    },
+    {
+      "max_fraction": 0.15,
+      "tiers": {
+        "none":     {"survival_mean": 0.008, "survival_std": 0.002, "sat_max_mean": 0.06},
+        "basic":    {"survival_mean": 0.039, "survival_std": 0.010, "sat_max_mean": 4.19},
+        "advanced": {"survival_mean": 0.036, "survival_std": 0.008, "sat_max_mean": 4.85},
+        "premium":  {"survival_mean": 0.009, "survival_std": 0.006, "sat_max_mean": 4.16}
+      },
+      "mean_survival": 0.023,
+      "premium_over_advanced": 0.250
+    }
+  ]
+}
