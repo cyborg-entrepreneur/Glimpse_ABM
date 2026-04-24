@@ -16,119 +16,119 @@
       {
         "seed": 101,
         "language": "python",
-        "n_alive": 200,
-        "survival_rate": 1.0,
-        "mean_capital_alive": 6568285.582150688,
-        "median_capital_alive": 6651578.110509427,
-        "mean_capital_all": 6568285.582150688
+        "n_alive": 193,
+        "survival_rate": 0.965,
+        "mean_capital_alive": 6267136.143563541,
+        "median_capital_alive": 6329661.469066206,
+        "mean_capital_all": 6121466.251011796
       },
       {
         "seed": 102,
         "language": "python",
-        "n_alive": 200,
-        "survival_rate": 1.0,
-        "mean_capital_alive": 6675823.674302102,
-        "median_capital_alive": 6335505.667466503,
-        "mean_capital_all": 6675823.674302102
+        "n_alive": 195,
+        "survival_rate": 0.975,
+        "mean_capital_alive": 5789687.418131158,
+        "median_capital_alive": 5659956.634320461,
+        "mean_capital_all": 5699900.297198344
       },
       {
         "seed": 103,
         "language": "python",
-        "n_alive": 200,
-        "survival_rate": 1.0,
-        "mean_capital_alive": 7001543.517345016,
-        "median_capital_alive": 6783974.015289238,
-        "mean_capital_all": 7001543.517345016
+        "n_alive": 194,
+        "survival_rate": 0.97,
+        "mean_capital_alive": 6024812.399092147,
+        "median_capital_alive": 5919496.878611891,
+        "mean_capital_all": 5910307.447108628
       },
       {
         "seed": 104,
         "language": "python",
-        "n_alive": 200,
-        "survival_rate": 1.0,
-        "mean_capital_alive": 6650401.031707722,
-        "median_capital_alive": 6768624.306015523,
-        "mean_capital_all": 6650401.031707722
+        "n_alive": 196,
+        "survival_rate": 0.98,
+        "mean_capital_alive": 6102714.2887691865,
+        "median_capital_alive": 6075750.734738145,
+        "mean_capital_all": 6026702.614623147
       },
       {
         "seed": 105,
         "language": "python",
-        "n_alive": 200,
-        "survival_rate": 1.0,
-        "mean_capital_alive": 6334443.665838882,
-        "median_capital_alive": 6022695.593572561,
-        "mean_capital_all": 6334443.665838882
+        "n_alive": 194,
+        "survival_rate": 0.97,
+        "mean_capital_alive": 5156319.121993997,
+        "median_capital_alive": 5087385.247162695,
+        "mean_capital_all": 5069261.433851375
       }
     ],
     "summary": {
       "language": "python",
       "n_seeds": 5,
-      "survival_mean": 1.0,
-      "survival_std": 0.0,
-      "mean_capital_mean": 6646099.494268882,
-      "mean_capital_std": 240013.9808204199,
-      "median_capital_mean": 6512475.53857065
+      "survival_mean": 0.972,
+      "survival_std": 0.005700877125495695,
+      "mean_capital_mean": 5868133.874310005,
+      "mean_capital_std": 433478.09343349177,
+      "median_capital_mean": 5814450.19277988
     }
   },
   "julia": {
     "per_seed": [
       {
-        "median_capital_alive": 2661536.7836234723,
-        "mean_capital_alive": 2615654.7490119115,
+        "median_capital_alive": 2764888.81161757,
+        "mean_capital_alive": 2719721.8958084174,
         "language": "julia",
         "seed": 101,
-        "survival_rate": 0.98,
-        "n_alive": 196,
-        "mean_capital_all": 2575805.00171647
+        "survival_rate": 0.855,
+        "n_alive": 171,
+        "mean_capital_all": 2494198.3212572797
       },
       {
-        "median_capital_alive": 2713239.2833116436,
-        "mean_capital_alive": 2655984.6633696924,
+        "median_capital_alive": 2685972.071746239,
+        "mean_capital_alive": 2635901.4129311247,
         "language": "julia",
         "seed": 102,
-        "survival_rate": 0.99,
-        "n_alive": 198,
-        "mean_capital_all": 2635667.18422736
+        "survival_rate": 0.795,
+        "n_alive": 159,
+        "mean_capital_all": 2354200.8546018917
       },
       {
-        "median_capital_alive": 2609560.9345111907,
-        "mean_capital_alive": 2713040.292142404,
+        "median_capital_alive": 2514694.9485228327,
+        "mean_capital_alive": 2522309.623505743,
         "language": "julia",
         "seed": 103,
-        "survival_rate": 0.99,
-        "n_alive": 198,
-        "mean_capital_all": 2691876.3739443915
+        "survival_rate": 0.785,
+        "n_alive": 157,
+        "mean_capital_all": 2233308.31000268
       },
       {
-        "median_capital_alive": 2632836.155041427,
-        "mean_capital_alive": 2658909.034481738,
+        "median_capital_alive": 2557916.0771623733,
+        "mean_capital_alive": 2631719.6176807596,
         "language": "julia",
         "seed": 104,
-        "survival_rate": 0.985,
-        "n_alive": 197,
-        "mean_capital_all": 2628868.9766631504
+        "survival_rate": 0.865,
+        "n_alive": 173,
+        "mean_capital_all": 2414342.815173751
       },
       {
-        "median_capital_alive": 2646103.0175290303,
-        "mean_capital_alive": 2620008.07948524,
+        "median_capital_alive": 2778227.76006102,
+        "mean_capital_alive": 2782974.9726586593,
         "language": "julia",
         "seed": 105,
-        "survival_rate": 0.975,
-        "n_alive": 195,
-        "mean_capital_all": 2573046.4097495233
+        "survival_rate": 0.855,
+        "n_alive": 171,
+        "mean_capital_all": 2570204.1959860865
       }
     ],
     "summary": {
       "language": "julia",
       "n_seeds": 5,
-      "survival_mean": 0.984,
-      "survival_std": 0.006519202405202654,
-      "mean_capital_mean": 2652719.363698197,
-      "mean_capital_std": 39151.63595377617,
-      "median_capital_mean": 2652655.234803353
+      "survival_mean": 0.831,
+      "survival_std": 0.03781534080237805,
+      "mean_capital_mean": 2658525.504516941,
+      "mean_capital_std": 98764.66948847448,
+      "median_capital_mean": 2660339.933822007
     }
   },
   "diff": {
-    "abs_survival": 0.016000000000000014,
-    "py_over_jl_capital": 2.505391103642208
+    "abs_survival": 0.14100000000000001,
+    "py_over_jl_capital": 2.207288914227007
   }
 }

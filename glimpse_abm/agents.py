@@ -1724,15 +1724,12 @@ class EmergentAgent:
         competition_cost = portfolio_competition * self.config.COMPETITION_COST_MULTIPLIER
         total_cost = base_cost + competition_cost
 
-        # AI tier efficiency modifier
-        tier = normalize_ai_label(getattr(self, "current_ai_level", getattr(self, "agent_type", "none")))
-        tier_mod = {
-            "none": 1.0,
-            "basic": 1.08,
-            "advanced": 0.94,
-            "premium": 0.88,
-        }.get(tier, 1.0)
-        total_cost *= tier_mod
+        # v2.5 parity with Julia: removed AI-tier ops-cost modifier
+        # (was none=1.0, basic=1.08, advanced=0.94, premium=0.88).
+        # Julia treats ops cost as tier-blind — it represents the baseline
+        # 2026-era compute / SaaS / cloud environment that all entrepreneurial
+        # ventures face. Premium-tier AI subscription cost is already charged
+        # separately and stacks on top of this baseline.
         self.operating_cost = total_cost
         return total_cost
 

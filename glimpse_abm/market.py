@@ -300,9 +300,17 @@ class MarketEnvironment:
         return base_intensity * self.config.COMPETITION_SCALE_FACTOR
 
     def update_opportunity_competition(self, opp, delta: float) -> None:
-        """Apply sector-specific competition intensity to opportunity competition updates."""
+        """Apply sector-specific competition intensity to opportunity competition updates.
+
+        v2.6 parity with Julia: competition is unbounded (no [0, 1] clamp). Earlier
+        Python design clamped to [0, 1], which prevented the convexity-crowding
+        penalty (models, K=1.5) from ever firing — competition could not exceed
+        K so max(0, C/K - 1) was always 0. Removing the upper clamp lets the
+        penalty engage for opps that accumulate substantial competition pressure,
+        matching the Julia mechanism exactly.
+        """
         intensity = self.get_sector_competition_intensity(opp.sector)
-        opp.competition = float(np.clip(opp.competition + delta * intensity, 0.0, 1.0))
+        opp.competition = max(0.0, opp.competition + delta * intensity)
 
     def _sample_branch_characteristics(
         self, branch_name: str, quality_roll: Optional[float] = None
@@ -495,7 +503,8 @@ class MarketEnvironment:
         for action in agent_actions:
             if action.get("action") == "invest" and action.get("chosen_opportunity_obj"):
                 opp = action["chosen_opportunity_obj"]
-                opp.competition = min(1.0, opp.competition + 0.1)
+                # v2.6 parity: unbounded competition (was clamped to 1.0)
+                opp.competition = opp.competition + 0.1
             elif action.get("action") == "explore":
                 self.exploration_activity += 1
 
@@ -774,7 +783,8 @@ class MarketEnvironment:
 
         for opp in self.opportunities:
             opp.age = getattr(opp, "age", 0) + 1
-            opp.competition = max(0.0, min(1.0, opp.competition * 0.9))
+            # v2.6 parity: per-round decay only, unbounded above (was min(1.0, …))
+            opp.competition = max(0.0, opp.competition * 0.9)
 
         dead_opportunities = []
         for opp in self.opportunities:

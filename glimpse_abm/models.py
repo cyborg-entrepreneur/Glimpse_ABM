@@ -342,26 +342,54 @@ class Opportunity:
         scarcity_ceiling = 4.5 + 1.4 * scarcity_signal
         base_mean = float(np.clip(base_mean, 0.2, min(15.0, scarcity_ceiling)))
 
-        combo_hhi = float(market_conditions.get("combo_hhi", 0.0) or 0.0)
-        reuse_penalty = float(getattr(self, "crowding_penalty", 0.0) or 0.0)
-        crowding_penalty = (0.25 * combo_hhi + 0.2 * reuse_penalty + 0.1 * reuse_pressure) * max(
-            0.0, 1.0 - scarcity_signal
-        )
-        scarcity_bonus = 0.15 * scarcity_signal
-        novelty_relief = max(0.0, novelty_signal - 0.5) * 0.3
-        structural_adjustment = np.clip(
-            1.0 - crowding_penalty + scarcity_bonus + novelty_relief,
-            0.5,
-            1.45,
-        )
-        base_mean *= structural_adjustment
+        # ─────────────────────────────────────────────────────────────────
+        # CONVEXITY-CROWDING PENALTY (v2.5 parity with Julia models.jl:303-327)
+        # ─────────────────────────────────────────────────────────────────
+        # penalty = λ × max(0, C/K − 1)^γ ; multiplier = exp(-penalty)
+        # Earlier Python only used the legacy combo_hhi-based penalty (kept
+        # below as a small structural adjustment). The K/γ/λ convexity model
+        # was defined in config but never applied to realized_return — the
+        # convergence-driven crowding mechanism the paper depends on couldn't
+        # engage. Now mirrors Julia exactly.
+        use_convexity = getattr(self.config, "USE_CAPACITY_CONVEXITY_CROWDING", True)
+        if use_convexity:
+            K = float(getattr(self.config, "CROWDING_CAPACITY_K", 1.5))
+            gamma = float(getattr(self.config, "CROWDING_CONVEXITY_GAMMA", 1.5))
+            lam = float(getattr(self.config, "CROWDING_STRENGTH_LAMBDA", 1.5))
+            C_opp = float(getattr(self, "competition", 0.0) or 0.0)
+            crowding_metrics = market_conditions.get("crowding_metrics", {}) or {}
+            crowding_index = float(crowding_metrics.get("crowding_index", 0.25) or 0.25)
+            effective_C = C_opp + crowding_index * 0.5
+            excess = max(0.0, effective_C / K - 1.0)
+            crowding_penalty_conv = lam * (excess ** gamma)
+            base_mean *= float(np.exp(-crowding_penalty_conv))
 
-        crowding_metrics = market_conditions.get("crowding_metrics", {}) or {}
-        crowding_index = float(crowding_metrics.get("crowding_index", 0.25) or 0.25)
-        crowd_threshold = getattr(self.config, "RETURN_DEMAND_CROWDING_THRESHOLD", 0.35)
-        if crowding_index > crowd_threshold:
-            crowd_penalty_extra = np.clip(1.0 - 0.25 * (crowding_index - crowd_threshold), 0.5, 1.0)
-            base_mean *= crowd_penalty_extra
+            # Lighter-weight scarcity / novelty adjustments (mirrors Julia)
+            scarcity_bonus = 0.10 * scarcity_signal
+            novelty_relief = max(0.0, novelty_signal - 0.5) * 0.15
+            base_mean *= (1.0 + scarcity_bonus + novelty_relief)
+        else:
+            # Legacy path (Python pre-v2.5): combo_hhi-based crowding penalty
+            combo_hhi = float(market_conditions.get("combo_hhi", 0.0) or 0.0)
+            reuse_penalty = float(getattr(self, "crowding_penalty", 0.0) or 0.0)
+            crowding_penalty_legacy = (0.25 * combo_hhi + 0.2 * reuse_penalty + 0.1 * reuse_pressure) * max(
+                0.0, 1.0 - scarcity_signal
+            )
+            scarcity_bonus = 0.15 * scarcity_signal
+            novelty_relief = max(0.0, novelty_signal - 0.5) * 0.3
+            structural_adjustment = np.clip(
+                1.0 - crowding_penalty_legacy + scarcity_bonus + novelty_relief,
+                0.5,
+                1.45,
+            )
+            base_mean *= structural_adjustment
+
+            crowding_metrics = market_conditions.get("crowding_metrics", {}) or {}
+            crowding_index = float(crowding_metrics.get("crowding_index", 0.25) or 0.25)
+            crowd_threshold = getattr(self.config, "RETURN_DEMAND_CROWDING_THRESHOLD", 0.35)
+            if crowding_index > crowd_threshold:
+                crowd_penalty_extra = np.clip(1.0 - 0.25 * (crowding_index - crowd_threshold), 0.5, 1.0)
+                base_mean *= crowd_penalty_extra
 
         tier_shares = market_conditions.get("tier_invest_share", {}) or {}
         tier_share = float(tier_shares.get(investor_tier, 0.0)) if investor_tier else 0.0

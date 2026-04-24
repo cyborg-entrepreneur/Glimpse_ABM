@@ -98,11 +98,11 @@ class EmergentConfig:
     INITIAL_CAPITAL: float = 5_000_000.0
     INITIAL_CAPITAL_RANGE: Tuple[float, float] = (2_500_000.0, 10_000_000.0)
     SURVIVAL_THRESHOLD: float = 230_000.0
-    SURVIVAL_CAPITAL_RATIO: float = 0.38
-    INSOLVENCY_GRACE_ROUNDS: int = 7
+    SURVIVAL_CAPITAL_RATIO: float = 0.40  # v2.5 parity with Julia
+    INSOLVENCY_GRACE_ROUNDS: int = 6  # v2.5 parity with Julia (was 7)
     RANDOM_SEED: int = 42
 
-    BASE_OPERATIONAL_COST: float = 10000.0  # Monthly - calibrated for ~55% 5-yr survival (BLS benchmark)
+    BASE_OPERATIONAL_COST: float = 22500.0  # Monthly - v2.5 parity (was 10000; raised 1.5x for 2026-era compute / SaaS / cloud costs)
     COMPETITION_COST_MULTIPLIER: float = 50.0  # Monthly (was 150 quarterly)
     OPERATING_RESERVE_MONTHS: int = 3
     MAX_AGENT_KNOWLEDGE: int = 90
@@ -493,12 +493,14 @@ class EmergentConfig:
     CROWDING_CAPACITY_K: float = 1.5
 
     # γ = Convexity exponent: how sharply penalties increase beyond capacity
-    # γ = 2: quadratic (convex - "a little crowded is OK, very crowded is brutal")
-    CROWDING_CONVEXITY_GAMMA: float = 2.0
+    # γ = 1.5: mildly convex (gradual ramp — realistic for competitive markets)
+    # v2.5 parity with Julia (was 2.0)
+    CROWDING_CONVEXITY_GAMMA: float = 1.5
 
     # λ = Strength: maps crowding into payoff reduction
     # exp(-λ) gives the return multiplier at 2× capacity
-    CROWDING_STRENGTH_LAMBDA: float = 0.50
+    # v2.5 parity with Julia (was 0.50)
+    CROWDING_STRENGTH_LAMBDA: float = 1.5
 
     # Legacy parameters (used when USE_CAPACITY_CONVEXITY_CROWDING = False)
     DISABLE_COMPETITION_DYNAMICS: bool = False  # Master switch to disable competition effects
@@ -729,12 +731,12 @@ class EmergentConfig:
                 # Monthly operational costs (SBA/BLS calibrated 2025)
                 # Tech: moderate employee costs, low physical overhead
                 # BLS QCEW: Information sector converted to monthly
-                "operational_cost_range": (20_000.0, 30_000.0),  # Monthly (was 60-90k quarterly)
+                "operational_cost_range": (30_000.0, 45_000.0),  # v2.5 parity with Julia: 1.5x for 2026-era compute costs
                 # Empirically-calibrated fields (scaled for 40-60 round runway)
                 # Reflects Series A/B rounds with 24-36 month runway before profitability
                 "initial_capital_range": (3_000_000.0, 6_000_000.0),  # 40-80 rounds runway
-                "survival_threshold": 150_000.0,   # ~2 months operating expenses
-                "survival_equity_ratio": 0.38,     # Tech: High burn tolerance (BLS/NVCA calibrated)
+                "survival_threshold": 1_950_000.0,  # v2.5 parity with Julia: ~65% of min sector capital
+                "survival_equity_ratio": 0.40,     # v2.5 parity with Julia (was 0.38)
                 "innovation_probability": 0.16,    # Monthly (was 0.48 quarterly)
                 "innovation_return_multiplier": (2.0, 4.0),  # High tech upside
                 "knowledge_decay_rate": 0.04,      # Monthly (was 0.12 quarterly)
@@ -753,11 +755,11 @@ class EmergentConfig:
                 "gross_margin_range": (0.18, 0.42),
                 "operating_margin_range": (0.015, 0.08),
                 # Monthly operational costs (BLS QCEW: Retail converted to monthly)
-                "operational_cost_range": (13_000.0, 23_000.0),  # Monthly (was 40-70k quarterly)
+                "operational_cost_range": (19_500.0, 34_500.0),  # v2.5 parity with Julia: 1.5x
                 # Empirically-calibrated fields (Seed/Series A rounds with 18-24 month runway)
                 "initial_capital_range": (2_200_000.0, 4_000_000.0),
-                "survival_threshold": 130_000.0,   # ~3 months operating expenses
-                "survival_equity_ratio": 0.38,     # Retail: Moderate burn (30-40% year-1; 12-month reserve requirement)
+                "survival_threshold": 1_430_000.0,  # v2.5 parity with Julia: ~65% of min sector capital
+                "survival_equity_ratio": 0.40,     # v2.5 parity with Julia (was 0.38)
                 "innovation_probability": 0.11,    # Monthly (was 0.32 quarterly)
                 "innovation_return_multiplier": (1.6, 2.5),  # Moderate returns
                 "knowledge_decay_rate": 0.023,     # Monthly (was 0.07 quarterly)
@@ -776,11 +778,11 @@ class EmergentConfig:
                 "gross_margin_range": (0.45, 0.75),
                 "operating_margin_range": (0.12, 0.24),
                 # Monthly operational costs (BLS QCEW: Services converted to monthly)
-                "operational_cost_range": (8_300.0, 15_000.0),  # Monthly (was 25-45k quarterly)
+                "operational_cost_range": (12_500.0, 22_500.0),  # v2.5 parity with Julia: 1.5x
                 # Empirically-calibrated fields (Seed/Series A rounds with 16-28 month runway)
                 "initial_capital_range": (1_400_000.0, 2_500_000.0),
-                "survival_threshold": 70_000.0,    # ~2 months operating expenses
-                "survival_equity_ratio": 0.52,     # Service: Capital efficient (higher retention expected; 80% fail if <20% at year 2)
+                "survival_threshold": 910_000.0,   # v2.5 parity with Julia: ~65% of min sector capital
+                "survival_equity_ratio": 0.40,     # v2.5 parity with Julia (was 0.52)
                 "innovation_probability": 0.13,    # Monthly (was 0.38 quarterly)
                 "innovation_return_multiplier": (1.6, 2.5),  # Moderate returns
                 "knowledge_decay_rate": 0.017,     # Monthly (was 0.05 quarterly)
@@ -799,11 +801,11 @@ class EmergentConfig:
                 "gross_margin_range": (0.28, 0.48),
                 "operating_margin_range": (0.04, 0.18),
                 # Monthly operational costs (BLS QCEW: Manufacturing converted to monthly)
-                "operational_cost_range": (26_700.0, 40_000.0),  # Monthly (was 80-120k quarterly)
+                "operational_cost_range": (40_050.0, 60_000.0),  # v2.5 parity with Julia: 1.5x
                 # Empirically-calibrated fields (Series A/B rounds with 20-30 month runway)
                 "initial_capital_range": (4_000_000.0, 7_500_000.0),
-                "survival_threshold": 200_000.0,   # ~2 months operating expenses
-                "survival_equity_ratio": 0.58,     # Manufacturing: Asset-heavy (capital preservation critical; 43.6% 10-year survival best)
+                "survival_threshold": 2_600_000.0,  # v2.5 parity with Julia: ~65% of min sector capital
+                "survival_equity_ratio": 0.40,     # v2.5 parity with Julia (was 0.58)
                 "innovation_probability": 0.17,    # Monthly (was 0.52 quarterly)
                 "innovation_return_multiplier": (1.5, 2.8),  # Incremental improvements
                 "knowledge_decay_rate": 0.01,      # Monthly (was 0.03 quarterly)
