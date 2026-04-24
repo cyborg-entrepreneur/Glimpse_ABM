@@ -314,6 +314,7 @@ mutable struct EmergentAgent
     alive::Bool
     survival_rounds::Int
     insolvency_rounds::Int
+    equity_streak::Int  # consecutive rounds below sector equity ratio (v2.5 — equity_failure mechanism)
     total_invested::Float64
     total_returned::Float64
     success_count::Int
@@ -410,6 +411,7 @@ function EmergentAgent(
         true,  # alive
         0,  # survival_rounds
         0,  # insolvency_rounds
+        0,  # equity_streak (v2.5 — equity_failure mechanism)
         0.0,  # total_invested
         0.0,  # total_returned
         0,  # success_count
@@ -506,6 +508,35 @@ function check_survival!(agent::EmergentAgent, round::Int)::Bool
         agent.survival_rounds = round
     end
 
+    # v2.5: equity_failure check (mirrors Python agents.py:_evaluate_failure_conditions).
+    # Agent fails when capital_ratio (current / initial) drops below the sector
+    # equity ratio for INSOLVENCY_GRACE_ROUNDS consecutive rounds. Earlier
+    # versions of Julia only had liquidity_failure, so any agent above the
+    # liquidity floor was effectively immortal regardless of how much equity
+    # they had burned. This is the second leg of the failure mechanism.
+    initial_equity = max(agent.resources.performance.initial_equity, 1.0)
+    capital_ratio = agent.resources.capital / initial_equity
+    sector_equity_ratio = _get_sector_equity_ratio(agent)
+    # Same AI-trust relief that liquidity uses
+    ai_relief = 1.0
+    if ai_level != "none"
+        trust = clamp(agent.traits["ai_trust"], 0.0, 1.0)
+        discount = clamp(agent.config.AI_TRUST_RESERVE_DISCOUNT, 0.0, 0.9)
+        ai_relief = clamp(1.0 - trust * discount, 0.5, 1.0)
+    end
+    ratio_floor = sector_equity_ratio * ai_relief
+    if capital_ratio < ratio_floor
+        agent.equity_streak += 1
+        if agent.equity_streak >= agent.config.INSOLVENCY_GRACE_ROUNDS
+            agent.alive = false
+            agent.failure_round = round
+            agent.failure_reason = "equity_failure"
+            return false
+        end
+    else
+        agent.equity_streak = 0
+    end
+
     return true
 end
 
@@ -520,6 +551,19 @@ function _get_sector_survival_threshold(agent::EmergentAgent)::Float64
     end
     # Fallback to global threshold
     return agent.config.SURVIVAL_THRESHOLD
+end
+
+"""
+Get the minimum capital-retention ratio (capital / initial_equity) below
+which the agent is considered equity-impaired. Falls back to global
+SURVIVAL_CAPITAL_RATIO if the sector profile doesn't expose one.
+"""
+function _get_sector_equity_ratio(agent::EmergentAgent)::Float64
+    sector_profile = get(agent.config.SECTOR_PROFILES, agent.primary_sector, nothing)
+    if !isnothing(sector_profile) && hasproperty(sector_profile, :survival_equity_ratio)
+        return sector_profile.survival_equity_ratio
+    end
+    return agent.config.SURVIVAL_CAPITAL_RATIO
 end
 
 """

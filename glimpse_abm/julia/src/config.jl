@@ -108,12 +108,17 @@ parameters preserved for exact behavioral compatibility.
     INITIAL_CAPITAL::Float64 = 5_000_000.0
     INITIAL_CAPITAL_RANGE::Tuple{Float64,Float64} = (2_500_000.0, 10_000_000.0)
     SURVIVAL_THRESHOLD::Float64 = 2_000_000.0
-    SURVIVAL_CAPITAL_RATIO::Float64 = 0.38
-    INSOLVENCY_GRACE_ROUNDS::Int = 7  # 7 months grace period before failure
+    SURVIVAL_CAPITAL_RATIO::Float64 = 0.40  # equity_failure floor (v2.5: was 0.38, now 0.40)
+    INSOLVENCY_GRACE_ROUNDS::Int = 6  # was 7 months; moderately tightened (v2.5)
     RANDOM_SEED::Int = 42
     USE_NUMPY_RNG::Bool = false  # Use NumpyRNG for cross-language reproducibility
 
-    BASE_OPERATIONAL_COST::Float64 = 15000.0  # Monthly operational cost - calibrated for ~55% 5-yr survival (BLS benchmark)
+    # Monthly operational cost — calibrated for ~55% 5-yr survival (BLS benchmark).
+    # Raised 15K → 22.5K in v2.5 to reflect 2026-era compute / SaaS / cloud
+    # infrastructure costs that all entrepreneurial ventures face. Premium-tier
+    # subscription cost ($3500/month) stacks on top — those represent dedicated
+    # AI tooling above the baseline compute environment.
+    BASE_OPERATIONAL_COST::Float64 = 22500.0
     COMPETITION_COST_MULTIPLIER::Float64 = 50.0  # Monthly multiplier (was 150 quarterly)
     OPERATING_RESERVE_MONTHS::Int = 3
     MAX_AGENT_KNOWLEDGE::Int = 90
@@ -550,8 +555,8 @@ parameters preserved for exact behavioral compatibility.
             # Empirically-calibrated fields (scaled for 120-180 month runway):
             # Reflects Series A/B rounds with 24-36 month runway before profitability
             (3_000_000.0, 6_000_000.0),  # initial_capital_range: 120-240 months runway
-            (20_000.0, 30_000.0),        # operational_cost_range: BLS tech sector MONTHLY
-            1_500_000.0,                  # survival_threshold: ~50% of min sector capital
+            (30_000.0, 45_000.0),        # operational_cost_range: BLS tech sector MONTHLY × 1.5 (v2.5: 2026-era compute)
+            1_950_000.0,                  # survival_threshold: ~65% of min sector capital (v2.5)
             0.16,                         # innovation_probability: monthly (was 0.48 quarterly)
             (2.0, 4.0),                   # innovation_return_multiplier: high tech upside
             0.04,                         # knowledge_decay_rate: monthly (was 0.12 quarterly)
@@ -563,8 +568,8 @@ parameters preserved for exact behavioral compatibility.
             (6, 24), (0.18, 0.42), (0.015, 0.08),                  # maturity: 6-24 months (fits 60-round sim)
             # Empirically-calibrated fields (scaled for 120-180 month runway):
             (2_200_000.0, 4_000_000.0),  # initial_capital_range: 120-220 months runway
-            (13_000.0, 23_000.0),        # operational_cost_range: BLS retail sector MONTHLY
-            1_100_000.0,                  # survival_threshold: ~50% of min sector capital
+            (19_500.0, 34_500.0),        # operational_cost_range: BLS retail sector MONTHLY × 1.5 (v2.5)
+            1_430_000.0,                  # survival_threshold: ~65% of min sector capital (v2.5)
             0.11,                         # innovation_probability: monthly (was 0.32 quarterly)
             (1.6, 2.5),                   # innovation_return_multiplier: moderate returns
             0.023,                        # knowledge_decay_rate: monthly (was 0.07 quarterly)
@@ -576,8 +581,8 @@ parameters preserved for exact behavioral compatibility.
             (6, 18), (0.45, 0.75), (0.12, 0.24),                   # maturity: 6-18 months (fits 60-round sim)
             # Empirically-calibrated fields (scaled for 120-180 month runway):
             (1_400_000.0, 2_500_000.0),  # initial_capital_range: 120-213 months runway
-            (8_300.0, 15_000.0),         # operational_cost_range: BLS services sector MONTHLY
-            700_000.0,                    # survival_threshold: ~50% of min sector capital
+            (12_500.0, 22_500.0),        # operational_cost_range: BLS services sector MONTHLY × 1.5 (v2.5)
+            910_000.0,                    # survival_threshold: ~65% of min sector capital (v2.5)
             0.13,                         # innovation_probability: monthly (was 0.38 quarterly)
             (1.6, 2.5),                   # innovation_return_multiplier: moderate returns
             0.017,                        # knowledge_decay_rate: monthly (was 0.05 quarterly)
@@ -589,8 +594,8 @@ parameters preserved for exact behavioral compatibility.
             (18, 48), (0.28, 0.48), (0.04, 0.18),                  # maturity: 18-48 months (fits 60-round sim)
             # Empirically-calibrated fields (scaled for 120-180 month runway):
             (4_000_000.0, 7_500_000.0),  # initial_capital_range: 120-225 months runway
-            (26_700.0, 40_000.0),        # operational_cost_range: BLS manufacturing MONTHLY
-            2_000_000.0,                  # survival_threshold: ~50% of min sector capital
+            (40_050.0, 60_000.0),        # operational_cost_range: BLS manufacturing MONTHLY × 1.5 (v2.5)
+            2_600_000.0,                  # survival_threshold: ~65% of min sector capital (v2.5)
             0.17,                         # innovation_probability: monthly (was 0.52 quarterly)
             (1.5, 2.8),                   # innovation_return_multiplier: incremental improvements
             0.01,                         # knowledge_decay_rate: monthly (was 0.03 quarterly)

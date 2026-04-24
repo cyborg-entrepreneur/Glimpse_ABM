@@ -263,6 +263,27 @@ end
         @test niche_opp.created_by == 1
     end
 
+    # ------------------------------------------------------------------
+    # 13. Fixed-mode runs are tier-homogeneous (ATE design invariant)
+    # ------------------------------------------------------------------
+    @testset "fixed-mode tier population is homogeneous" begin
+        # Critical for ATE estimation: when a fixed-mode experiment runs the
+        # "premium" cell, every agent must be premium. There must be no
+        # mixed-tier competition contaminating the treatment assignment.
+        for tier in ["none", "basic", "advanced", "premium"]
+            cfg = EmergentConfig(N_AGENTS=20, N_ROUNDS=1, RANDOM_SEED=42,
+                                 AGENT_AI_MODE="fixed")
+            sim = EmergentSimulation(config=cfg, seed=42,
+                initial_tier_distribution=Dict(tier => 1.0))
+            tiers = unique(get_ai_level(a) for a in sim.agents)
+            @test tiers == [tier]
+            # And no agent should drift to another tier across rounds
+            GlimpseABM.run!(sim)
+            tiers_after = unique(get_ai_level(a) for a in sim.agents)
+            @test tiers_after == [tier]
+        end
+    end
+
 end
 
 println("All diagnostic tests passed!")
