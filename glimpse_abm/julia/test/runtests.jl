@@ -194,6 +194,8 @@ using DataFrames
 
     # Run external regression tests (each in its own @testset)
     include("test_tier_divergence.jl")
+    include("test_diagnostics.jl")
+    include("test_action_keys.jl")
 
 end
 

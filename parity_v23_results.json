@@ -1,0 +1,134 @@
+{
+  "config": {
+    "n_agents": 200,
+    "n_rounds": 30,
+    "tier": "premium",
+    "seeds": [
+      101,
+      102,
+      103,
+      104,
+      105
+    ]
+  },
+  "python": {
+    "per_seed": [
+      {
+        "seed": 101,
+        "language": "python",
+        "n_alive": 200,
+        "survival_rate": 1.0,
+        "mean_capital_alive": 6568285.582150688,
+        "median_capital_alive": 6651578.110509427,
+        "mean_capital_all": 6568285.582150688
+      },
+      {
+        "seed": 102,
+        "language": "python",
+        "n_alive": 200,
+        "survival_rate": 1.0,
+        "mean_capital_alive": 6675823.674302102,
+        "median_capital_alive": 6335505.667466503,
+        "mean_capital_all": 6675823.674302102
+      },
+      {
+        "seed": 103,
+        "language": "python",
+        "n_alive": 200,
+        "survival_rate": 1.0,
+        "mean_capital_alive": 7001543.517345016,
+        "median_capital_alive": 6783974.015289238,
+        "mean_capital_all": 7001543.517345016
+      },
+      {
+        "seed": 104,
+        "language": "python",
+        "n_alive": 200,
+        "survival_rate": 1.0,
+        "mean_capital_alive": 6650401.031707722,
+        "median_capital_alive": 6768624.306015523,
+        "mean_capital_all": 6650401.031707722
+      },
+      {
+        "seed": 105,
+        "language": "python",
+        "n_alive": 200,
+        "survival_rate": 1.0,
+        "mean_capital_alive": 6334443.665838882,
+        "median_capital_alive": 6022695.593572561,
+        "mean_capital_all": 6334443.665838882
+      }
+    ],
+    "summary": {
+      "language": "python",
+      "n_seeds": 5,
+      "survival_mean": 1.0,
+      "survival_std": 0.0,
+      "mean_capital_mean": 6646099.494268882,
+      "mean_capital_std": 240013.9808204199,
+      "median_capital_mean": 6512475.53857065
+    }
+  },
+  "julia": {
+    "per_seed": [
+      {
+        "median_capital_alive": 2661536.7836234723,
+        "mean_capital_alive": 2615654.7490119115,
+        "language": "julia",
+        "seed": 101,
+        "survival_rate": 0.98,
+        "n_alive": 196,
+        "mean_capital_all": 2575805.00171647
+      },
+      {
+        "median_capital_alive": 2713239.2833116436,
+        "mean_capital_alive": 2655984.6633696924,
+        "language": "julia",
+        "seed": 102,
+        "survival_rate": 0.99,
+        "n_alive": 198,
+        "mean_capital_all": 2635667.18422736
+      },
+      {
+        "median_capital_alive": 2609560.9345111907,
+        "mean_capital_alive": 2713040.292142404,
+        "language": "julia",
+        "seed": 103,
+        "survival_rate": 0.99,
+        "n_alive": 198,
+        "mean_capital_all": 2691876.3739443915
+      },
+      {
+        "median_capital_alive": 2632836.155041427,
+        "mean_capital_alive": 2658909.034481738,
+        "language": "julia",
+        "seed": 104,
+        "survival_rate": 0.985,
+        "n_alive": 197,
+        "mean_capital_all": 2628868.9766631504
+      },
+      {
+        "median_capital_alive": 2646103.0175290303,
+        "mean_capital_alive": 2620008.07948524,
+        "language": "julia",
+        "seed": 105,
+        "survival_rate": 0.975,
+        "n_alive": 195,
+        "mean_capital_all": 2573046.4097495233
+      }
+    ],
+    "summary": {
+      "language": "julia",
+      "n_seeds": 5,
+      "survival_mean": 0.984,
+      "survival_std": 0.006519202405202654,
+      "mean_capital_mean": 2652719.363698197,
+      "mean_capital_std": 39151.63595377617,
+      "median_capital_mean": 2652655.234803353
+    }
+  },
+  "diff": {
+    "abs_survival": 0.016000000000000014,
+    "py_over_jl_capital": 2.505391103642208
+  }
+}

@@ -525,8 +525,18 @@ function step!(sim::EmergentSimulation, round::Int)
             if !isnothing(niche_id)
                 # Create 1-3 new opportunities in the discovered niche (matches Python)
                 n_niche_opps = rand(sim.rng, 1:3)
+                created_ids = String[]
                 for _ in 1:n_niche_opps
-                    create_niche_opportunity(sim.market, string(niche_id), agent_id, round)
+                    new_opp = create_niche_opportunity(sim.market, string(niche_id), agent_id, round)
+                    push!(created_ids, new_opp.id)
+                end
+                # Telemetry: stash the created opp id(s) on the action so
+                # uncertainty.jl niche-creation accounting (line 733) sees them.
+                # Single id stored under "new_opportunity_id" for the common
+                # 1-opp case; full list under "new_opportunity_ids".
+                if !isempty(created_ids)
+                    action["new_opportunity_id"] = first(created_ids)
+                    action["new_opportunity_ids"] = created_ids
                 end
             end
         end

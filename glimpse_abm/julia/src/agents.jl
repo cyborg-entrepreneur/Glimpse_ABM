@@ -772,7 +772,14 @@ function _execute_invest!(
         outcome["ai_contains_hallucination"] = ai_info.contains_hallucination
         outcome["ai_confidence"] = ai_info.confidence
         outcome["ai_actual_accuracy"] = ai_info.actual_accuracy
+        outcome["ai_analysis_domain"] = ai_info.domain
     end
+
+    # Flag for uncertainty.jl filters that count "AI-using" actions.
+    # ai_level_used != "none" already implies AI use, but the consumer
+    # at uncertainty.jl:1785 reads this as a separate boolean — propagate
+    # explicitly so the filter doesn't always return zero.
+    outcome["ai_used"] = get_ai_level(agent) != "none"
 
     # Track for emergent agentic novelty (derivative = following, not novel = creating)
     record_creative_action!(agent.uncertainty_metrics; derivative_adoption=is_derivative)
@@ -1029,6 +1036,11 @@ function _execute_explore!(
         # so niche creation was wired but never fired.
         if created_niche
             outcome["exploration_type"] = "niche_discovery"
+            # Telemetry flag for uncertainty.jl niche-creation accounting.
+            # The consumer at uncertainty.jl:733 also looks for "new_opportunity_id"
+            # — that is set later by simulation.jl after market.create_niche_opportunity
+            # succeeds (since the new opp's id isn't known until creation).
+            outcome["created_opportunity"] = true
         end
 
         # Track for emergent agentic novelty
@@ -2388,6 +2400,10 @@ function make_decision!(
     outcome["ai_level_used"] = ai_level
     outcome["utilities"] = utilities
     outcome["perception"] = perception
+    # Alias for the consumer at uncertainty.jl:753 which reads
+    # action["perception_at_decision"] when computing knowledge gaps.
+    # Without this alias the knowledge_gaps merge always saw an empty Dict.
+    outcome["perception_at_decision"] = perception
 
     return outcome
 end

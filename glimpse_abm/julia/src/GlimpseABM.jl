@@ -31,6 +31,10 @@ using Distributions
 using DataFrames
 using Dates
 
+# Action-dict field name constants (centralizes producer/consumer keys
+# that have caused silent dataflow bugs — see action_keys.jl docstring)
+include("action_keys.jl")
+
 # Core configuration and models
 include("config.jl")
 include("models.jl")
