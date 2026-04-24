@@ -476,6 +476,11 @@ class Portfolio:
         self.active_investments[investment_key] = investment_record
         self.total_invested += amount
         self.locked_capital += amount
+        # v3.1: track capital saturation on the opportunity itself so the
+        # capital-saturation convexity penalty in realized_return has a
+        # live signal. Mirrors Julia agents.jl:771-772.
+        if hasattr(opportunity_obj, "total_invested"):
+            opportunity_obj.total_invested += amount
         self._update_diversification()
 
     def check_matured_investments(self, current_round: int, market_conditions: Dict) -> List[Dict]:
@@ -581,6 +586,11 @@ class Portfolio:
                 if investment_key in self.active_investments:
                     del self.active_investments[investment_key]
                 self.locked_capital -= investment["amount"]
+                # v3.1: release outstanding capital from opp.total_invested so
+                # capital-saturation reflects CURRENT, not cumulative, exposure.
+                # Mirrors Julia agents.jl:1199-1200.
+                if hasattr(opp, "total_invested"):
+                    opp.total_invested = max(0.0, opp.total_invested - investment["amount"])
                 newly_matured.append(
                     {
                         "opportunity_id": original_opp_id,

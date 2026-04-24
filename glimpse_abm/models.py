@@ -170,6 +170,11 @@ class Opportunity:
     origin_innovation_id: Optional[str] = None
     crowding_penalty: float = 0.0
     component_scarcity: float = 0.5
+    # v3.1 — capital-saturation crowding fields. capacity is sampled at
+    # construction (or injected by the producer); total_invested accumulates
+    # as agents commit capital and decrements on maturity.
+    total_invested: float = 0.0
+    capacity: float = 0.0
 
     def __post_init__(self) -> None:
         if self.config is None:
@@ -215,6 +220,14 @@ class Opportunity:
             self.latent_failure_potential = max(
                 min_uncertainty, min(max_uncertainty, self.latent_failure_potential)
             )
+
+        # v3.1 — sample capacity if not already set (mirrors Julia's
+        # Opportunity init at models.jl:170-173). Producer sites may override
+        # by passing capacity= explicitly.
+        if self.capacity <= 0.0 and hasattr(self.config, "OPPORTUNITY_BASE_CAPACITY"):
+            base = float(self.config.OPPORTUNITY_BASE_CAPACITY)
+            variance = float(getattr(self.config, "OPPORTUNITY_CAPACITY_VARIANCE", 0.3))
+            self.capacity = base * (1.0 + (np.random.random() - 0.5) * 2.0 * variance)
 
     def realized_return(self, market_conditions: Dict[str, Any], investor_tier: Optional[str] = None) -> float:
         """
@@ -343,24 +356,28 @@ class Opportunity:
         base_mean = float(np.clip(base_mean, 0.2, min(15.0, scarcity_ceiling)))
 
         # ─────────────────────────────────────────────────────────────────
-        # CONVEXITY-CROWDING PENALTY (v2.5 parity with Julia models.jl:303-327)
+        # CAPITAL-SATURATION CONVEXITY CROWDING (v3.1 parity with Julia models.jl)
         # ─────────────────────────────────────────────────────────────────
-        # penalty = λ × max(0, C/K − 1)^γ ; multiplier = exp(-penalty)
-        # Earlier Python only used the legacy combo_hhi-based penalty (kept
-        # below as a small structural adjustment). The K/γ/λ convexity model
-        # was defined in config but never applied to realized_return — the
-        # convergence-driven crowding mechanism the paper depends on couldn't
-        # engage. Now mirrors Julia exactly.
+        # penalty = λ × max(0, S/K_sat − 1)^γ ; multiplier = exp(-penalty)
+        # where S = opp.total_invested / opp.capacity (capital saturation).
+        #
+        # v3.1 change: replaced count-of-competitors (opp.competition) with
+        # dollar saturation. Ten $10k investments and one $10M investment now
+        # produce materially different penalties — the economically correct
+        # crowding signal is dollar saturation, not headcount. Also subsumes
+        # the old Python tier-share penalty (deleted below).
         use_convexity = getattr(self.config, "USE_CAPACITY_CONVEXITY_CROWDING", True)
         if use_convexity:
-            K = float(getattr(self.config, "CROWDING_CAPACITY_K", 1.5))
+            K_sat = float(getattr(self.config, "CROWDING_CAPACITY_RATIO_K", 1.2))
             gamma = float(getattr(self.config, "CROWDING_CONVEXITY_GAMMA", 1.5))
             lam = float(getattr(self.config, "CROWDING_STRENGTH_LAMBDA", 1.5))
-            C_opp = float(getattr(self, "competition", 0.0) or 0.0)
+            opp_capacity = float(getattr(self, "capacity", 0.0) or 0.0)
+            opp_invested = float(getattr(self, "total_invested", 0.0) or 0.0)
+            saturation = (opp_invested / opp_capacity) if opp_capacity > 0.0 else 0.0
             crowding_metrics = market_conditions.get("crowding_metrics", {}) or {}
             crowding_index = float(crowding_metrics.get("crowding_index", 0.25) or 0.25)
-            effective_C = C_opp + crowding_index * 0.5
-            excess = max(0.0, effective_C / K - 1.0)
+            effective_sat = saturation + crowding_index * 0.3
+            excess = max(0.0, effective_sat / K_sat - 1.0)
             crowding_penalty_conv = lam * (excess ** gamma)
             base_mean *= float(np.exp(-crowding_penalty_conv))
 
@@ -391,11 +408,11 @@ class Opportunity:
                 crowd_penalty_extra = np.clip(1.0 - 0.25 * (crowding_index - crowd_threshold), 0.5, 1.0)
                 base_mean *= crowd_penalty_extra
 
-        tier_shares = market_conditions.get("tier_invest_share", {}) or {}
-        tier_share = float(tier_shares.get(investor_tier, 0.0)) if investor_tier else 0.0
-        if tier_share > 0.45:
-            crowd_penalty = 1.0 - 0.6 * (tier_share - 0.45)
-            base_mean *= float(np.clip(crowd_penalty, 0.35, 1.0))
+        # v3.1: tier-share penalty removed. It was an ad-hoc add-on that
+        # punished whichever AI tier happened to be common, rather than the
+        # economic state (saturation) that common-tier investing produced.
+        # The capital-saturation convexity above now handles the crowding
+        # that tier concentration creates, regardless of which tier it is.
 
         # =====================================================================
         # POWER LAW RETURN DISTRIBUTION

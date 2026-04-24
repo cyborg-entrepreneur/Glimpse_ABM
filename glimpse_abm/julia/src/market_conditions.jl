@@ -18,14 +18,10 @@ struct MarketConditions
     # Regime + macro
     regime::String
     volatility::Float64
-    trend::Float64
-    momentum::Float64
     regime_return_multiplier::Float64
     regime_failure_multiplier::Float64
 
     # Market scale
-    n_opportunities::Int
-    exploration_activity::Float64
     round::Int
 
     # Crowding / clearing

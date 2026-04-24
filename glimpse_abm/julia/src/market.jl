@@ -415,12 +415,8 @@ function get_market_conditions(market::MarketEnvironment;
     return MarketConditions(
         market.market_regime,
         market.volatility,
-        market.trend,
-        market.market_momentum,
         market.regime_return_multiplier,
         market.regime_failure_multiplier,
-        length(market.opportunities),
-        market.exploration_activity,
         market.current_round,
         market.tier_invest_share,
         market.sector_clearing_index,
