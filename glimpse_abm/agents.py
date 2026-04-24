@@ -814,6 +814,24 @@ class EmergentAgent:
         probs = [w / total for w in weights]
         return np.random.choice(sectors, p=probs)
 
+    def get_ai_level(self) -> str:
+        """Return the agent's effective AI tier.
+
+        Honors `fixed_ai_level` for fixed-tier runs (where AGENT_AI_MODE='fixed'
+        and the agent's tier is locked at construction). Falls back to
+        `current_ai_level`, which is updated dynamically inside `make_decision`.
+
+        Use this in any code that runs BEFORE `make_decision` in the step path
+        (e.g. liquidity / survival checks) — at that point `current_ai_level`
+        is still 'none' even for fixed-tier premium agents, so reading it
+        directly silently strips fixed-tier agents of any tier-conditional
+        treatment.
+        """
+        fixed = getattr(self, 'fixed_ai_level', None)
+        if fixed and fixed != 'none' and getattr(self.config, 'AGENT_AI_MODE', 'emergent') == 'fixed':
+            return normalize_ai_label(fixed)
+        return normalize_ai_label(getattr(self, 'current_ai_level', getattr(self, 'agent_type', 'none')))
+
     def _get_sector_survival_threshold(self) -> float:
         """Get survival threshold for agent based on primary sector (BLS/Fed calibrated)."""
         sector_profile = self.config.SECTOR_PROFILES.get(self.primary_sector, {})
@@ -855,12 +873,21 @@ class EmergentAgent:
         return self._uncertainty_cache
 
     def _start_subscription_schedule(self, ai_level: str, ai_config: Dict[str, Any]) -> None:
-        cycle = max(1, int(getattr(self.config, 'AI_SUBSCRIPTION_AMORTIZATION_ROUNDS', 20)))
+        """Start an active subscription that charges the documented monthly fee per round.
+
+        Each round = one month per config (N_ROUNDS = 120 months = 10 years; operational
+        costs and discount rates throughout are explicitly monthly), so the documented
+        monthly cost is charged once per round indefinitely until the subscription is
+        cancelled. The previous AI_SUBSCRIPTION_AMORTIZATION_ROUNDS = 180 divisor caused
+        Premium ($3500/month documented) to be billed ~$19/month — a ~180× under-charge.
+        Mirrors Julia v2 fix #4 at agents.jl:1313-1340.
+        """
         base_cost = float(ai_config.get('cost', 0.0))
         if base_cost <= 0:
             return
-        self._subscription_accounts[ai_level] = cycle
-        self._subscription_rates[ai_level] = base_cost / cycle
+        cost_intensity = float(getattr(self.config, 'AI_COST_INTENSITY', 1.0))
+        self._subscription_accounts[ai_level] = 1  # active flag (not decremented)
+        self._subscription_rates[ai_level] = base_cost * cost_intensity
 
     def _compute_subscription_deferral_rounds(self, ai_level: str) -> int:
         base_grace = int(getattr(self.config, 'AI_SUBSCRIPTION_FLOAT_BASE_ROUNDS', 0))
@@ -882,13 +909,11 @@ class EmergentAgent:
             else:
                 self._subscription_deferral_remaining.pop(ai_level, None)
             return 0.0
+        # Charge the documented monthly fee. Subscription stays active until
+        # explicitly cancelled — do NOT decrement remaining (legacy behavior
+        # was to amortize over AI_SUBSCRIPTION_AMORTIZATION_ROUNDS, which
+        # under-billed by 1/cycle; corrected per Julia v2 fix #4).
         self.resources.capital -= rate
-        remaining -= 1
-        if remaining <= 0:
-            self._subscription_accounts.pop(ai_level, None)
-            self._subscription_rates.pop(ai_level, None)
-        else:
-            self._subscription_accounts[ai_level] = remaining
         return rate
 
     def _apply_subscription_carry(self) -> float:
@@ -924,7 +949,12 @@ class EmergentAgent:
             sector_survival_threshold,
             operating_cost * reserve_months,
         )
-        ai_level = normalize_ai_label(getattr(self, 'current_ai_level', getattr(self, 'agent_type', 'none')))
+        # Use get_ai_level() to honor fixed_ai_level for fixed-tier runs.
+        # current_ai_level only updates inside make_decision, which runs AFTER
+        # _evaluate_failure_conditions in the step path — so reading it directly
+        # silently misses the AI-trust reserve discount for fixed-tier agents.
+        # (Mirrors Julia v2 fix #5 at agents.jl:479.)
+        ai_level = self.get_ai_level()
         relief_factor = 1.0
         if ai_level != 'none':
             trust = float(np.clip(self.traits.get('ai_trust', 0.5), 0.0, 1.0))
