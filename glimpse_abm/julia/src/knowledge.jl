@@ -291,7 +291,8 @@ end
 """
 Ensure agent has starter knowledge.
 """
-function ensure_starter_knowledge!(kb::KnowledgeBase, agent_id::Int)
+function ensure_starter_knowledge!(kb::KnowledgeBase, agent_id::Int;
+                                   rng::AbstractRNG=Random.default_rng())
     if !haskey(kb.agent_knowledge, agent_id)
         kb.agent_knowledge[agent_id] = Set{String}()
     end
@@ -322,7 +323,9 @@ function ensure_starter_knowledge!(kb::KnowledgeBase, agent_id::Int)
         cross_domain = filter(kid -> !(kid in starter_set), base_candidates)
     end
     if !isempty(cross_domain)
-        push!(starter_set, rand(cross_domain))
+        # v2.11: use passed rng (was global rand — caused mid-run nondeterminism
+        # because each agent's starter knowledge was sampled off-seed).
+        push!(starter_set, cross_domain[rand(rng, 1:length(cross_domain))])
     end
 end
 
@@ -360,7 +363,7 @@ function get_accessible_knowledge(
     agent_traits::Union{Dict{String,Float64},Nothing}=nothing,
     rng::AbstractRNG=Random.default_rng()
 )::Vector{Knowledge}
-    ensure_starter_knowledge!(kb, agent_id)
+    ensure_starter_knowledge!(kb, agent_id; rng=rng)
     agent_knowledge_ids = kb.agent_knowledge[agent_id]
 
     # Get AI bonuses

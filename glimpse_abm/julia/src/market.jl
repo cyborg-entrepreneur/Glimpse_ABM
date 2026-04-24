@@ -1178,7 +1178,23 @@ function get_opportunities_for_agent(
     end
 
     # Filter and rank by agent perspective
-    return get_perceived_opportunities(market, visible_opps, ai_level, agent)
+    perceived = get_perceived_opportunities(market, visible_opps, ai_level, agent)
+
+    # v2.11: creator-visibility override must survive the perception filter.
+    # get_perceived_opportunities takes the top-N by relevance (sector knowledge).
+    # If the agent has no/low knowledge in the niche's sector, the relevance
+    # tie-break can filter out the agent's own creation — the creator would
+    # NOT see the niche they just created. Re-insert any visible opp where
+    # created_by == agent.id that got dropped by the perception filter.
+    if !isnothing(agent_id)
+        perceived_ids = Set(o.id for o in perceived)
+        for opp in visible_opps
+            if opp.created_by == agent_id && !(opp.id in perceived_ids)
+                push!(perceived, opp)
+            end
+        end
+    end
+    return perceived
 end
 
 """
