@@ -300,7 +300,7 @@ function realized_return(
         # Subsumes both the count-based convexity and the old linear capacity
         # penalty. See plan mossy-sparking-wreath.md for the derivation.
         # =====================================================================
-        K_sat = hasfield(typeof(config), :CROWDING_CAPACITY_RATIO_K) ? config.CROWDING_CAPACITY_RATIO_K : 1.2
+        K_sat = hasfield(typeof(config), :CROWDING_CAPACITY_RATIO_K) ? config.CROWDING_CAPACITY_RATIO_K : 1.5
         γ = hasfield(typeof(config), :CROWDING_CONVEXITY_GAMMA) ? config.CROWDING_CONVEXITY_GAMMA : 2.0
         λ = hasfield(typeof(config), :CROWDING_STRENGTH_LAMBDA) ? config.CROWDING_STRENGTH_LAMBDA : 0.50
 

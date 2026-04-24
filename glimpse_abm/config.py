@@ -507,8 +507,9 @@ class EmergentConfig:
     # the convexity penalty starts. Capital-ratio is population-invariant
     # (capacity and invested capital both scale with N), so unlike
     # CROWDING_CAPACITY_K (count-based) this does NOT scale with √N.
-    # Matches Julia config.jl. Phase 5 tunes this at N=1000.
-    CROWDING_CAPACITY_RATIO_K: float = 1.2
+    # Calibrated on Julia N=1000 × 60 × 4-tier fixed (seed=42): K_sat=1.5
+    # hits 50% aggregate survival, preserves advanced > basic ordering.
+    CROWDING_CAPACITY_RATIO_K: float = 1.5
 
     # Legacy parameters (used when USE_CAPACITY_CONVEXITY_CROWDING = False)
     DISABLE_COMPETITION_DYNAMICS: bool = False  # Master switch to disable competition effects

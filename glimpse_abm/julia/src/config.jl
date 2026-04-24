@@ -369,11 +369,13 @@ parameters preserved for exact behavioral compatibility.
     # capital-ratio and does NOT scale with N — capacity and invested capital
     # both scale together, so the ratio is population-invariant.
     #   K_sat = 1.0 → penalty starts at full capacity
-    #   K_sat = 1.2 → penalty starts 20% above capacity (niche slightly saturated)
-    # Calibration sweep (N=100, seed=42, 4 tiers): K_sat=1.2 preserves v2.12
-    # ordering `advanced > basic > none > premium` with aggregate survival 43%,
-    # closest to v3.0's 42.5%. Phase 5 tunes this at N=1000.
-    CROWDING_CAPACITY_RATIO_K::Float64 = 1.2
+    #   K_sat = 1.5 → penalty starts 50% above capacity (niche meaningfully oversubscribed)
+    # Calibrated on N=1000 × 60 rounds × 4-tier fixed (seed=42):
+    #   K_sat=1.5: none=0.39 basic=0.55 advanced=0.62 premium=0.43 (mean 0.50)
+    #   Hits 50% aggregate target; preserves advanced > basic ordering. Premium
+    #   recovers above v2.12 (0.43 vs 0.38) now that the tier-share penalty is
+    #   gone and only capital-saturation applies.
+    CROWDING_CAPACITY_RATIO_K::Float64 = 1.5
 
     # Legacy parameters (used when USE_CAPACITY_CONVEXITY_CROWDING = false)
     OPPORTUNITY_COMPETITION_PENALTY::Float64 = 0.5  # Return penalty per unit of opp.competition (0.5 = 50% max penalty at competition=1.0)
