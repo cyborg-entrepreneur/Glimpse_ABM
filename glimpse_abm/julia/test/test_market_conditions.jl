@@ -18,12 +18,8 @@ using GlimpseABM
     @test mc isa MarketConditions
     @test mc.regime isa String
     @test mc.volatility isa Float64
-    @test mc.trend isa Float64
-    @test mc.momentum isa Float64
     @test mc.regime_return_multiplier isa Float64
     @test mc.regime_failure_multiplier isa Float64
-    @test mc.n_opportunities isa Int
-    @test mc.exploration_activity isa Float64
     @test mc.round isa Int
     @test mc.tier_invest_share isa Dict{String,Float64}
     @test mc.sector_clearing_index isa Dict{String,Float64}
@@ -37,7 +33,6 @@ using GlimpseABM
     # Non-degenerate values in production path
     @test isfinite(mc.avg_competition)
     @test isfinite(mc.volatility)
-    @test mc.n_opportunities >= 0
 
     # Immutability — catches accidental post-construction mutation
     @test_throws ErrorException mc.regime = "crisis"

@@ -16,12 +16,8 @@ function test_market_conditions(; regime::String="normal",
     return MarketConditions(
         regime,
         volatility,
-        0.0,      # trend
-        1.0,      # momentum
         1.0,      # regime_return_multiplier
         1.0,      # regime_failure_multiplier
-        0,        # n_opportunities
-        0.0,      # exploration_activity
         round,
         Dict{String,Float64}(),                 # tier_invest_share
         Dict{String,Float64}(),                 # sector_clearing_index
