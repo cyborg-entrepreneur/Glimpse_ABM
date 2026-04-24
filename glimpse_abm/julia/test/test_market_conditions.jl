@@ -44,11 +44,17 @@ using GlimpseABM
     @test !haskey(mc, "nonexistent_key")
     @test mc["regime"] == mc.regime
 
-    # uncertainty_state can be injected at construction
+    # uncertainty_state can be injected at construction. v3.3.3: snapshot is
+    # deepcopied, so the struct holds a separate object with equal contents —
+    # not the same reference. Mutating `us` after construction must NOT
+    # mutate the snapshot.
     us = Dict{String,Any}("actor_ignorance" => Dict{String,Any}("level"=>0.5))
     mc2 = GlimpseABM.get_market_conditions(market; uncertainty_state=us)
-    @test mc2.uncertainty_state === us
-    @test mc2.regime == mc.regime  # other fields unchanged
+    @test mc2.uncertainty_state !== us          # separate object
+    @test mc2.uncertainty_state == us           # equal contents at snapshot time
+    us["actor_ignorance"]["level"] = 0.99
+    @test mc2.uncertainty_state["actor_ignorance"]["level"] == 0.5  # isolated
+    @test mc2.regime == mc.regime
 end
 
 println("MarketConditions schema test passed.")

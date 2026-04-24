@@ -72,9 +72,6 @@ function EmergentSimulation(;
         MersenneTwister(actual_seed)
     end
 
-    # Create uncertainty environment
-    uncertainty_env = KnightianUncertaintyEnvironment(config; rng=rng)
-
     # Create market environment
     market = MarketEnvironment(config; rng=rng)
 
@@ -82,6 +79,17 @@ function EmergentSimulation(;
     knowledge_base = KnowledgeBase(config)
     combination_tracker = CombinationTracker()
     innovation_engine = InnovationEngine(config, knowledge_base, combination_tracker)
+
+    # v3.3.3: attach knowledge_base to uncertainty env so agentic-scarcity
+    # perception reads live component-usage state via
+    # get_component_scarcity_metric. Pre-v3.3.3 the env was constructed
+    # without knowledge_base → `_compute_component_scarcity` always hit its
+    # fallback and returned the default 0.5, making the agentic-novelty
+    # scarcity dimension effectively dead. Reviewer probe: 65 innovations
+    # over 12 rounds, scarcity stayed at [0.5] throughout.
+    uncertainty_env = KnightianUncertaintyEnvironment(config;
+                                                      knowledge_base=knowledge_base,
+                                                      rng=rng)
 
     # Create information system for AI-assisted analysis
     info_system = InformationSystem(config)

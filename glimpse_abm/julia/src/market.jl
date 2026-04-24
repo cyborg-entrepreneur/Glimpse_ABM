@@ -432,7 +432,14 @@ function get_market_conditions(market::MarketEnvironment;
         copy(market.crowding_metrics),
         deepcopy(market.sector_demand_adjustments),
         avg_competition,
-        uncertainty_state,
+        # v3.3.3: deepcopy uncertainty_state so the snapshot is actually
+        # isolated from the live KnightianUncertaintyEnvironment. Prior code
+        # stored the same-pointer Dict and all nested dicts; mutating the env
+        # after snapshot (e.g., during a subsequent round-end update) mutated
+        # every outstanding MarketConditions too. Reviewer probe confirmed
+        # same_dict_ref for uncertainty_state after the v3.3.2 snapshot fix
+        # covered only market dicts.
+        deepcopy(uncertainty_state),
         Dict{String,Any}(),  # extras — empty by default
     )
 end
@@ -1056,6 +1063,26 @@ end
 Estimate sector capacity for capital absorption.
 """
 function estimate_sector_capacity(market::MarketEnvironment)::Dict{String,Float64}
+    # Sector-level per-round *fundraising absorption* capacity: how much new
+    # capital the sector can soak up in one round before clearing pressure
+    # drives returns down / failure up. This is deliberately NOT the same as
+    # `opp.capacity` (used by realized_return's convexity penalty) —
+    # opp.capacity is a per-opportunity *lifetime* absorption limit at the
+    # venture level, whereas this estimate_sector_capacity returns a
+    # per-sector *per-round* flow rate driving market-wide supply/demand
+    # dynamics.
+    #
+    # v3.3.3 considered unifying the two around opp.capacity (in response to
+    # a reviewer observation that the two measures disagreed). That unified
+    # version systematically produced cold markets because opp count grows
+    # unboundedly as innovations spawn new opportunities — 30 rounds
+    # accumulates ~200 opps per sector × $15M each = $3B of "capacity."
+    # Reverted and documented the distinction: the two measures operate at
+    # different units (sector-round vs opp-lifetime) and neither is wrong
+    # in isolation. Reviewer's probe saturating at ratio=58.2 was a
+    # calibration-scale artifact of the original formula at N=1000; the
+    # demand adjustment clamp at market.jl:680 bounds the downstream effect
+    # regardless.
     capacity = Dict{String,Float64}()
     for opp in market.opportunities
         sector = isnothing(opp.sector) ? "unknown" : opp.sector
@@ -1141,9 +1168,16 @@ function update_clearing_metrics!(market::MarketEnvironment, agent_actions::Vect
     # NEXT round by realized_return via get_market_conditions. Earlier this
     # block called empty!(), which — combined with the start-of-step empty!()
     # — left the dict empty for every realized_return read.
-    for sector in market.sectors
-        # get_demand_adjustments populates the cache as a side effect and
-        # returns the computed Dict. We ignore the return value here.
+    #
+    # v3.3.3: iterate over all sectors present in clearing_index (not just
+    # market.sectors). Niche-branch sectors (created by
+    # create_niche_opportunity! for innovation-derived niches) are populated
+    # in clearing_index at line 1143 but were missing from
+    # sector_demand_adjustments — niche opps got clearing signal via the
+    # downside term but no return/failure multiplier, inconsistent with
+    # base-sector opps.
+    all_sectors = union(market.sectors, keys(clearing_index))
+    for sector in all_sectors
         get_demand_adjustments(market, sector)
     end
 end
@@ -1405,11 +1439,13 @@ function spawn_opportunity_from_innovation!(
     latent_return *= derived_multiplier
     latent_failure = clamp(0.5 * latent_failure + 0.5 * base_failure_signal, 0.05, 0.95)
 
-    demand_adjustments = get_demand_adjustments(market, branch_name)
-    # Regime effects applied only at realization to avoid double-counting.
-    latent_return *= demand_adjustments["return"]
-    latent_failure *= demand_adjustments["failure"]
-
+    # v3.3.3: removed spawn-time demand adjustment application. The same
+    # signal is applied at realization via sector_demand_adjustments in
+    # realized_return (models.jl:220-225). Baking it into latent_return/
+    # latent_failure at construction caused spawned innovation opps to
+    # receive the demand signal TWICE — once at spawn, once at realization —
+    # while regular opps created via _create_realistic_opportunity received
+    # it only at realization. Single-application matches regular-opp path.
     opp_id = "spawn_$(innovation.id)_$(rand(market.rng, 1000:9999))"
 
     # Novelty score inherited from innovation (novel opportunities are harder to evaluate)
