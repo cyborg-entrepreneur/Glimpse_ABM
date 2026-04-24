@@ -89,7 +89,9 @@ export reinforce_agent_resources!
 
 # Exports - Simulation
 export EmergentSimulation
-export EnhancedSimulation
+# EnhancedSimulation removed in v2.1: it was a stale dual-path that crashed
+# at runtime (undefined update_burn_history!) and lacked v2/v2.1 wirings.
+# Use EmergentSimulation for all production runs.
 export EmergentAgent
 export VectorizedAgentState
 export MarketEnvironment

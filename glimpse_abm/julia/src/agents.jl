@@ -393,7 +393,12 @@ function EmergentAgent(
         get(traits, "competence", 0.5),
         get(traits, "ai_trust", 0.5),
         get(traits, "trait_momentum", 0.7),
-        "none",  # current_ai_level
+        # current_ai_level mirrors fixed_ai_level for fixed-tier agents so direct
+        # reads (analysis scripts, telemetry) classify them correctly. Earlier
+        # this hardcoded "none" and relied on get_ai_level() to mask it, which
+        # worked in main code paths but misled any code that introspected the
+        # field directly.
+        something(fixed_ai_level, "none"),
         fixed_ai_level,
         AILearningProfile(),
         0,  # ai_usage_count
@@ -1671,12 +1676,29 @@ function calculate_investment_utility(
     # Previously this loop scored against opp.latent_return_potential directly,
     # which meant the should-I-invest-at-all decision was ground-truth-aware
     # even after the v2 ranking fix — same bypass, different code path.
+    #
+    # Per-use AI cost deduction (mirrors evaluate_portfolio_opportunities):
+    # for per_use tiers (Basic), each get_information call is a chargeable AI
+    # invocation. Earlier this loop hit get_information without deducting,
+    # so utility evaluation gave Basic tier free AI while portfolio ranking
+    # charged it — split bill from the same evaluator.
+    ai_config_pe = get(agent.config.AI_LEVELS, ai_level, nothing)
+    cost_intensity_pe = agent.config.AI_COST_INTENSITY
+    per_use_charge = if !isnothing(ai_config_pe) && ai_config_pe.cost_type == "per_use"
+        Float64(ai_config_pe.cost) * cost_intensity_pe
+    else
+        0.0
+    end
+
     max_score = 0.0
     avg_score = 0.0
     for opp in opportunities
         est_return = if !isnothing(info_system)
             info = get_information(info_system, opp, ai_level;
                                    agent_id=agent.id, rng=agent.rng)
+            if per_use_charge > 0
+                set_capital!(agent, get_capital(agent) - per_use_charge)
+            end
             info.estimated_return
         else
             opp.latent_return_potential
