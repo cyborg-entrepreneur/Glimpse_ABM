@@ -137,7 +137,7 @@ function Opportunity(;
     # New fields for paradox mechanisms
     novelty_score::Float64 = 0.0,       # 0.0 = established, 1.0 = very novel
     total_invested::Float64 = 0.0,      # Track total investment
-    capacity::Float64 = 500000.0,       # Default capacity
+    capacity::Float64 = 0.0,            # 0 = sentinel: sample from config
     disrupted_count::Int = 0,           # Disruption counter
     # Seedable RNG for reproducible capacity sampling. Default falls back to
     # global rand() for backwards compatibility with ad-hoc Opportunity
@@ -163,11 +163,13 @@ function Opportunity(;
         opp.base_failure_potential = opp.latent_failure_potential
     end
 
-    # Set capacity based on config if available. Uses the passed RNG so
-    # reproducibility is preserved — earlier `rand()` (global RNG) yielded
-    # different capacities even with the same seed because the global RNG
-    # state drifted per-process.
-    if !isnothing(config) && hasfield(typeof(config), :OPPORTUNITY_BASE_CAPACITY)
+    # Sample capacity from config IF the caller didn't pass an explicit value
+    # (capacity==0.0 is the sentinel for "please sample"). Callers that need
+    # a specific capacity — e.g., tests probing the crowding penalty, or
+    # spawn_opportunity_from_innovation! which computes its own — pass
+    # capacity=… and keep their explicit value. Uses the passed RNG so
+    # reproducibility is preserved across seeds.
+    if opp.capacity <= 0.0 && !isnothing(config) && hasfield(typeof(config), :OPPORTUNITY_BASE_CAPACITY)
         variance = hasfield(typeof(config), :OPPORTUNITY_CAPACITY_VARIANCE) ? config.OPPORTUNITY_CAPACITY_VARIANCE : 0.3
         opp.capacity = config.OPPORTUNITY_BASE_CAPACITY * (1.0 + (rand(rng) - 0.5) * 2 * variance)
     end

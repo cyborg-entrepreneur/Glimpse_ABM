@@ -197,6 +197,7 @@ using DataFrames
     include("test_diagnostics.jl")
     include("test_action_keys.jl")
     include("test_market_conditions.jl")
+    include("test_crowding_convexity.jl")
 
 end
 
