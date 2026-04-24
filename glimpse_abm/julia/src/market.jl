@@ -395,6 +395,13 @@ end
 Get current market conditions dictionary.
 """
 function get_market_conditions(market::MarketEnvironment)::Dict{String,Any}
+    # v2.12: emit avg_competition. simulation.jl:230 reads it to compute the
+    # operational-cost severity multiplier; it was consuming with a 0.0 fallback
+    # because market never emitted it. Result: the severity-competition term was
+    # always 0, so sector crowding never affected operational cost severity.
+    comp_values = [o.competition for o in market.opportunities if o.discovered]
+    avg_competition = isempty(comp_values) ? 0.0 : mean(comp_values)
+
     return Dict{String,Any}(
         "regime" => market.market_regime,
         "volatility" => market.volatility,
@@ -408,6 +415,7 @@ function get_market_conditions(market::MarketEnvironment)::Dict{String,Any}
         "sector_clearing_index" => market.sector_clearing_index,
         "aggregate_clearing_ratio" => market.aggregate_clearing_ratio,
         "crowding_metrics" => market.crowding_metrics,
+        "avg_competition" => avg_competition,
         # v2.7: emit sector_demand_adjustments so realized_return (models.jl:218)
         # can actually apply per-sector demand/supply scaling. Earlier the field
         # existed on the market but was never packaged into the conditions dict —

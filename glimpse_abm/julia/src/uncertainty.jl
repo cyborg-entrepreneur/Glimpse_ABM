@@ -1725,7 +1725,9 @@ function perceive_uncertainty(
     ai_usage_share = 1.0 - ai_shares[1]  # 1 - none share
 
     # Competition signal (matching Python structure)
-    ai_tier_shares_from_conditions = get(market_conditions, "ai_tier_shares", Dict{String,Float64}())
+    # v2.12: removed dead `ai_tier_shares_from_conditions` local — it was
+    # assigned from market_conditions["ai_tier_shares"] (never emitted) and
+    # never read. Silent-zero masking dead code.
     competition_signal = Dict{String,Any}(
         "pressure_level" => recursion_level,
         "herding_awareness" => avg_pressure,
