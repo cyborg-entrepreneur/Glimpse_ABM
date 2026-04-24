@@ -1227,7 +1227,7 @@ function perceive_uncertainty(
     env::KnightianUncertaintyEnvironment,
     agent_traits::Dict{String,Float64},
     visible_opportunities::Vector,
-    market_conditions::Dict{String,Any};
+    market_conditions::Union{MarketConditions,Dict{String,Any}};
     ai_level::String = "none",
     agent_knowledge::Set{String} = Set{String}(),
     sector_knowledge::Dict{String,Float64} = Dict{String,Float64}(),
@@ -1240,7 +1240,7 @@ function perceive_uncertainty(
 )::Dict{String,Any}
     perception = Dict{String,Any}()
     env_state = env._last_environment_state
-    current_round = get(market_conditions, "round", 0)
+    current_round = market_conditions.round
     volatility = Float64(get(env._volatility_state, "volatility_metric", 0.0))
 
     # Get global action shares from volatility state
@@ -1439,8 +1439,8 @@ function perceive_uncertainty(
     # PRACTICAL INDETERMINISM PERCEPTION
     # ========================================================================
 
-    market_volatility = Float64(get(market_conditions, "volatility", 0.2))
-    regime = get(market_conditions, "regime", "normal")
+    market_volatility = Float64(market_conditions.volatility)
+    regime = market_conditions.regime
     regime_uncertainty_map = Dict(
         "boom" => 0.3, "growth" => 0.2, "normal" => 0.1,
         "recession" => 0.4, "crisis" => 0.7
@@ -1679,7 +1679,7 @@ function perceive_uncertainty(
     end
 
     ai_herding_intensity = Float64(get(env.practical_indeterminism_state, "ai_herding_intensity", 0.0))
-    capital_crowding = Float64(get(get(market_conditions, "crowding_metrics", Dict()), "crowding_index", 0.0))
+    capital_crowding = Float64(get(market_conditions.crowding_metrics, "crowding_index", 0.0))
 
     # Raw recursion level (matching Python)
     recursion_raw = (
@@ -1750,7 +1750,7 @@ function perceive_uncertainty(
         "ai_usage_share" => ai_usage_share
     )
 
-    perception["crowding_metrics"] = get(market_conditions, "crowding_metrics", Dict())
+    perception["crowding_metrics"] = market_conditions.crowding_metrics
     perception["volatility_metric"] = volatility
     perception["action_profile"] = Dict{String,Float64}(
         "invest" => share_invest,

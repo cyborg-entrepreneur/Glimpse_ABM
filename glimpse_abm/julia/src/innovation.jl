@@ -159,7 +159,7 @@ Attempt to create an innovation.
 function attempt_innovation!(
     engine::InnovationEngine,
     agent::Any,  # EmergentAgent - using Any to avoid circular dependency
-    market_conditions::Dict{String,Any},
+    market_conditions::Union{MarketConditions,Dict{String,Any}},
     round::Int;
     ai_level::String="none",
     uncertainty_perception::Union{Dict{String,Any},Nothing}=nothing,
@@ -365,7 +365,7 @@ function determine_innovation_type(
     engine::InnovationEngine,
     knowledge_pieces::Vector{Knowledge},
     agent_traits::Dict{String,Float64},
-    market_conditions::Dict{String,Any};
+    market_conditions::Union{MarketConditions,Dict{String,Any}};
     ai_assisted::Bool=false,
     experience_units::Float64=0.0,
     rng::AbstractRNG=Random.default_rng()
@@ -377,7 +377,7 @@ function determine_innovation_type(
         "disruptive" => 0.1 + get(agent_traits, "exploration_tendency", 0.5) * 0.2
     )
 
-    if get(market_conditions, "regime", "normal") == "crisis"
+    if market_conditions.regime == "crisis"
         base_probabilities["disruptive"] += 0.05
     end
 
@@ -663,7 +663,7 @@ Evaluate innovation success.
 function evaluate_innovation_success!(
     engine::InnovationEngine,
     innovation::Innovation,
-    market_conditions::Dict{String,Any},
+    market_conditions::Union{MarketConditions,Dict{String,Any}},
     market_innovations::Vector{Innovation};
     rng::AbstractRNG=Random.default_rng()
 )::Tuple{Bool,Float64,Float64}

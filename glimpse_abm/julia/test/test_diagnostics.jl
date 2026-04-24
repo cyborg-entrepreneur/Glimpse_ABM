@@ -13,6 +13,8 @@ using Statistics
 push!(LOAD_PATH, joinpath(@__DIR__, "..", "src"))
 using GlimpseABM
 
+include("test_helpers.jl")
+
 const N_OPPS_DIAG = 20
 
 """Build a 1-agent fixed-tier setup with a known opportunity pool."""
@@ -46,8 +48,7 @@ end
         per_use = Float64(cfg.AI_LEVELS["basic"].cost) * cfg.AI_COST_INTENSITY
         @test per_use > 0  # Sanity
 
-        market_conditions = Dict{String,Any}("regime"=>"normal",
-                                             "uncertainty_state"=>Dict{String,Any}())
+        market_conditions = test_market_conditions()
         perception = Dict{String,Any}()
         evals = GlimpseABM.evaluate_portfolio_opportunities(
             agent, opps, market_conditions, perception;
@@ -67,8 +68,7 @@ end
         cfg, market, info_system, agent, opps = _diag_setup("basic")
         per_use = Float64(cfg.AI_LEVELS["basic"].cost) * cfg.AI_COST_INTENSITY
 
-        market_conditions = Dict{String,Any}("regime"=>"normal",
-                                             "uncertainty_state"=>Dict{String,Any}())
+        market_conditions = test_market_conditions()
         perception = Dict{String,Any}()
 
         # First call: ALL fresh — full charge
