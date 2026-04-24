@@ -666,11 +666,29 @@ function get_demand_adjustments(market::MarketEnvironment, sector::String)::Dict
         return market.sector_demand_adjustments[sector]
     end
 
-    # Get clearing ratio
-    clearing_ratio = get(market.sector_clearing_index, sector, market.aggregate_clearing_ratio)
-    if !isfinite(clearing_ratio)
-        clearing_ratio = market.aggregate_clearing_ratio
+    # v3.3.4: normalize sector ratio by aggregate so sectors are compared
+    # RELATIVE to market-wide supply/demand pressure, not absolute
+    # magnitudes. At N=1000 agents the raw demand/supply ratio can reach 50+
+    # in every sector because capital_requirements (supply proxy) is a
+    # fundraising-gate floor and doesn't scale with population flow. Pre-
+    # v3.3.4 this saturated all four sectors at the return_penalty clamp of
+    # 3.0 (reviewer probe), flattening inter-sector heterogeneity — premium
+    # agents couldn't differentiate sectors by clearing pressure. The
+    # normalized ratio (sector / aggregate) preserves relative hot/cold
+    # heterogeneity even under extreme absolute values.
+    raw_sector_ratio = get(market.sector_clearing_index, sector, market.aggregate_clearing_ratio)
+    if !isfinite(raw_sector_ratio)
+        raw_sector_ratio = market.aggregate_clearing_ratio
     end
+    agg_ratio = market.aggregate_clearing_ratio
+    if !isfinite(agg_ratio) || agg_ratio <= 0.0
+        clearing_ratio = raw_sector_ratio  # fall back to raw when aggregate is zero (early rounds)
+    else
+        clearing_ratio = raw_sector_ratio / agg_ratio
+    end
+    # Still cap the normalized signal to a reasonable economic range —
+    # extreme outlier sectors shouldn't blow up the formula.
+    clearing_ratio = clamp(clearing_ratio, 0.1, 5.0)
 
     # Crowding calculations
     crowd_threshold = market.config.RETURN_DEMAND_CROWDING_THRESHOLD
@@ -1156,7 +1174,16 @@ function update_clearing_metrics!(market::MarketEnvironment, agent_actions::Vect
     market.sector_clearing_index = clearing_index
     market.aggregate_clearing_ratio = total_demand / total_capacity
 
-    # Update tier invest shares
+    # Update tier invest shares. v3.3.4: rebuild from scratch each round so
+    # tiers with zero demand this round get 0.0 (not their stale share from
+    # a prior round). Prior code only wrote keys for tiers actually in
+    # tier_flows — so on a no-invest round, every tier's share stayed frozen
+    # at its last non-zero value (reviewer probe: premium stayed at 1.0
+    # after an empty round). Rebuild ensures the share dict is always a
+    # current-round snapshot.
+    for tier in keys(market.tier_invest_share)
+        market.tier_invest_share[tier] = 0.0
+    end
     if total_demand > 0
         for (tier, flow) in tier_flows
             market.tier_invest_share[tier] = flow / total_demand
@@ -1348,11 +1375,14 @@ function create_niche_opportunity(
     latent_failure *= mods["uncertainty_mult"]
     capital_req *= mods["capital_mult"]
 
-    demand_adjustments = get_demand_adjustments(market, branch_name)
-    # Regime effects applied only at realization to avoid double-counting.
-    latent_return *= demand_adjustments["return"]
-    latent_failure *= demand_adjustments["failure"]
-
+    # v3.3.4: removed creation-time demand adjustment application for the
+    # same reason v3.3.3 removed it from spawn_opportunity_from_innovation!.
+    # The demand signal is applied once at realization via
+    # sector_demand_adjustments in realized_return (models.jl:220-225). Baking
+    # it into latent_return/latent_failure at construction caused niche opps
+    # to receive the signal twice — a hot niche's latent return inflated 2.83×
+    # before realization (reviewer probe) while regular-path opps saw the
+    # adjustment only once.
     niche_opp = Opportunity(
         id="niche_$(branch_name)_$(round_num)_$(rand(market.rng, 1000:9999))",
         latent_return_potential=clamp(latent_return, 0.5, 25.0),
