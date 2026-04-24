@@ -88,7 +88,9 @@ function run_single_sim(tier::String; n_agents=BASE_N_AGENTS, n_rounds=BASE_N_RO
         N_ROUNDS=n_rounds,
         RANDOM_SEED=seed,
         INITIAL_CAPITAL=initial_capital,
-        SURVIVAL_THRESHOLD=survival_threshold
+        SURVIVAL_THRESHOLD=survival_threshold,
+        USE_UNIFORM_INITIAL_CAPITAL=true,
+        USE_UNIFORM_SURVIVAL_THRESHOLD=true
     )
 
     tier_dist = Dict(t => (t == tier ? 1.0 : 0.0) for t in ["none", "basic", "advanced", "premium"])
@@ -376,7 +378,9 @@ function run_sim_with_checkpoints(tier::String; n_agents=BASE_N_AGENTS, n_rounds
         N_ROUNDS=n_rounds,
         RANDOM_SEED=seed,
         INITIAL_CAPITAL=5_000_000.0,
-        SURVIVAL_THRESHOLD=10_000.0
+        SURVIVAL_THRESHOLD=10_000.0,
+            USE_UNIFORM_INITIAL_CAPITAL=true,
+            USE_UNIFORM_SURVIVAL_THRESHOLD=true
     )
 
     tier_dist = Dict(t => (t == tier ? 1.0 : 0.0) for t in ["none", "basic", "advanced", "premium"])

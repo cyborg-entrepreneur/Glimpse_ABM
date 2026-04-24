@@ -32,7 +32,9 @@ function run_calibration_test(competition_scale::Float64, crowding_penalty::Floa
                 N_ROUNDS=N_ROUNDS,
                 RANDOM_SEED=seed,
                 INITIAL_CAPITAL=5_000_000.0,
-                SURVIVAL_THRESHOLD=10_000.0,
+                SURVIVAL_THRESHOLD=10_000.0,,
+            USE_UNIFORM_INITIAL_CAPITAL=true,
+            USE_UNIFORM_SURVIVAL_THRESHOLD=true
                 COMPETITION_SCALE_FACTOR=competition_scale,
                 RETURN_DEMAND_CROWDING_PENALTY=crowding_penalty,
                 OPPORTUNITY_COMPETITION_PENALTY=crowding_penalty

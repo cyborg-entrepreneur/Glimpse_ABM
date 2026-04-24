@@ -84,7 +84,9 @@ function run_simulation(tier::String; seed=42, n_rounds=N_ROUNDS,
         N_ROUNDS=n_rounds,
         RANDOM_SEED=seed,
         INITIAL_CAPITAL=5_000_000.0,
-        SURVIVAL_THRESHOLD=10_000.0
+        SURVIVAL_THRESHOLD=10_000.0,
+        USE_UNIFORM_INITIAL_CAPITAL=true,
+        USE_UNIFORM_SURVIVAL_THRESHOLD=true
     )
 
     # Apply any config overrides
@@ -279,7 +281,8 @@ for (cap, label) in zip(capital_levels, capital_labels)
         seed = BASE_SEED + 100000 + (tier == "premium" ? 30000 : 0) + actual_idx
 
         config = EmergentConfig(N_AGENTS=N_AGENTS, N_ROUNDS=N_ROUNDS, RANDOM_SEED=seed,
-                                INITIAL_CAPITAL=cap, SURVIVAL_THRESHOLD=10_000.0)
+                                INITIAL_CAPITAL=cap, SURVIVAL_THRESHOLD=10_000.0,
+                                USE_UNIFORM_INITIAL_CAPITAL=true, USE_UNIFORM_SURVIVAL_THRESHOLD=true)
         tier_dist = Dict(t => (t == tier ? 1.0 : 0.0) for t in AI_TIERS)
         sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=tier_dist)
         for r in 1:N_ROUNDS
@@ -317,7 +320,8 @@ for n in pop_sizes
         seed = BASE_SEED + 200000 + (tier == "premium" ? 30000 : 0) + actual_idx
 
         config = EmergentConfig(N_AGENTS=n, N_ROUNDS=N_ROUNDS, RANDOM_SEED=seed,
-                                INITIAL_CAPITAL=5_000_000.0, SURVIVAL_THRESHOLD=10_000.0)
+                                INITIAL_CAPITAL=5_000_000.0, SURVIVAL_THRESHOLD=10_000.0,
+                                USE_UNIFORM_INITIAL_CAPITAL=true, USE_UNIFORM_SURVIVAL_THRESHOLD=true)
         tier_dist = Dict(t => (t == tier ? 1.0 : 0.0) for t in AI_TIERS)
         sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=tier_dist)
         for r in 1:N_ROUNDS
@@ -356,7 +360,8 @@ for (rounds, label) in zip(time_horizons, time_labels)
         seed = BASE_SEED + 300000 + (tier == "premium" ? 30000 : 0) + actual_idx
 
         config = EmergentConfig(N_AGENTS=N_AGENTS, N_ROUNDS=rounds, RANDOM_SEED=seed,
-                                INITIAL_CAPITAL=5_000_000.0, SURVIVAL_THRESHOLD=10_000.0)
+                                INITIAL_CAPITAL=5_000_000.0, SURVIVAL_THRESHOLD=10_000.0,
+                                USE_UNIFORM_INITIAL_CAPITAL=true, USE_UNIFORM_SURVIVAL_THRESHOLD=true)
         tier_dist = Dict(t => (t == tier ? 1.0 : 0.0) for t in AI_TIERS)
         sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=tier_dist)
         for r in 1:rounds
@@ -394,7 +399,8 @@ for seed_base in seed_bases
         seed = seed_base + (tier == "premium" ? 30000 : 0) + actual_idx
 
         config = EmergentConfig(N_AGENTS=N_AGENTS, N_ROUNDS=N_ROUNDS, RANDOM_SEED=seed,
-                                INITIAL_CAPITAL=5_000_000.0, SURVIVAL_THRESHOLD=10_000.0)
+                                INITIAL_CAPITAL=5_000_000.0, SURVIVAL_THRESHOLD=10_000.0,
+                                USE_UNIFORM_INITIAL_CAPITAL=true, USE_UNIFORM_SURVIVAL_THRESHOLD=true)
         tier_dist = Dict(t => (t == tier ? 1.0 : 0.0) for t in AI_TIERS)
         sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=tier_dist)
         for r in 1:N_ROUNDS
@@ -620,7 +626,9 @@ for (test_idx, test) in enumerate(refutation_tests)
             N_ROUNDS=N_ROUNDS,
             RANDOM_SEED=seed,
             INITIAL_CAPITAL=5_000_000.0,
-            SURVIVAL_THRESHOLD=10_000.0
+            SURVIVAL_THRESHOLD=10_000.0,
+        USE_UNIFORM_INITIAL_CAPITAL=true,
+        USE_UNIFORM_SURVIVAL_THRESHOLD=true
         )
 
         # Apply test modifications
@@ -701,7 +709,9 @@ function run_dynamic_adoption_test(; seed=42)
         N_ROUNDS=N_ROUNDS,
         RANDOM_SEED=seed,
         INITIAL_CAPITAL=5_000_000.0,
-        SURVIVAL_THRESHOLD=10_000.0
+        SURVIVAL_THRESHOLD=10_000.0,
+        USE_UNIFORM_INITIAL_CAPITAL=true,
+        USE_UNIFORM_SURVIVAL_THRESHOLD=true
     )
 
     tier_dist = Dict(t => 0.25 for t in AI_TIERS)

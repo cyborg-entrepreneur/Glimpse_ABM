@@ -187,7 +187,7 @@ contingencies.
 """
 function realized_return(
     opp::Opportunity,
-    market_conditions::Union{MarketConditions,Dict{String,Any}},
+    market_conditions::MarketConditions,
     investor_tier::Union{String,Nothing} = nothing;
     rng::Random.AbstractRNG = Random.default_rng()
 )::Float64
@@ -519,7 +519,7 @@ end
 """
 Estimate market potential based on innovation attributes.
 """
-function calculate_potential(innov::Innovation, market_conditions::Union{MarketConditions,Dict{String,Any}})::Float64
+function calculate_potential(innov::Innovation, market_conditions::MarketConditions)::Float64
     base_potential = innov.quality * (0.5 + 0.5 * innov.novelty)
 
     type_modifiers = Dict(
@@ -1079,7 +1079,7 @@ Check for matured investments and process outcomes.
 function check_matured_investments!(
     portfolio::Portfolio,
     current_round::Int,
-    market_conditions::Union{MarketConditions,Dict{String,Any}};
+    market_conditions::MarketConditions;
     rng::Random.AbstractRNG = Random.default_rng()
 )::Vector{Dict{String,Any}}
     newly_matured = Dict{String,Any}[]
