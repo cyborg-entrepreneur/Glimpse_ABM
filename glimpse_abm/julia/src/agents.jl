@@ -354,22 +354,27 @@ function EmergentAgent(
         primary_sector
     end
 
-    # Sample initial capital from sector-specific range (NVCA 2024 calibrated).
-    # Precedence: explicit `initial_capital` kwarg → sector_profile.initial_capital_range
-    # → config.INITIAL_CAPITAL_RANGE (never config.INITIAL_CAPITAL). Scripts that
-    # set config.INITIAL_CAPITAL hoping to force a uniform starting capital are
-    # silently ignored — the scalar field is documentation only. Pass
-    # `initial_capital=X` to this constructor to force a specific value per agent,
-    # or modify the sector profile's initial_capital_range to shift the range.
-    capital = if isnothing(initial_capital)
+    # Sample initial capital. Precedence (v2.9):
+    # 1. Explicit `initial_capital` kwarg (per-agent override)
+    # 2. config.INITIAL_CAPITAL if set to a non-default value (uniform across agents)
+    # 3. sector_profile.initial_capital_range (sector-specific sample, default path)
+    # 4. config.INITIAL_CAPITAL_RANGE (fallback if sector profile lacks the field)
+    # Earlier (v2.8) the scalar config.INITIAL_CAPITAL was ignored even when
+    # scripts set it — they'd compute multipliers against 5M while actual
+    # initial equity ranged $1.4M-$7.5M per sector. Now honored when set.
+    default_initial_capital = 5_000_000.0
+    capital = if !isnothing(initial_capital)
+        initial_capital
+    elseif abs(config.INITIAL_CAPITAL - default_initial_capital) > 1.0
+        # User explicitly set INITIAL_CAPITAL away from default — honor it
+        config.INITIAL_CAPITAL
+    else
         sector_profile = get(config.SECTOR_PROFILES, sector, nothing)
         if !isnothing(sector_profile) && hasproperty(sector_profile, :initial_capital_range)
             rand(rng, Uniform(sector_profile.initial_capital_range...))
         else
             rand(rng, Uniform(config.INITIAL_CAPITAL_RANGE...))
         end
-    else
-        initial_capital
     end
 
     # Sample traits
@@ -863,6 +868,18 @@ function _execute_innovate!(
     outcome["rd_spend"] = rd_spend
     outcome["ai_tier_used"] = ai_tier
 
+    # v2.9: charge per-use AI cost when an innovation attempt is made by a
+    # per_use tier (Basic). Innovation consumes AI info_quality + info_breadth
+    # downstream; earlier Basic agents got those effects for free. Mirrors
+    # _execute_explore! and evaluate_portfolio_opportunities.
+    ai_cfg = get(agent.config.AI_LEVELS, ai_tier, nothing)
+    if !isnothing(ai_cfg) && ai_cfg.cost_type == "per_use" && ai_tier != "none"
+        per_use_charge = Float64(ai_cfg.cost) * agent.config.AI_COST_INTENSITY
+        if per_use_charge > 0
+            set_capital!(agent, get_capital(agent) - per_use_charge)
+        end
+    end
+
     # =========================================================================
     # USE KNOWLEDGE-BASED INNOVATION SYSTEM (if available)
     # =========================================================================
@@ -1031,6 +1048,17 @@ function _execute_explore!(
         ai_config = get(agent.config.AI_LEVELS, ai_tier, nothing)
         info_quality = isnothing(ai_config) ? 0.25 : Float64(ai_config.info_quality)
         info_breadth = isnothing(ai_config) ? 0.20 : Float64(ai_config.info_breadth)
+
+        # v2.9: charge per-use AI cost when exploration uses AI info_quality /
+        # info_breadth. Earlier Basic tier got AI exploration benefits for
+        # free — per-use billing only fired in the investment-information
+        # path. Mirrors the same pattern used in evaluate_portfolio_opportunities.
+        if !isnothing(ai_config) && ai_config.cost_type == "per_use" && ai_tier != "none"
+            per_use_charge = Float64(ai_config.cost) * agent.config.AI_COST_INTENSITY
+            if per_use_charge > 0
+                set_capital!(agent, get_capital(agent) - per_use_charge)
+            end
+        end
 
         # Increase knowledge in a random sector
         sector = rand(agent.rng, agent.config.SECTORS)
@@ -2199,9 +2227,14 @@ function apply_uncertainty_adjustments(
     adjusted = base_score
 
     # Competition adjustment
+    # v2.9: INVERSION FIX. Earlier `adjusted *= 1.0 - (tolerance * competition * 0.5)`
+    # meant high-tolerance agents received LARGER penalties, which is backwards:
+    # uncertainty_tolerance captures appetite for ambiguity, so high-tolerance
+    # agents should be LESS bothered by competition. Corrected to (1.0 - tolerance).
     if opportunity.competition > 0.5
         tolerance = get(agent.traits, "uncertainty_tolerance", 0.5)
-        adjusted *= 1.0 - (tolerance * opportunity.competition * 0.5)
+        intolerance = 1.0 - tolerance
+        adjusted *= 1.0 - (intolerance * opportunity.competition * 0.5)
     end
 
     # Social proof (herding tendency)

@@ -280,7 +280,15 @@ function step!(
     matured_outcomes::Vector{Dict{String,Any}} = Dict{String,Any}[]
 )::Dict{String,Any}
     market.current_round = round
-    empty!(market.sector_demand_adjustments)
+    # v2.9: do NOT clear market.sector_demand_adjustments at the start of
+    # market.step! anymore. realized_return reads them from market_conditions
+    # during Phase 4 (process_matured_investments!) BEFORE market.step!
+    # executes this round — so clearing here would leave the dict empty for
+    # every matured investment. The adjustments are now treated as a
+    # one-round-stale cache: populated during Phase 5.5 (update_clearing_metrics!)
+    # using this round's flow + clearing data, then read on the NEXT round's
+    # Phase 4 by realized_return. Stale-by-one-month is acceptable for a
+    # monthly sim (the market-wide demand state doesn't fluctuate that fast).
 
     # Record innovations
     append!(market.innovations, innovations)
@@ -1086,8 +1094,16 @@ function update_clearing_metrics!(market::MarketEnvironment, agent_actions::Vect
         end
     end
 
-    # Clear demand adjustments cache
-    empty!(market.sector_demand_adjustments)
+    # v2.9: compute fresh sector_demand_adjustments for every sector using
+    # THIS round's clearing metrics + crowding flow. These are read on the
+    # NEXT round by realized_return via get_market_conditions. Earlier this
+    # block called empty!(), which — combined with the start-of-step empty!()
+    # — left the dict empty for every realized_return read.
+    for sector in market.sectors
+        # get_demand_adjustments populates the cache as a side effect and
+        # returns the computed Dict. We ignore the return value here.
+        get_demand_adjustments(market, sector)
+    end
 end
 
 # ============================================================================

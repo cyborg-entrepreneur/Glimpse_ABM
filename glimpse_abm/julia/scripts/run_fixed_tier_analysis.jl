@@ -125,7 +125,7 @@ function run_single_simulation(tier::String, run_idx::Int, seed::Int)
 
     # Create homogeneous tier distribution
     tier_dist = Dict(t => (t == tier ? 1.0 : 0.0) for t in AI_TIERS)
-    sim = EmergentSimulation(config=config, initial_tier_distribution=tier_dist)
+    sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=tier_dist)
 
     # Get actual initial equity per agent (from resources.performance.initial_equity)
     actual_initial_equities = [a.resources.performance.initial_equity for a in sim.agents]

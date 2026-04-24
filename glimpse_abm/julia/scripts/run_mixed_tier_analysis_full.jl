@@ -82,10 +82,25 @@ function run_single_mixed_simulation(run_idx::Int, seed::Int)
         seed=seed
     )
 
-    # Override with fixed tier assignments
+    # Override with fixed tier assignments.
+    # v2.9: when overriding tier after construction, we must reset subscriptions
+    # to match the new tier. The constructor started a subscription for each
+    # agent's originally-sampled tier; leaving those in place while switching
+    # fixed_ai_level corrupts billing (agent pays for tier X while using tier Y).
     for (i, agent) in enumerate(sim.agents)
-        agent.fixed_ai_level = tier_assignments[i]
-        agent.current_ai_level = tier_assignments[i]
+        old_tier = agent.fixed_ai_level
+        new_tier = tier_assignments[i]
+        agent.fixed_ai_level = new_tier
+        agent.current_ai_level = new_tier
+        # Cancel all prior subscriptions; ensure_subscription_schedule! will
+        # also cancel non-matching tiers internally, but this call pattern is
+        # explicit and safer.
+        for tier in collect(keys(agent.subscription_accounts))
+            GlimpseABM.cancel_subscription_schedule!(agent, tier)
+        end
+        if new_tier != "none"
+            GlimpseABM.ensure_subscription_schedule!(agent, new_tier)
+        end
     end
 
     # Initialize tracking structures

@@ -115,7 +115,12 @@ function run_dynamic_simulation(; seed=42)
         final_tiers[tier] += 1
 
         survived_count, total_count = tier_survival[tier]
-        survived = agent.resources.capital > config.SURVIVAL_THRESHOLD
+        # v2.9: use agent.alive (which respects sector thresholds + equity
+        # failure + grace period) instead of raw capital > scalar threshold.
+        # Earlier `capital > config.SURVIVAL_THRESHOLD` ignored sector-specific
+        # thresholds, equity failure, and insolvency grace — scripts reported
+        # artificially high survival rates.
+        survived = agent.alive
         tier_survival[tier] = (survived_count + (survived ? 1 : 0), total_count + 1)
     end
 

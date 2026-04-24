@@ -106,8 +106,11 @@ function run_mixed_simulation(; seed=42, n_rounds=N_ROUNDS)
     for agent in sim.agents
         tier = get_ai_level(agent)
         survived_count, total_count = tier_survival[tier]
+        # v2.9: use agent.alive (respects sector thresholds + equity failure
+        # + grace period). Earlier scalar capital-vs-threshold check ignored
+        # sector-specific thresholds and the full failure pipeline.
         tier_survival[tier] = (
-            survived_count + (agent.resources.capital > config.SURVIVAL_THRESHOLD ? 1 : 0),
+            survived_count + (agent.alive ? 1 : 0),
             total_count + 1
         )
     end

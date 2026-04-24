@@ -91,7 +91,7 @@ function run_simulation(tier::String, run_idx::Int; seed=nothing)
     config = create_config(seed=seed)
 
     tier_dist = Dict(t => (t == tier ? 1.0 : 0.0) for t in AI_TIERS)
-    sim = EmergentSimulation(config=config, initial_tier_distribution=tier_dist)
+    sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=tier_dist)
 
     survival_traj = Float64[]
     cr_traj = Float64[]
@@ -592,7 +592,7 @@ placebo_premium = Float64[]
 for i in 1:n_placebo
     seed = BASE_SEED + 50000 + i
     config = create_config(seed=seed)
-    sim = EmergentSimulation(config=config, initial_tier_distribution=Dict("basic"=>1.0, "none"=>0.0, "advanced"=>0.0, "premium"=>0.0))
+    sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=Dict("basic"=>1.0, "none"=>0.0, "advanced"=>0.0, "premium"=>0.0))
 
     for r in 1:config.N_ROUNDS
         GlimpseABM.step!(sim, r)
@@ -622,7 +622,7 @@ balanced_results_prem = Float64[]
 for i in 1:n_balanced
     seed = BASE_SEED + 60000 + i
     config = create_config(seed=seed)
-    sim = EmergentSimulation(config=config, initial_tier_distribution=Dict(t=>0.25 for t in AI_TIERS))
+    sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=Dict(t=>0.25 for t in AI_TIERS))
 
     for r in 1:config.N_ROUNDS
         GlimpseABM.step!(sim, r)
