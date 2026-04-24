@@ -1001,6 +1001,13 @@ function _execute_explore!(
         outcome["info_breadth_used"] = info_breadth
         outcome["serendipity_factor"] = serendipity_factor
         outcome["systematic_factor"] = systematic_factor
+        # Tag the outcome so simulation.jl:459 (which checks for
+        # exploration_type == "niche_discovery") actually fires create_niche_opportunity.
+        # Previously only `created_niche` Bool was set; the trigger string was missing,
+        # so niche creation was wired but never fired.
+        if created_niche
+            outcome["exploration_type"] = "niche_discovery"
+        end
 
         # Track for emergent agentic novelty
         record_creative_action!(agent.uncertainty_metrics; niche_discovered=created_niche)
@@ -1646,7 +1653,8 @@ function calculate_investment_utility(
     opportunities::Vector{Opportunity},
     market_conditions::Dict{String,Any},
     perception::Dict{String,Any};
-    ai_level::String = "none"
+    ai_level::String = "none",
+    info_system::Union{InformationSystem,Nothing} = nothing
 )::Float64
     if isempty(opportunities)
         return 0.0
@@ -1657,19 +1665,31 @@ function calculate_investment_utility(
     info_quality = isnothing(ai_config) ? 0.25 : Float64(ai_config.info_quality)
     info_breadth = isnothing(ai_config) ? 0.20 : Float64(ai_config.info_breadth)
 
-    # Get best opportunity score with AI-enhanced evaluation
+    # Get best opportunity score with AI-enhanced evaluation.
+    # Use the agent's PERCEIVED return (estimated_return from InformationSystem)
+    # when available, falling back to latent only for diagnostic paths.
+    # Previously this loop scored against opp.latent_return_potential directly,
+    # which meant the should-I-invest-at-all decision was ground-truth-aware
+    # even after the v2 ranking fix — same bypass, different code path.
     max_score = 0.0
     avg_score = 0.0
     for opp in opportunities
-        base_score = evaluate_opportunity_basic(agent, opp, market_conditions)
+        est_return = if !isnothing(info_system)
+            info = get_information(info_system, opp, ai_level;
+                                   agent_id=agent.id, rng=agent.rng)
+            info.estimated_return
+        else
+            opp.latent_return_potential
+        end
 
-        # AI tier advantage: better info_quality = more accurate opportunity assessment
-        # Higher info_quality reduces noise in evaluation (sees true potential better)
-        noise_reduction = info_quality * 0.3  # Up to 30% noise reduction for premium
-        ai_adjusted_score = base_score * (1.0 + noise_reduction * (opp.latent_return_potential - 1.0))
+        base_score = evaluate_opportunity_basic(agent, opp, market_conditions;
+                                                estimated_return=est_return)
 
-        # info_breadth helps identify opportunities across more sectors
-        breadth_bonus = info_breadth * 0.1 * (1.0 - opp.complexity)  # Simpler opps benefit more from broad view
+        # AI tier advantage now reflects perceived (not latent) return.
+        noise_reduction = info_quality * 0.3
+        ai_adjusted_score = base_score * (1.0 + noise_reduction * (est_return - 1.0))
+
+        breadth_bonus = info_breadth * 0.1 * (1.0 - opp.complexity)
         ai_adjusted_score += breadth_bonus
 
         max_score = max(max_score, ai_adjusted_score)
@@ -2043,7 +2063,20 @@ function evaluate_portfolio_opportunities(
     estimated_returns = Dict{String,Float64}()
 
     if !isnothing(info_system)
-        # Production path: full InformationSystem with hallucination chain
+        # Production path: full InformationSystem with hallucination chain.
+        # For per_use tiers (Basic), deduct the documented per-use AI cost
+        # for each get_information call. Previously per_use_cost was only
+        # referenced in cost-estimation/planning helpers but never actually
+        # deducted from agent.capital — Basic tier ($30/use documented)
+        # effectively got free AI.
+        ai_config_pe = get(agent.config.AI_LEVELS, ai_level, nothing)
+        cost_intensity_pe = agent.config.AI_COST_INTENSITY
+        per_use_charge = if !isnothing(ai_config_pe) && ai_config_pe.cost_type == "per_use"
+            Float64(ai_config_pe.cost) * cost_intensity_pe
+        else
+            0.0
+        end
+
         for opp in opp_pool
             info = get_information(info_system, opp, ai_level;
                                    agent_id=agent.id, rng=agent.rng)
@@ -2056,6 +2089,10 @@ function evaluate_portfolio_opportunities(
                 end
             end
             estimated_returns[opp.id] = est
+
+            if per_use_charge > 0
+                set_capital!(agent, get_capital(agent) - per_use_charge)
+            end
         end
     elseif length(opp_pool) > 1
         # Diagnostic/test path: inline tier-noise estimate (no hallucinations)
@@ -2179,7 +2216,7 @@ function make_decision!(
     # Calculate utilities for each action
     estimated_cost = agent.config.BASE_OPERATIONAL_COST
 
-    invest_utility = calculate_investment_utility(agent, opportunities, market_conditions, perception; ai_level=ai_level)
+    invest_utility = calculate_investment_utility(agent, opportunities, market_conditions, perception; ai_level=ai_level, info_system=info_system)
     innovate_utility = calculate_innovation_utility(agent, market_conditions, perception; ai_level=ai_level)
     explore_utility = calculate_exploration_utility(agent, perception; ai_level=ai_level)
     maintain_utility = calculate_maintain_utility(agent, market_conditions, perception; estimated_cost=estimated_cost)

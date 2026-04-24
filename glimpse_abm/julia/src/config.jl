@@ -449,6 +449,7 @@ parameters preserved for exact behavioral compatibility.
     # model dynamics comparable across population sizes.
     SCALE_REFERENCE_N::Int = 1000
     ENABLE_POPULATION_SCALING::Bool = true   # Set false to use raw (unscaled) parameters
+    _POPULATION_SCALING_APPLIED::Bool = false  # Idempotency guard for initialize!
     COMPETITION_DECAY_RATE::Float64 = 0.02   # Per-round decay to prevent unbounded competition accumulation
     MAX_KNOWLEDGE_PIECES::Int = 5000         # Cap on knowledge registry size (age-based eviction)
     INNOVATION_HISTORY_RETENTION::Int = 20   # Keep only last N rounds of innovation history per sector
@@ -644,7 +645,7 @@ function initialize!(config::EmergentConfig)
     # Competition delta (market.jl) uses √N scaling with reference_population=100
     # to maintain calibrated per-capita pressure. These two scaling regimes
     # work together: √N thresholds absorb √N-scaled aggregate competition.
-    if config.ENABLE_POPULATION_SCALING && config.N_AGENTS != config.SCALE_REFERENCE_N
+    if config.ENABLE_POPULATION_SCALING && config.N_AGENTS != config.SCALE_REFERENCE_N && !config._POPULATION_SCALING_APPLIED
         scale = config.N_AGENTS / config.SCALE_REFERENCE_N  # ratio (e.g., 10 for 10K, 100 for 100K)
         sqrt_scale = sqrt(scale)
 
@@ -669,6 +670,7 @@ function initialize!(config::EmergentConfig)
         # so increase decay proportionally to keep steady-state levels bounded.
         config.COMPETITION_DECAY_RATE = min(0.10, 0.02 * sqrt_scale)
 
+        config._POPULATION_SCALING_APPLIED = true
         @info "Population scaling applied" N=config.N_AGENTS ref=config.SCALE_REFERENCE_N scale sqrt_scale K=config.CROWDING_CAPACITY_K capacity=config.OPPORTUNITY_BASE_CAPACITY neighbors=config.NETWORK_N_NEIGHBORS decay=config.COMPETITION_DECAY_RATE
     end
 

@@ -475,11 +475,13 @@ function update_opportunity_competition!(market::MarketEnvironment, opp::Opportu
     # market microstructure (Kyle 1985: price impact ∝ √order_flow)
     intensity = get_sector_competition_intensity(market, opp.sector)
 
-    # Apply per-round decay to prevent unbounded competition accumulation.
-    # Without decay, competition only ever increases, which becomes degenerate
-    # at large N where hundreds of agents pile into each opportunity every round.
-    decay = market.config.COMPETITION_DECAY_RATE
-    opp.competition = max(0.0, opp.competition * (1.0 - decay) + delta * intensity)
+    # Per-investment update: pure accumulation. Time-decay (× 0.9) is applied
+    # ONCE per round inside manage_opportunities! (market.jl ~line 914), not
+    # here per-investment. Earlier code applied a (1.0 - COMPETITION_DECAY_RATE)
+    # multiplier on every invest call; combined with the per-round decay this
+    # made it impossible for competition to accumulate past ~0.7 even with
+    # hundreds of investments — effectively disabling crowding penalties.
+    opp.competition = max(0.0, opp.competition + delta * intensity)
 end
 
 # ============================================================================
@@ -1206,7 +1208,10 @@ function create_niche_opportunity(
         complexity=rand(market.rng, Uniform(0.4, 0.8)),
         discovered=false,
         discovery_round=round_num,
-        creator_id=discoverer_id,
+        # Field on the Opportunity struct is `created_by` (models.jl:78); the
+        # earlier `creator_id=` kwarg name was wrong and would error if this
+        # function were ever called from a path that exercised type-checking.
+        created_by=discoverer_id,
         sector=branch_name,
         capital_requirements=capital_req,
         time_to_maturity=maturity,

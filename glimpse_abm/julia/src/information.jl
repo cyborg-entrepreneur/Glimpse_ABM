@@ -19,7 +19,9 @@ System for generating information about opportunities.
 """
 mutable struct InformationSystem
     config::EmergentConfig
-    information_cache::Dict{Tuple{String,String},Information}
+    # Cache key (opp_id, ai_level, agent_id) — agent_id was added so that
+    # within-tier estimates differ across agents (no shared-noise herding).
+    information_cache::Dict{Tuple{String,String,Int},Information}
     discovered_opportunities::Set{String}
     cache_hits::Int
     cache_misses::Int
@@ -32,7 +34,7 @@ Create a new InformationSystem.
 function InformationSystem(config::EmergentConfig)
     return InformationSystem(
         config,
-        Dict{Tuple{String,String},Information}(),
+        Dict{Tuple{String,String,Int},Information}(),
         Set{String}(),
         0,
         0,
@@ -156,7 +158,13 @@ function get_information(
     agent_id::Union{Int,Nothing}=nothing,
     rng::Random.AbstractRNG=Random.default_rng()
 )::Information
-    cache_key = (opp.id, ai_level)
+    # Cache key includes agent_id so each agent gets idiosyncratic noise.
+    # Earlier the key was just (opp.id, ai_level), which meant every agent
+    # in a tier received THE SAME noisy estimate per opportunity — collapsing
+    # within-tier heterogeneity and producing artificial herding when many
+    # agents at the same tier evaluated the same opp. agent_id may be `nothing`
+    # for diagnostic / test paths, in which case the per-tier cache is reused.
+    cache_key = (opp.id, ai_level, something(agent_id, 0))
 
     # Check cache
     if haskey(sys.information_cache, cache_key)

@@ -2726,6 +2726,12 @@ class EmergentAgent:
             evaluations.append(record)
             if opp_id is not None:
                 evaluation_cache[cache_key] = record
+        # Deduct accumulated per-use AI cost from agent capital. Previously the
+        # function returned per_use_cost but callers discarded it (`evals, _ =`),
+        # so Basic tier ($30/use documented) effectively got free AI. Mirrors
+        # Julia v2.1 fix #6 at agents.jl:2058.
+        if per_use_cost > 0:
+            self.resources.capital -= per_use_cost
         return evaluations, per_use_cost
 
 

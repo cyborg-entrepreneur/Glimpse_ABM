@@ -67,7 +67,9 @@ class InformationSystem:
 
     def __init__(self, config: EmergentConfig):
         self.config = config
-        self.information_cache: Dict[Tuple[str, str], Information] = {}
+        # Cache key is (opp_id, ai_level, agent_id) — agent_id was added so that
+        # within-tier estimates differ across agents (no shared-noise herding).
+        self.information_cache: Dict[Tuple[str, str, int], Information] = {}
         self.discovered_opportunities = set()
         self._cache_hits = 0
         self._cache_misses = 0
@@ -81,7 +83,10 @@ class InformationSystem:
     def get_information(
         self, opportunity: Opportunity, ai_level: str, agent_id: Optional[int] = None
     ) -> Information:
-        cache_key = (opportunity.id, ai_level)
+        # Per-agent cache (agent_id=0 reserved for diagnostic / test paths).
+        # Previously keyed only on (opp, tier) — all agents in a tier shared
+        # the same noisy estimate, which collapsed within-tier heterogeneity.
+        cache_key = (opportunity.id, ai_level, agent_id if agent_id is not None else 0)
         if cache_key in self.information_cache:
             self._cache_hits += 1
             return self.information_cache[cache_key]
@@ -329,7 +334,10 @@ class EnhancedInformationSystem(InformationSystem):
                 pass
 
         agent_id = agent.id
-        cache_key = (opportunity.id, ai_level)
+        # Include agent_id in the cache key so every agent in a tier gets their
+        # own noisy estimate instead of sharing the first call's result. See
+        # base-class InformationSystem.get_information for the full rationale.
+        cache_key = (opportunity.id, ai_level, agent_id)
 
         cached_info = None
         if self._lock is not None:

@@ -192,6 +192,9 @@ using DataFrames
         @test isapprox(sum(normalized), 1.0)
     end
 
+    # Run external regression tests (each in its own @testset)
+    include("test_tier_divergence.jl")
+
 end
 
 println("All tests passed!")
