@@ -1900,7 +1900,7 @@ function choose_ai_level(
     # Coefficients tuned so high-trust agents still find premium attractive
     # while low-trust agents do not.
     tier_skepticism_factor = Dict("none" => 0.0, "basic" => 0.05,
-                                  "advanced" => 0.15, "premium" => 0.30)
+                                  "advanced" => 0.10, "premium" => 0.20)
 
     # Score each tier
     scores = Dict{String,Float64}()
@@ -1927,10 +1927,13 @@ function choose_ai_level(
         cash_term = 0.2 * clamp(net_cash_total / initial_equity, -1.5, 1.5)
 
         # [G] Stronger peer effects: peer_distribution weight raised
-        # 0.05 → 0.20. Peer adoption is a meaningful social-proof signal
+        # 0.05 → 0.10. Peer adoption is a meaningful social-proof signal
         # for tier choice; the prior weight made it a near-rounding-error.
+        # (Initial v3.4 tried 0.20 — too strong, produced winner-take-all
+        # herding into basic. 0.10 keeps the signal meaningful without
+        # cascading.)
         peer_term = 0.10 * peer_roi_signal + 0.15 * adoption_pressure +
-                   0.20 * Float64(get(peer_distribution, tier, 0.0))
+                   0.10 * Float64(get(peer_distribution, tier, 0.0))
 
         # Experience with tier
         tier_experience = count(==(tier), agent.ai_tier_history)
