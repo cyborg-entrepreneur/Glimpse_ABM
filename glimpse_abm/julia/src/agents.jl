@@ -786,6 +786,15 @@ function _execute_invest!(
         agent.config.TARGET_INVESTMENT_FRACTION : max_fraction
     min_fraction = hasfield(typeof(agent.config), :MIN_FUNDING_FRACTION) ?
         agent.config.MIN_FUNDING_FRACTION : 0.25
+    # v3.5: high-conviction bets allowed to exceed the standard
+    # max_fraction cap when both confidence AND signal_score are well above
+    # baseline. Real founders sometimes deploy 10-30% of capital on
+    # conviction plays — the standard 3.7% cap suppresses the right tail
+    # that produces venture-scale ("unicorn") outcomes.
+    max_high_conviction_fraction = hasfield(typeof(agent.config), :MAX_HIGH_CONVICTION_FRACTION) ?
+        agent.config.MAX_HIGH_CONVICTION_FRACTION : 0.10
+    high_conviction_threshold = hasfield(typeof(agent.config), :HIGH_CONVICTION_THRESHOLD) ?
+        agent.config.HIGH_CONVICTION_THRESHOLD : 1.2
 
     max_invest = capital * max_fraction
 
@@ -801,7 +810,16 @@ function _execute_invest!(
         c = clamp(confidence, 0.15, 0.95)
         s = max(0.0, signal_score)
         desired = capital * target_fraction * c * s
-        invest_amount = min(desired, max_invest)
+        # v3.5: lift the max-cap when both confidence and signal_score are
+        # high enough to qualify as a "high-conviction" bet. The product
+        # (c × s) gates this so small confidence or weak signal can't
+        # trigger oversizing.
+        effective_max = if (c * s) > high_conviction_threshold
+            capital * max_high_conviction_fraction
+        else
+            max_invest
+        end
+        invest_amount = min(desired, effective_max)
 
         # Minimum funding floor: if the opportunity needs a minimum stake and
         # the agent can afford it, don't under-size below the stake floor.
