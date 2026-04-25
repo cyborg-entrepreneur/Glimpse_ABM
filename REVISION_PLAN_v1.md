@@ -39,9 +39,10 @@ decision, partially addressing the "level-0 thinking" critique. Source code
 is public on GitHub. The max_fraction sweep documents mechanism sensitivity.
 None of this was available when the paper was reviewed.
 
-**Update (post-plan, 2026-04-24 evening):** Four additional audit rounds
-landed (v3.3.1 through v3.3.4) before any revision writing started, each
-addressing concrete defects flagged by an external code reviewer:
+**Update (post-plan, 2026-04-24 night):** SIX additional audit rounds and
+two emergent-path realism rewrites landed before any revision writing
+started, each addressing concrete defects flagged by external code reviews
+or surfaced by deep-debugging-review skill audits:
 
 - v3.3.1: 19 analysis scripts had silent uniform-flag failure (capital
   100M expected, 1.68-6.67M delivered); demand adjustment formula could
@@ -62,13 +63,33 @@ addressing concrete defects flagged by an external code reviewer:
   innovation vs investment success counter conflation; tier_invest_share
   staleness on no-invest rounds; sector clearing saturation flattened
   heterogeneity at N=1000; orphan export.
+- v3.3.5: emergent-path audit (sunk-cost correction in choose_ai_level
+  capital_health, recent_ai_activity sliding window, run_dynamic_adoption
+  scripts use AGENT_AI_MODE="emergent" instead of post-hoc patching).
+- v3.4: choose_ai_level realism rewrite — 8 fixes addressing structural
+  unrealism in dynamic tier choice. Cost matters at monthly-burn-rate
+  scale (was rounding error). Priors are neutral instead of hard-coded
+  against premium. Tie-breaking is status-quo. ROI is tier-specific.
+  Re-evaluation is quarterly. Switch penalty is asymmetric (downgrade >
+  upgrade). Peer effects strengthened. Trust is tier-specific.
+- v3.4.1: calibration tweak (peer 0.20→0.10, premium skep 0.30→0.20)
+  to break herding cascade in basic.
+- v3.4.2: 12-round initial freeze + sentinel fix — agents stay at their
+  starting tier for the first investment maturity cycle, build
+  tier_roi_history with real performance data, then make informed first
+  switch. Without this, decisions in rounds 1-12 happened with empty
+  ROI data and devolved into cost-vs-peer-signal cascades.
 
-Net: the paper's central Knightian mechanism is now actually wired
-end-to-end. v3.3.4 calibration produces tier ordering advanced > basic
-> premium ≈ none with cross-seed mean 0.527 (in BLS band). This is
-substantially what the paper claims to test — for the first time. Prior
-to this round of fixes, several mechanism descriptions in the paper
-described code paths that didn't actually fire.
+Net: the paper's central Knightian mechanism is now wired end-to-end
+in fixed-tier mode AND the emergent-mode dynamics produce a
+realistic ChatGPT-like adoption distribution (~16% none / 46% basic /
+29% advanced / 8% premium across 3 seeds, N=200). v3.3.4 fixed-tier ARC
+re-validation gave mean survival 0.540 with advanced > basic > premium
+≈ none across 10 seeds (ARC job 5135198, 2026-04-24). v3.4.2 emergent
+ARC re-validation in flight (ARC job 5135277). For the first time both
+the fixed-tier "paradox" baseline AND the dynamic-adoption equilibrium
+finding (which the editor and R2 want as the new headline) have
+defensible code instantiation.
 
 ---
 

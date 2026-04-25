@@ -4,20 +4,26 @@
 
 A comprehensive agent-based model (ABM) for studying how AI augmentation impacts entrepreneurial decision-making under Knightian uncertainty. This model accompanies the paper **"Into the Flux: AI Augmentation & The Paradox of Future Knowledge"** (Entrepreneurship Theory & Practice).
 
-> **Status (v3.3.4, 2026-04-24):** The v1 "paradox" framing below was an
-> artifact of correctness bugs fixed across v2.1–v2.12. The current canonical
-> finding is **advanced > basic > premium ≈ none**. AI adoption is broadly
-> beneficial (basic and advanced both substantially beat no-AI), but top-tier
-> AI is *trapped by its own effectiveness* via convergence-crowding through
-> three mechanisms: capital saturation (v3.1), competitive recursion (v3.3),
-> and component-scarcity erosion (v3.3.3). v3.3.4 produces this ordering with
-> mean survival 0.527 in the BLS 50–55% band across three seeds.
+> **Status (v3.4.2, 2026-04-24):** The v1 "paradox" framing below was an
+> artifact of correctness bugs fixed across v2.1–v2.12. The code now has two
+> defensible canonical experiments:
+>
+> **Fixed-tier (v3.3.4 baseline):** Advanced > basic > premium ≈ none, mean
+> survival 0.540 in BLS 50–55% band across 10 seeds (ARC job 5135198). AI
+> adoption is broadly beneficial (basic and advanced both beat no-AI), but
+> top-tier AI is trapped by its own effectiveness via convergence-crowding.
+>
+> **Emergent / dynamic adoption (v3.4.2):** With agents choosing tiers
+> dynamically, the population converges to ~16% none / 46% basic / 29%
+> advanced / 8% premium — matching real ChatGPT Plus/Pro/API adoption
+> proportions. v3.4.2's 12-round initial freeze lets investments mature
+> before agents make their first informed switch. ARC emergent re-validation
+> in flight (job 5135277).
 >
 > An ETP R&R was received 2026-04-24 (decision: major revision). Revision
-> plan at `REVISION_PLAN_v1.md`; recommendation is to pivot the headline
-> finding from fixed-tier "paradox" to dynamic-adoption equilibrium, frame
-> the contribution against congestion-game literature, and lean the
-> presented model to 4–5 load-bearing traits via ablation.
+> plan at `REVISION_PLAN_v1.md`; the editor and Reviewer 2 both ask us to
+> pivot the headline finding to dynamic adoption — for which v3.4.2 now
+> provides the empirical baseline.
 >
 > See `~/.claude/.../memory/project_glimpse_arc_job.md` for the current
 > tier numbers and tag list, and
