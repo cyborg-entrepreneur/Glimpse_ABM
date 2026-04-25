@@ -30,12 +30,12 @@ using Printf
 # EXPERIMENT PARAMETERS
 # ============================================================================
 
-const N_AGENTS = 1000
+const N_AGENTS = 2000
 const N_ROUNDS = 60
 const N_RUNS = 50
 const AGENTS_PER_TIER = N_AGENTS ÷ 4
 const AI_TIERS = ["none", "basic", "advanced", "premium"]
-const BASE_SEED = 20260130
+const BASE_SEED = 20260425
 
 const OUTPUT_DIR = joinpath(@__DIR__, "..", "results", "mixed_tier_full_$(Dates.format(now(), "yyyymmdd_HHMMSS"))")
 
@@ -58,14 +58,15 @@ function create_tier_assignments(n_agents::Int, rng::AbstractRNG)
 end
 
 function create_config(; seed::Int=42)
+    # Inherit BLS-calibrated defaults: SURVIVAL_THRESHOLD=$2M,
+    # INITIAL_CAPITAL_RANGE=($2.5M, $10M), heterogeneous capital + threshold.
+    # Match v3.3.4 reval (ARC 5135198) so mixed-tier survival is directly
+    # comparable to the single-population baseline (mean 0.540, BLS 50-55%).
     EmergentConfig(
         N_AGENTS=N_AGENTS,
         N_ROUNDS=N_ROUNDS,
         RANDOM_SEED=seed,
-        INITIAL_CAPITAL=5_000_000.0,
-        SURVIVAL_THRESHOLD=10_000.0,
-        USE_UNIFORM_INITIAL_CAPITAL=true,
-        USE_UNIFORM_SURVIVAL_THRESHOLD=true
+        AGENT_AI_MODE="fixed",
     )
 end
 
@@ -182,9 +183,11 @@ function run_single_mixed_simulation(run_idx::Int, seed::Int)
         innovate_share = total_actions > 0 ? action_counts[tier]["innovate"] / total_actions : 0.0
         explore_share = total_actions > 0 ? action_counts[tier]["explore"] / total_actions : 0.0
 
-        # Innovation metrics (use simplified counts)
-        tier_innovation_attempts = count(a -> hasproperty(a, :total_innovations) && a.total_innovations > 0, tier_agents)
-        tier_innovation_count = sum(a -> hasproperty(a, :total_innovations) ? a.total_innovations : 0, tier_agents)
+        # Innovation metrics — agent struct fields (v3.3.4+)
+        tier_innovation_count = sum(a.innovation_count for a in tier_agents)
+        tier_innovation_successes = sum(a.innovation_success_count for a in tier_agents)
+        tier_innovation_success_rate = tier_innovation_count > 0 ?
+            tier_innovation_successes / tier_innovation_count : 0.0
 
         tier_stats[tier] = Dict(
             "total" => length(tier_agents),
@@ -207,7 +210,8 @@ function run_single_mixed_simulation(run_idx::Int, seed::Int)
 
             # Innovation metrics
             "innovations_per_agent" => tier_innovation_count / length(tier_agents),
-            "innovation_success_rate" => 0.0,  # Placeholder
+            "innovation_successes_per_agent" => tier_innovation_successes / length(tier_agents),
+            "innovation_success_rate" => tier_innovation_success_rate,
             "total_niches" => niches_created[tier],
             "cumulative_niches" => cumulative_niches[tier]
         )
@@ -235,7 +239,9 @@ function aggregate_results(all_results::Vector{Dict})
             "p95_capital" => Float64[],
             "innovate_share" => Float64[],
             "explore_share" => Float64[],
-            "innovations_per_agent" => Float64[]
+            "innovations_per_agent" => Float64[],
+            "innovation_successes_per_agent" => Float64[],
+            "innovation_success_rate" => Float64[]
         )
     end
 
@@ -256,6 +262,8 @@ function aggregate_results(all_results::Vector{Dict})
                 push!(tier_data[tier]["innovate_share"], stats["innovate_share"])
                 push!(tier_data[tier]["explore_share"], stats["explore_share"])
                 push!(tier_data[tier]["innovations_per_agent"], stats["innovations_per_agent"])
+                push!(tier_data[tier]["innovation_successes_per_agent"], stats["innovation_successes_per_agent"])
+                push!(tier_data[tier]["innovation_success_rate"], stats["innovation_success_rate"])
                 push!(all_trajectories[tier], stats["trajectory"])
             end
         end
@@ -288,6 +296,8 @@ function aggregate_results(all_results::Vector{Dict})
             "mean_innovate_share" => mean(d["innovate_share"]),
             "mean_explore_share" => mean(d["explore_share"]),
             "mean_innovations_per_agent" => mean(d["innovations_per_agent"]),
+            "mean_innovation_successes_per_agent" => mean(d["innovation_successes_per_agent"]),
+            "mean_innovation_success_rate" => mean(d["innovation_success_rate"]),
             "n_runs" => length(d["survival_rate"]),
             "trajectory" => get(mean_trajectories, tier, Float64[])
         )
@@ -322,6 +332,8 @@ function save_results(summary::Dict, all_results::Vector{Dict}, output_dir::Stri
             mean_innovate_share=s["mean_innovate_share"],
             mean_explore_share=s["mean_explore_share"],
             mean_innovations_per_agent=s["mean_innovations_per_agent"],
+            mean_innovation_successes_per_agent=s["mean_innovation_successes_per_agent"],
+            mean_innovation_success_rate=s["mean_innovation_success_rate"],
             n_runs=s["n_runs"]
         ))
     end
@@ -346,7 +358,9 @@ function save_results(summary::Dict, all_results::Vector{Dict}, output_dir::Stri
                     p95_capital=s["p95_capital"],
                     innovate_share=s["innovate_share"],
                     explore_share=s["explore_share"],
-                    innovations_per_agent=s["innovations_per_agent"]
+                    innovations_per_agent=s["innovations_per_agent"],
+                    innovation_successes_per_agent=s["innovation_successes_per_agent"],
+                    innovation_success_rate=s["innovation_success_rate"]
                 ))
             end
         end
