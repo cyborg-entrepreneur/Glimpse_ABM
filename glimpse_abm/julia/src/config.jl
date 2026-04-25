@@ -543,6 +543,13 @@ parameters preserved for exact behavioral compatibility.
     # cadence is closer to observed behavior. Pre-v3.4 emergent agents
     # re-decided every round, producing more switching than reality.
     AI_TIER_REVIEW_INTERVAL::Int = 3
+    # v3.4.2: initial freeze period — defer the FIRST tier review until
+    # this many rounds have elapsed. Lets investments mature so
+    # tier_roi_history populates with real performance data before
+    # agents make their first informed switch. Without this, the early
+    # review fires while ROI=0 for all tiers and decisions devolve into
+    # cost-vs-peer-signal cascades. Default 12 = one investment cycle.
+    AI_TIER_INITIAL_FREEZE_ROUNDS::Int = 12
     AI_SUBSCRIPTION_FLOAT_BASE_ROUNDS::Int = 0
     AI_SUBSCRIPTION_FLOAT_MAX_ROUNDS::Int = 9  # 9 months (was 3 quarters)
 

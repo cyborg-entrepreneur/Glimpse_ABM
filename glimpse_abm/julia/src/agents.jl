@@ -1787,13 +1787,36 @@ function choose_ai_level(
         return agent.fixed_ai_level
     end
 
-    # [E] Sticky re-evaluation: only re-decide every K rounds. Otherwise
-    # return current tier without recomputing the score. Real entrepreneurs
-    # don't reconsider their AI subscription every month.
+    # [E] Sticky re-evaluation: defer the first tier review until
+    # investments have matured (initial_freeze rounds), then review at
+    # the ongoing cadence. v3.4 added review_interval; v3.4.2 added the
+    # explicit initial-freeze separation:
+    #
+    #   * Without initial freeze: the first review fires at round 1-3
+    #     while tier_roi_history is empty (no investments matured yet).
+    #     Decision devolves into cost vs peer-signal cascades, locking
+    #     in a winner-take-all distribution before any agent has tier-
+    #     specific performance data.
+    #   * With initial freeze (12 rounds = one investment maturity cycle):
+    #     agents stay at their starting tier for the first cycle, build
+    #     tier_roi data, then make an informed first switch.
+    #
+    # Pre-v3.4.2 sentinel `last_tier_review_round = -100` made the
+    # gating arithmetic produce `rounds_since = current_round + 100`,
+    # always > review_interval — freeze never applied. New logic:
+    # sentinel <0 means never reviewed → wait until initial_freeze
+    # rounds have elapsed; thereafter respect review_interval.
     review_interval = max(1, getfield_default(agent.config, :AI_TIER_REVIEW_INTERVAL, 3))
-    rounds_since_review = current_round - agent.last_tier_review_round
-    if rounds_since_review < review_interval && current_round > 0
-        return agent.current_ai_level
+    initial_freeze = max(0, getfield_default(agent.config, :AI_TIER_INITIAL_FREEZE_ROUNDS, 12))
+    if agent.last_tier_review_round < 0
+        if current_round < initial_freeze
+            return agent.current_ai_level
+        end
+    else
+        rounds_since_review = current_round - agent.last_tier_review_round
+        if rounds_since_review < review_interval && current_round > 0
+            return agent.current_ai_level
+        end
     end
 
     base_trust = clamp(get(agent.traits, "ai_trust", 0.5), 0.0, 1.0)
