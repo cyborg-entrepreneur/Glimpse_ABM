@@ -75,10 +75,18 @@ Run a simulation where agents can dynamically switch AI tiers.
 Uses the existing EmergentSimulation but modifies agents to enable switching.
 """
 function run_dynamic_simulation(; seed=42)
+    # v3.3.5: use AGENT_AI_MODE="emergent" so simulation.jl handles dynamic-
+    # adoption initialization correctly (fixed_ai_level=nothing,
+    # current_ai_level=initial_tier per agent). Pre-v3.3.5 this script set
+    # AGENT_AI_MODE to its default "fixed", then post-hoc cleared
+    # fixed_ai_level on every agent — functionally equivalent (verified via
+    # probe) but architecturally fragile. The proper mode flag is the
+    # single source of truth.
     config = EmergentConfig(
         N_AGENTS=N_AGENTS,
         N_ROUNDS=N_ROUNDS,
         RANDOM_SEED=seed,
+        AGENT_AI_MODE="emergent",
         INITIAL_CAPITAL=5_000_000.0,
         SURVIVAL_THRESHOLD=10_000.0,
         USE_UNIFORM_INITIAL_CAPITAL=true,
@@ -94,13 +102,6 @@ function run_dynamic_simulation(; seed=42)
     for agent in sim.agents
         tier = get_ai_level(agent)
         initial_tiers[tier] += 1
-    end
-
-    # ENABLE DYNAMIC ADOPTION: Clear fixed_ai_level but keep current_ai_level
-    for agent in sim.agents
-        current = agent.fixed_ai_level  # Save current tier
-        agent.fixed_ai_level = nothing  # Allow switching
-        agent.current_ai_level = current  # Keep starting tier
     end
 
     # Run simulation

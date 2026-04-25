@@ -72,11 +72,14 @@ flush(stdout)
 Threads.@threads for run_idx in 1:N_RUNS
     seed = BASE_SEED + run_idx
 
-    # Create simulation with 25% initial distribution
+    # Create simulation with 25% initial distribution. v3.3.5: use
+    # AGENT_AI_MODE="emergent" so simulation.jl initializes tier state
+    # correctly (see run_dynamic_adoption.jl for the same fix).
     config = EmergentConfig(
         N_AGENTS=N_AGENTS,
         N_ROUNDS=N_ROUNDS,
         RANDOM_SEED=seed,
+        AGENT_AI_MODE="emergent",
         INITIAL_CAPITAL=5_000_000.0,
         SURVIVAL_THRESHOLD=10_000.0,
         USE_UNIFORM_INITIAL_CAPITAL=true,
@@ -85,13 +88,6 @@ Threads.@threads for run_idx in 1:N_RUNS
 
     tier_dist = Dict(t => 0.25 for t in AI_TIERS)
     sim = EmergentSimulation(config=config, seed=seed, initial_tier_distribution=tier_dist)
-
-    # Enable dynamic adoption by clearing fixed_ai_level
-    for agent in sim.agents
-        current = agent.fixed_ai_level
-        agent.fixed_ai_level = nothing
-        agent.current_ai_level = current
-    end
 
     # Record initial distribution (round 0)
     for (tier_idx, tier) in enumerate(AI_TIERS)
