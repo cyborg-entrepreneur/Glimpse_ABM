@@ -1467,10 +1467,17 @@ function compute_ai_performance_metrics(agent::EmergentAgent)::Dict{String,Any}
     returned_total = get(perf.returned_by_action, "overall", 0.0)
     metrics["overall_cash_flow_total"] = returned_total - deployed_total
 
-    # Recent activity (approximate)
-    n_actions = length(agent.action_history)
-    recent_window = min(20, n_actions)
-    metrics["recent_ai_activity"] = max(1.0, Float64(recent_window) / 5.0)
+    # Recent activity — count actual invest/innovate/explore actions in the
+    # last 20 rounds (true sliding window). Pre-v3.3.5 used
+    # `min(20, length(action_history)) / 5.0`, which is cumulative: an agent
+    # with 50 lifetime actions scored the same as one with 20, regardless of
+    # when those actions occurred. Per-use cost in choose_ai_level reads
+    # this metric — cumulative values biased per-use tier adoption estimates
+    # (inactive agents looked as active as recently-active ones).
+    window_size = 20
+    recent_slice = agent.action_history[max(1, end - window_size + 1):end]
+    recent_ai_using = count(a -> a in ("invest", "innovate", "explore"), recent_slice)
+    metrics["recent_ai_activity"] = max(1.0, Float64(recent_ai_using) / 5.0)
 
     # ROI gain ratio
     if deployed_total > 0
@@ -1812,7 +1819,18 @@ function choose_ai_level(
     roi_gain_ratio = Float64(get(metrics, "roi_gain_ratio", 0.0))
     net_cash_total = Float64(get(metrics, "overall_cash_flow_total", 0.0))
     initial_equity = max(agent.resources.performance.initial_equity, 1.0)
-    capital_health = (get_capital(agent) / initial_equity) - 1.0
+    # v3.3.5: back out the already-paid subscription for THIS round when
+    # computing capital_health. Simulation.jl charges the current tier's
+    # subscription in Phase 1.5 (before choose_ai_level runs in Phase 3),
+    # so `get_capital(agent)` at this point reflects a sunk cost that
+    # shouldn't influence the forward-looking tier decision. Pre-v3.3.5
+    # this produced a doom-loop bias in emergent mode: each round's
+    # subscription drain dropped capital_health, which the decision
+    # formula penalized, pushing agents toward cheaper tiers. Premium
+    # share collapsed 56→8 over 30 rounds in the probe, faster than a
+    # correct sunk-cost-ignoring decision would produce.
+    effective_capital = get_capital(agent) + agent.last_subscription_charge
+    capital_health = (effective_capital / initial_equity) - 1.0
 
     # Peer signals
     peer_roi_signal = Float64(get(neighbor_signals, "peer_roi_gap", 0.0))
