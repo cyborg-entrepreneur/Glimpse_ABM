@@ -45,7 +45,7 @@ end
     @testset "basic per-use cost is actually deducted" begin
         cfg, market, info_system, agent, opps = _diag_setup("basic")
         capital_before = get_capital(agent)
-        per_use = Float64(cfg.AI_LEVELS["basic"].cost) * cfg.AI_COST_INTENSITY
+        per_use = Float64(cfg.AI_LEVELS["basic"].per_use_cost) * cfg.AI_COST_INTENSITY
         @test per_use > 0  # Sanity
 
         market_conditions = test_market_conditions()
@@ -66,7 +66,7 @@ end
     # ------------------------------------------------------------------
     @testset "per-use cost dedupe on cache hit" begin
         cfg, market, info_system, agent, opps = _diag_setup("basic")
-        per_use = Float64(cfg.AI_LEVELS["basic"].cost) * cfg.AI_COST_INTENSITY
+        per_use = Float64(cfg.AI_LEVELS["basic"].per_use_cost) * cfg.AI_COST_INTENSITY
 
         market_conditions = test_market_conditions()
         perception = Dict{String,Any}()

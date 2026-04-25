@@ -239,17 +239,29 @@ function attempt_innovation!(
         return nothing
     end
 
-    # Determine AI domains used
+    # Determine AI domains used. Gate: agent uses AI in a domain if trust is
+    # adequate AND recent evidence supports it. The accuracy_estimates dict is
+    # currently never populated, so the original gate (trust > 0.45 &&
+    # has_positive_outcome) was permanently blocked — every innovation's
+    # ai_domains_used was empty, ai_assisted forced to false, and the
+    # AI_QUALITY_BOOST branch at create_innovation never fired regardless of
+    # the agent's tier. With no track record yet, fall back to trust-only.
     ai_domains_used = String[]
     if ai_level != "none" && !isnothing(agent.ai_learning)
         learning_profile = agent.ai_learning
         for domain in ["technical_assessment", "innovation_potential"]
             trust = get(learning_profile.domain_trust, domain, 0.5)
             recent_scores = get(learning_profile.accuracy_estimates, domain, Float64[])
-            recent_positive = [s for s in recent_scores[max(1, length(recent_scores)-4):end] if s >= 0.65]
-            has_positive_outcome = length(recent_positive) > 0
-            if trust > 0.45 && has_positive_outcome
-                push!(ai_domains_used, domain)
+            if isempty(recent_scores)
+                if trust > 0.45
+                    push!(ai_domains_used, domain)
+                end
+            else
+                recent_positive = [s for s in recent_scores[max(1, length(recent_scores)-4):end] if s >= 0.65]
+                has_positive_outcome = length(recent_positive) > 0
+                if trust > 0.45 && has_positive_outcome
+                    push!(ai_domains_used, domain)
+                end
             end
         end
     end
@@ -638,6 +650,7 @@ function create_innovation(
         creator_id=agent.id,
         ai_assisted=ai_assisted,
         ai_domains_used=ai_domains_used,
+        ai_level_used=ai_level_used,
         sector=sector
     )
 

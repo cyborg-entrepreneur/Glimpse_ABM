@@ -959,7 +959,7 @@ function _execute_innovate!(
     # _execute_explore! and evaluate_portfolio_opportunities.
     ai_cfg = get(agent.config.AI_LEVELS, ai_tier, nothing)
     if !isnothing(ai_cfg) && ai_cfg.cost_type == "per_use" && ai_tier != "none"
-        per_use_charge = Float64(ai_cfg.cost) * agent.config.AI_COST_INTENSITY
+        per_use_charge = Float64(ai_cfg.per_use_cost) * agent.config.AI_COST_INTENSITY
         if per_use_charge > 0
             set_capital!(agent, get_capital(agent) - per_use_charge)
         end
@@ -1009,8 +1009,12 @@ function _execute_innovate!(
 
             set_capital!(agent, get_capital(agent) + innovation_return)
 
+            # innovation_count counts innovations CREATED (success+failure), per
+            # the field comment "total innovation attempts (not just successes)".
+            # innovation_success_count is the success-only sub-counter.
+            agent.innovation_count += 1
+
             if success
-                agent.innovation_count += 1
                 agent.success_count += 1
                 agent.innovation_success_count += 1  # v3.3.4 channel-specific
                 # v3.3.4: wire knowledge learning. learn_from_success! adds the
@@ -1088,13 +1092,17 @@ function _execute_innovate!(
         success_prob = base_prob * (0.5 + 0.5 * competence_factor) * (0.7 + 0.3 * innovativeness_factor)
         success = rand(agent.rng) < success_prob
 
+        # innovation_count counts attempts; innovation_success_count is the
+        # success-only sub-counter. Bug fix 2026-04-25.
+        agent.innovation_count += 1
+
         if success
             base_return = rd_spend * agent.config.INNOVATION_SUCCESS_BASE_RETURN
             multiplier = rand(agent.rng, Uniform(agent.config.INNOVATION_SUCCESS_RETURN_MULTIPLIER...))
             innovation_return = base_return * multiplier
 
             set_capital!(agent, get_capital(agent) + innovation_return)
-            agent.innovation_count += 1
+            agent.innovation_success_count += 1
             agent.success_count += 1
 
             outcome["success"] = true
@@ -1159,7 +1167,7 @@ function _execute_explore!(
         # free — per-use billing only fired in the investment-information
         # path. Mirrors the same pattern used in evaluate_portfolio_opportunities.
         if !isnothing(ai_config) && ai_config.cost_type == "per_use" && ai_tier != "none"
-            per_use_charge = Float64(ai_config.cost) * agent.config.AI_COST_INTENSITY
+            per_use_charge = Float64(ai_config.per_use_cost) * agent.config.AI_COST_INTENSITY
             if per_use_charge > 0
                 set_capital!(agent, get_capital(agent) - per_use_charge)
             end
@@ -1564,7 +1572,10 @@ function estimate_ai_cost(
         # got surprised by a 180x higher bill.
         return Float64(ai_config.cost) * cost_intensity
     elseif cost_type == "per_use"
-        return Float64(ai_config.cost) * cost_intensity * max(expected_calls, 0.0)
+        # Per-use tiers charge `per_use_cost` per call (basic: $3/call), not
+        # the subscription `cost` field. Previously this used .cost, billing
+        # basic agents 10× the documented per-use rate.
+        return Float64(ai_config.per_use_cost) * cost_intensity * max(expected_calls, 0.0)
     end
 
     return 0.0
@@ -1903,8 +1914,10 @@ function choose_ai_level(
             # choice AWAY from premium/advanced by a factor of activity.
             base_cost
         elseif cost_type == "per_use"
-            per_call = base_cost > 0 ? base_cost : per_use_cost
-            per_call * recent_activity
+            # Use the per_use_cost field directly. Earlier ternary preferred
+            # base_cost (the subscription field) when nonzero, which charged
+            # basic at $30/use instead of the documented $3/use.
+            per_use_cost * recent_activity
         else
             per_use_cost * recent_activity
         end
@@ -2078,7 +2091,7 @@ function calculate_investment_utility(
     ai_config_pe = get(agent.config.AI_LEVELS, ai_level, nothing)
     cost_intensity_pe = agent.config.AI_COST_INTENSITY
     per_use_charge = if !isnothing(ai_config_pe) && ai_config_pe.cost_type == "per_use"
-        Float64(ai_config_pe.cost) * cost_intensity_pe
+        Float64(ai_config_pe.per_use_cost) * cost_intensity_pe
     else
         0.0
     end
@@ -2585,7 +2598,7 @@ function evaluate_portfolio_opportunities(
         ai_config_pe = get(agent.config.AI_LEVELS, ai_level, nothing)
         cost_intensity_pe = agent.config.AI_COST_INTENSITY
         per_use_charge = if !isnothing(ai_config_pe) && ai_config_pe.cost_type == "per_use"
-            Float64(ai_config_pe.cost) * cost_intensity_pe
+            Float64(ai_config_pe.per_use_cost) * cost_intensity_pe
         else
             0.0
         end
