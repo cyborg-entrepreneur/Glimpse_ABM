@@ -4,21 +4,24 @@
 
 A comprehensive agent-based model (ABM) for studying how AI augmentation impacts entrepreneurial decision-making under Knightian uncertainty. This model accompanies the paper **"Into the Flux: AI Augmentation & The Paradox of Future Knowledge"** (Entrepreneurship Theory & Practice).
 
-> **Status (v3.4.2, 2026-04-24):** The v1 "paradox" framing below was an
+> **Status (v3.5, 2026-04-24):** The v1 "paradox" framing below was an
 > artifact of correctness bugs fixed across v2.1–v2.12. The code now has two
-> defensible canonical experiments:
+> ARC-validated canonical experiments plus v3.5 power-law right-tail support:
 >
-> **Fixed-tier (v3.3.4 baseline):** Advanced > basic > premium ≈ none, mean
-> survival 0.540 in BLS 50–55% band across 10 seeds (ARC job 5135198). AI
-> adoption is broadly beneficial (basic and advanced both beat no-AI), but
-> top-tier AI is trapped by its own effectiveness via convergence-crowding.
+> **Fixed-tier (v3.3.4 baseline, ARC 5135198):** Advanced (0.63) > basic
+> (0.58) > premium (0.49) ≈ none (0.46), mean survival 0.540 in BLS 50–55%
+> band across 10 seeds. AI adoption is broadly beneficial but top-tier AI
+> is trapped by its own effectiveness via convergence-crowding.
 >
-> **Emergent / dynamic adoption (v3.4.2):** With agents choosing tiers
-> dynamically, the population converges to ~16% none / 46% basic / 29%
-> advanced / 8% premium — matching real ChatGPT Plus/Pro/API adoption
-> proportions. v3.4.2's 12-round initial freeze lets investments mature
-> before agents make their first informed switch. ARC emergent re-validation
-> in flight (job 5135277).
+> **Emergent / dynamic adoption (v3.4.2, ARC 5135277):** Population
+> converges to 17% none / 53% basic / 25% advanced / 5% premium across 10
+> seeds — matching real ChatGPT Plus/Pro/API segmentation. The within-paid
+> ratios closely match observed AI subscription distribution.
+>
+> **Power-law right-tail (v3.5):** Max survivor capital growth lifted from
+> 1.20× to 3.18× without survival regression. Max single investment return
+> 22× (was 10×). True unicorn-scale outcomes (>10× growth) still require
+> structural additions (exit events) — documented as v3.6 candidate.
 >
 > An ETP R&R was received 2026-04-24 (decision: major revision). Revision
 > plan at `REVISION_PLAN_v1.md`; the editor and Reviewer 2 both ask us to

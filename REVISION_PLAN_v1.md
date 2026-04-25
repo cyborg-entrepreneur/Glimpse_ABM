@@ -79,6 +79,14 @@ or surfaced by deep-debugging-review skill audits:
   tier_roi_history with real performance data, then make informed first
   switch. Without this, decisions in rounds 1-12 happened with empty
   ROI data and devolved into cost-vs-peer-signal cascades.
+- v3.5: power-law right-tail support. Pre-v3.5 max survivor capital
+  growth was 1.20× across 1500 starting agents — an entrepreneurship
+  ABM with no power-law venture outcomes. Added high-conviction bet
+  sizing (cap 0.06, threshold (confidence × signal_score) > 1.5) and
+  lifted realized-return ceiling 50× → 200×. Now max growth 3.18×, p99
+  growth 1.51×, max single investment 22×, survival unchanged at 0.585.
+  True unicorn-scale outcomes (>10× growth) still require exit-event
+  mechanism (v3.6 candidate).
 
 Net: the paper's central Knightian mechanism is now wired end-to-end
 in fixed-tier mode AND the emergent-mode dynamics produce a
