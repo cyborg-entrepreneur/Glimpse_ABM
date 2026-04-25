@@ -447,11 +447,16 @@ function realized_return(
     shock = rand(rng, Beta(1.5, 2.5))
     scaled_return *= clamp(1.0 - downside * shock * 0.5, 0.3, 1.2)
 
-    # Final bounds
-    # Allow higher upper bound for power law outliers (unicorns)
-    # Scarcity and novelty increase the ceiling for rare outcomes
-    scarcity_headroom = 10.0 + 5.0 * max(0.0, scarcity_signal + novelty_signal - 0.8)
-    upper_bound = clamp(scarcity_headroom, 5.0, 50.0)  # Allow up to 50× for true unicorns
+    # Final bounds. v3.5: lifted unicorn ceiling from 50× to 200× for the
+    # most exceptional opportunities. Pre-v3.5 the 50× clamp suppressed
+    # the venture-scale Pareto right-tail — even the rare opps with
+    # extreme scarcity + novelty couldn't return Facebook-IPO-class
+    # multiples. Real venture data shows top 0.1% of investments returning
+    # 100-1000×. Allow that here; the convergence-crowding mechanism
+    # (v3.1 capital-saturation convexity) still constrains crowded niches,
+    # so unicorn returns require uncrowded + scarce + novel opportunities.
+    scarcity_headroom = 20.0 + 30.0 * max(0.0, scarcity_signal + novelty_signal - 0.8)
+    upper_bound = clamp(scarcity_headroom, 5.0, 200.0)
     # Lower bound: 0.0 = total loss, 0.5 = 50% loss, 1.0 = break-even
     # Note: RETURN_LOWER_BOUND should be ≥0 to represent minimum return multiple
     lower_bound = isnothing(config) ? 0.0 : clamp(config.RETURN_LOWER_BOUND, 0.0, 1.0)

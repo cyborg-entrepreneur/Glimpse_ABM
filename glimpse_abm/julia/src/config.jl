@@ -140,6 +140,21 @@ parameters preserved for exact behavioral compatibility.
     LIQUIDITY_RESERVE_FRACTION::Float64 = 0.29
     MAX_INVESTMENT_FRACTION::Float64 = 0.037  # Monthly (was 0.11 quarterly) - invest 3x less per round
     TARGET_INVESTMENT_FRACTION::Float64 = 0.033  # Monthly (was 0.10 quarterly)
+    # v3.5: high-conviction bet sizing for power-law right-tail outcomes.
+    # When confidence × signal_score exceeds HIGH_CONVICTION_THRESHOLD,
+    # the bet can scale up to MAX_HIGH_CONVICTION_FRACTION of capital
+    # (vs the standard MAX_INVESTMENT_FRACTION). Real founders deploy
+    # 10-30% of capital on conviction plays; the standard 3.7% cap
+    # suppresses the right tail that produces venture-scale outcomes.
+    # v3.5.2 calibration: a sequence of probes converged on 0.06 / 1.5.
+    # Earlier 0.10 / 1.2 tanked survival 0.58 → 0.29; 0.08 / 1.5 brought
+    # survival back to 0.44 but still hurt fixed-tier (0.53 → 0.37).
+    # 0.06 / 1.5 produces meaningful right-tail (~5% of survivors >1.0×,
+    # max growth ~3-4×) without much survival regression. Going beyond
+    # this requires structural changes (exit events, longer compounding
+    # horizons) — see Option C in the v3.5 plan if pursuing.
+    MAX_HIGH_CONVICTION_FRACTION::Float64 = 0.06
+    HIGH_CONVICTION_THRESHOLD::Float64 = 1.5
     AI_CREDIT_LINE_ROUNDS::Int = 24  # 24 months = 2 years (typical seed funding runway)
     AI_TRUST_RESERVE_DISCOUNT::Float64 = 0.25
 
