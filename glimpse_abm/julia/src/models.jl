@@ -659,6 +659,12 @@ mutable struct AILearningProfile
     usage_count::Dict{String,Int}
     # Bayesian beliefs about AI tier effectiveness (alpha, beta parameters for Beta distribution)
     tier_beliefs::Dict{String,Dict{String,Float64}}
+    # v3.4: per-tier rolling ROI window. Lets choose_ai_level use
+    # tier-specific performance rather than a global ROI signal that credited
+    # every tier for the agent's overall performance regardless of which tier
+    # generated it. Maintained as a sliding window (last 12 entries) by
+    # process_matured_investments!.
+    tier_roi_history::Dict{String,Vector{Float64}}
 end
 
 const DEFAULT_DOMAINS = ["market_analysis", "technical_assessment", "uncertainty_evaluation", "innovation_potential"]
@@ -687,7 +693,8 @@ function AILearningProfile()
         Dict(d => Float64[] for d in DEFAULT_DOMAINS),
         Dict(d => 0 for d in DEFAULT_DOMAINS),
         Dict(d => 0 for d in DEFAULT_DOMAINS),
-        tier_beliefs
+        tier_beliefs,
+        Dict(t => Float64[] for t in AI_TIERS),  # v3.4: tier_roi_history
     )
 end
 

@@ -538,6 +538,11 @@ parameters preserved for exact behavioral compatibility.
     TRAIT_MOMENTUM::Float64 = 0.7
     AI_TRUST_ADJUSTMENT_RATE::Float64 = 0.033  # Monthly adjustment (was 0.1 quarterly)
     AI_SUBSCRIPTION_AMORTIZATION_ROUNDS::Int = 180  # 180 months (was 60 quarters)
+    # v3.4: months between emergent-mode tier re-evaluations. Real ChatGPT
+    # users don't reconsider their subscription monthly; quarterly
+    # cadence is closer to observed behavior. Pre-v3.4 emergent agents
+    # re-decided every round, producing more switching than reality.
+    AI_TIER_REVIEW_INTERVAL::Int = 3
     AI_SUBSCRIPTION_FLOAT_BASE_ROUNDS::Int = 0
     AI_SUBSCRIPTION_FLOAT_MAX_ROUNDS::Int = 9  # 9 months (was 3 quarters)
 

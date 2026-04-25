@@ -309,6 +309,7 @@ mutable struct EmergentAgent
     subscription_rates::Dict{String,Float64}  # tier → cost per round
     subscription_deferral_remaining::Dict{String,Int}  # tier → grace rounds
     last_subscription_charge::Float64
+    last_tier_review_round::Int  # v3.4: round of most-recent choose_ai_level eval
 
     # Performance state
     alive::Bool
@@ -430,6 +431,7 @@ function EmergentAgent(
         Dict{String,Float64}(),  # subscription_rates
         Dict{String,Int}(),  # subscription_deferral_remaining
         0.0,  # last_subscription_charge
+        -100,  # last_tier_review_round (v3.4 — sentinel ensures first-round eval fires)
         true,  # alive
         0,  # survival_rounds
         0,  # insolvency_rounds
@@ -1285,6 +1287,19 @@ function process_matured_investments!(
                 agent.investment_failure_count += 1  # v3.3.4 channel-specific
             end
 
+            # v3.4 [D]: append to tier-specific ROI history. Maintained as a
+            # sliding window of the last 12 outcomes per tier so
+            # choose_ai_level can read tier-specific roi rather than a
+            # global signal that credited every tier for the agent's
+            # overall ROI regardless of which tier generated it.
+            tier_used = String(get(investment, "ai_level", get_ai_level(agent)))
+            if haskey(agent.ai_learning.tier_roi_history, tier_used)
+                push!(agent.ai_learning.tier_roi_history[tier_used], ret_multiple - 1.0)
+                while length(agent.ai_learning.tier_roi_history[tier_used]) > 12
+                    popfirst!(agent.ai_learning.tier_roi_history[tier_used])
+                end
+            end
+
             # Record return
             record_return!(agent.resources.performance, "invest", capital_returned;
                           ai_level=investment["ai_level"], round_num=round)
@@ -1680,6 +1695,14 @@ end
 
 """
 Compute penalty for switching AI levels.
+
+v3.4: asymmetric penalty — downgrades carry larger friction than upgrades.
+Real downgrades involve data/integration loss and the social signal of
+"giving up on the expensive tool"; upgrades have a learning-curve cost
+but typically come with vendor onboarding. Loss-aversion literature
+puts the asymmetry at roughly 2× — downgrade per step costs ~2× an
+upgrade per step. Pre-v3.4 the cost was symmetric, treating
+premium → none and none → premium as identical decisions.
 """
 function compute_ai_switch_penalty(
     agent::EmergentAgent,
@@ -1699,7 +1722,10 @@ function compute_ai_switch_penalty(
     end
 
     distance = abs(proposed_idx - current_idx)
-    base_penalty = 0.05 * distance + 0.03
+    # v3.4: asymmetric base penalty
+    is_downgrade = proposed_idx < current_idx
+    per_step = is_downgrade ? 0.10 : 0.05
+    base_penalty = per_step * distance + 0.03
 
     # Experience with proposed level reduces penalty
     experience = count(==(proposed_level), agent.ai_tier_history)
@@ -1720,15 +1746,54 @@ function compute_ai_switch_penalty(
 end
 
 """
-Choose AI level based on Bayesian beliefs and performance metrics.
+Choose AI level based on Bayesian beliefs, performance metrics, peer
+signals, and cost. v3.4 rewrite addresses 8 realism gaps documented in
+the deep-debugging-review of the emergent path:
+
+  [A] Cost matters: ref_scale was operating_cost*4 + cash_buffer*0.12,
+      making cost_term a rounding error (~0.0006 for premium subscription).
+      Now scaled to operating_cost so cost is felt as multiples of
+      monthly burn rate. Premium cost_term ≈ 0.15 — same magnitude as
+      trust_term.
+  [B] Neutralize priors: hard-coded prior_map biased against premium
+      (posterior 0.26 vs none 0.52). Removed the local override; AI
+      learning profile already initializes neutral 0.50 priors for all
+      tiers (DEFAULT_TIER_PRIORS in models.jl).
+  [C] Status-quo tie-breaking: ties → keep current tier (was: lower-
+      tier wins, anti-premium bias).
+  [D] Tier-specific ROI: roi_term used a global roi_gain that credited
+      every tier for the agent's overall performance. Now reads the
+      tier's own roi_history (maintained in
+      ai_learning.tier_roi_history by process_matured_investments!).
+  [E] Sticky re-evaluation: only re-decide every AI_TIER_REVIEW_INTERVAL
+      rounds (default 3 = quarterly). Real subscribers don't reconsider
+      monthly.
+  [G] Stronger peer effects: peer_distribution weight raised 0.05 → 0.20
+      so observation of peers' tier choices meaningfully shifts beliefs.
+  [H] Tier-specific trust: a low-base-trust agent should be MORE skeptical
+      of expensive tiers (premium > advanced > basic). Modulates trust by
+      tier-rank attenuation.
+
+Skipped per scope decision: reserve haircut at high capital, larger noise,
+budget heuristic, trial mechanism. (See REVISION_PLAN_v1.md.)
 """
 function choose_ai_level(
     agent::EmergentAgent;
-    neighbor_signals::Dict{String,Any} = Dict{String,Any}()
+    neighbor_signals::Dict{String,Any} = Dict{String,Any}(),
+    current_round::Int = 0
 )::String
     # If fixed AI level, return it
     if !isnothing(agent.fixed_ai_level)
         return agent.fixed_ai_level
+    end
+
+    # [E] Sticky re-evaluation: only re-decide every K rounds. Otherwise
+    # return current tier without recomputing the score. Real entrepreneurs
+    # don't reconsider their AI subscription every month.
+    review_interval = max(1, getfield_default(agent.config, :AI_TIER_REVIEW_INTERVAL, 3))
+    rounds_since_review = current_round - agent.last_tier_review_round
+    if rounds_since_review < review_interval && current_round > 0
+        return agent.current_ai_level
     end
 
     base_trust = clamp(get(agent.traits, "ai_trust", 0.5), 0.0, 1.0)
@@ -1738,15 +1803,12 @@ function choose_ai_level(
     metrics = compute_ai_performance_metrics(agent)
     order = ["none", "basic", "advanced", "premium"]
 
-    # Prior beliefs for each tier
-    prior_map = Dict(
-        "none" => (2.6, 2.4),
-        "basic" => (2.4, 2.6),
-        "advanced" => (1.7, 3.1),
-        "premium" => (1.2, 3.4)
-    )
-
-    # Compute posterior means from AI learning profile
+    # [B] Neutralize priors. Removed the local prior_map override — read
+    # only from ai_learning.tier_beliefs, which initializes uniformly at
+    # alpha=2,beta=2 (posterior 0.5) for every tier (DEFAULT_TIER_PRIORS).
+    # Pre-v3.4 the local prior_map biased premium's posterior to 0.26
+    # before any data, hard-coding the conclusion the model was supposed
+    # to discover from data.
     posterior_means = Dict{String,Float64}()
     for tier in order
         beliefs = agent.ai_learning.tier_beliefs
@@ -1755,17 +1817,17 @@ function choose_ai_level(
             total = belief["alpha"] + belief["beta"]
             posterior_means[tier] = total > 0 ? belief["alpha"] / total : 0.5
         else
-            default_alpha, default_beta = prior_map[tier]
-            posterior_means[tier] = default_alpha / (default_alpha + default_beta)
+            posterior_means[tier] = 0.5
         end
     end
 
-    # Compute cost ratios
-    cash_buffer = max(get_capital(agent), agent.resources.performance.initial_equity, 1.0)
-    operating_cost = agent.config.BASE_OPERATIONAL_COST
+    # Compute cost ratios. v3.4 [A]: rescale relative to operating_cost so
+    # cost is felt at monthly-burn-rate scale (~$22.5K) rather than the
+    # huge ref_scale = max(operating_cost*4, cash_buffer*0.12) used pre-
+    # v3.4. Cost_ratio for premium subscription becomes 3500/22500 ≈ 0.156
+    # (vs pre-v3.4 0.0023 — about 70× more salient).
+    operating_cost = max(agent.config.BASE_OPERATIONAL_COST, 1.0)
     recent_activity = max(1.0, Float64(get(metrics, "recent_ai_activity", 1.0)))
-    amort_horizon = max(1, agent.config.AI_SUBSCRIPTION_AMORTIZATION_ROUNDS)
-    ref_scale = max(operating_cost * 4.0, cash_buffer * 0.12, 1.0)
 
     cost_ratios = Dict{String,Float64}()
     # Scale costs by AI_COST_INTENSITY (for robustness testing)
@@ -1806,7 +1868,7 @@ function choose_ai_level(
             per_use_cost * recent_activity
         end
 
-        cost_ratios[tier] = total_cost / ref_scale
+        cost_ratios[tier] = total_cost / operating_cost
     end
 
     current_level = agent.current_ai_level
@@ -1815,20 +1877,11 @@ function choose_ai_level(
     end
 
     # Extract performance signals
-    roi_gain = Float64(get(metrics, "roi_gain", 0.0))
-    roi_gain_ratio = Float64(get(metrics, "roi_gain_ratio", 0.0))
     net_cash_total = Float64(get(metrics, "overall_cash_flow_total", 0.0))
     initial_equity = max(agent.resources.performance.initial_equity, 1.0)
     # v3.3.5: back out the already-paid subscription for THIS round when
-    # computing capital_health. Simulation.jl charges the current tier's
-    # subscription in Phase 1.5 (before choose_ai_level runs in Phase 3),
-    # so `get_capital(agent)` at this point reflects a sunk cost that
-    # shouldn't influence the forward-looking tier decision. Pre-v3.3.5
-    # this produced a doom-loop bias in emergent mode: each round's
-    # subscription drain dropped capital_health, which the decision
-    # formula penalized, pushing agents toward cheaper tiers. Premium
-    # share collapsed 56→8 over 30 rounds in the probe, faster than a
-    # correct sunk-cost-ignoring decision would produce.
+    # computing capital_health (sunk cost shouldn't influence forward-
+    # looking decision).
     effective_capital = get_capital(agent) + agent.last_subscription_charge
     capital_health = (effective_capital / initial_equity) - 1.0
 
@@ -1839,25 +1892,58 @@ function choose_ai_level(
 
     reserve_haircut = Dict("basic" => 0.0, "advanced" => 0.02, "premium" => 0.05)
 
+    # v3.4 [H] tier-specific trust attenuation: a low-trust agent is more
+    # skeptical of expensive tiers. tier_trust_factor scales the trust
+    # term per tier — none gets full trust regardless, basic mostly so,
+    # advanced and premium are increasingly attenuated for low-base-trust
+    # agents. A high-base-trust agent (1.0) sees full trust on every tier.
+    # Coefficients tuned so high-trust agents still find premium attractive
+    # while low-trust agents do not.
+    tier_skepticism_factor = Dict("none" => 0.0, "basic" => 0.05,
+                                  "advanced" => 0.15, "premium" => 0.30)
+
     # Score each tier
     scores = Dict{String,Float64}()
     for tier in order
         posterior = posterior_means[tier]
-        trust_term = posterior * base_trust
+        # [H] Tier-specific trust: skepticism scales with (1 - base_trust)
+        skepticism = get(tier_skepticism_factor, tier, 0.0) * (1.0 - base_trust)
+        tier_trust = clamp(base_trust - skepticism, 0.0, 1.0)
+        trust_term = posterior * tier_trust
 
-        roi_signal = 0.3 * roi_gain + 0.45 * roi_gain_ratio
-        roi_term = posterior * roi_signal
+        # [D] Tier-specific ROI: use this tier's own roi_history when
+        # available (maintained by process_matured_investments!). Falls
+        # back to global ROI signal only if no tier-specific data exists.
+        tier_roi_window = get(agent.ai_learning.tier_roi_history, tier, Float64[])
+        tier_specific_roi = if !isempty(tier_roi_window)
+            mean(tier_roi_window)
+        else
+            # No tier-specific data; use 0 (neutral) rather than letting
+            # global ROI leak across tiers as in pre-v3.4
+            0.0
+        end
+        roi_term = posterior * (0.30 * tier_specific_roi + 0.45 * tier_specific_roi)
 
         cash_term = 0.2 * clamp(net_cash_total / initial_equity, -1.5, 1.5)
 
-        peer_term = 0.08 * peer_roi_signal + 0.12 * adoption_pressure +
-                   0.05 * Float64(get(peer_distribution, tier, 0.0))
+        # [G] Stronger peer effects: peer_distribution weight raised
+        # 0.05 → 0.20. Peer adoption is a meaningful social-proof signal
+        # for tier choice; the prior weight made it a near-rounding-error.
+        peer_term = 0.10 * peer_roi_signal + 0.15 * adoption_pressure +
+                   0.20 * Float64(get(peer_distribution, tier, 0.0))
 
         # Experience with tier
         tier_experience = count(==(tier), agent.ai_tier_history)
         learning_relief = clamp(log1p(tier_experience) * 0.02, 0.0, 0.12)
 
-        cost_term = 0.25 * get(cost_ratios, tier, 0.0) * (1.0 - learning_relief)
+        # [A] Make cost matter. Coefficient raised from 0.25 to 0.6 AND
+        # ref_scale tightened from huge to operating_cost (above), so
+        # cost_term magnitude scales with monthly burn rate. Premium
+        # cost_term ≈ 0.6 × 0.156 = 0.09 — comparable to trust_term but
+        # not dominating. (Initial v3.4 tried 1.5 — premium went extinct
+        # in 1 round; 0.6 lets cost matter meaningfully without forcing
+        # the corner solution.)
+        cost_term = 0.6 * get(cost_ratios, tier, 0.0) * (1.0 - learning_relief)
         if tier == "premium"
             cost_term *= 0.85
         end
@@ -1884,13 +1970,15 @@ function choose_ai_level(
         scores[tier] = total_score
     end
 
-    # Select tier with highest score
-    best_tier = "none"
-    best_score = -Inf
+    # Select tier with highest score. v3.4 [C]: status-quo tie-breaking —
+    # ties go to the agent's CURRENT tier rather than the lowest-index
+    # tier (which had a systematic anti-premium bias). If current tier
+    # isn't in the score set, fall back to lowest-index.
+    best_tier = current_level
+    best_score = scores[current_level]
     for (i, tier) in enumerate(order)
         score = scores[tier]
-        # Tie-break by order (prefer lower tiers)
-        if score > best_score || (score == best_score && i < findfirst(==(best_tier), order))
+        if score > best_score
             best_score = score
             best_tier = tier
         end
@@ -1899,6 +1987,7 @@ function choose_ai_level(
     # Update tracking
     push!(agent.ai_tier_history, best_tier)
     agent.current_ai_level = best_tier
+    agent.last_tier_review_round = current_round  # v3.4 [E] sticky re-eval
 
     # Start subscription schedule if this is a subscription tier
     ensure_subscription_schedule!(agent, best_tier)
@@ -2592,7 +2681,8 @@ function make_decision!(
         agent.fixed_ai_level
     else
         neighbor_signals = collect_neighbor_signals(agent, neighbor_agents)
-        choose_ai_level(agent; neighbor_signals=neighbor_signals)
+        # v3.4: pass current_round for sticky re-evaluation gating
+        choose_ai_level(agent; neighbor_signals=neighbor_signals, current_round=round_num)
     end
 
     # Build perception
