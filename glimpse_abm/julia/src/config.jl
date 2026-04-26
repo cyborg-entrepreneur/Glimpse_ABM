@@ -620,7 +620,7 @@ parameters preserved for exact behavioral compatibility.
             # Empirically-calibrated fields (scaled for 120-180 month runway):
             # Reflects Series A/B rounds with 24-36 month runway before profitability
             (3_000_000.0, 6_000_000.0),  # initial_capital_range: 120-240 months runway
-            (30_000.0, 45_000.0),        # operational_cost_range: BLS tech sector MONTHLY × 1.5 (v2.5: 2026-era compute)
+            (20_000.0, 30_000.0),        # operational_cost_range: BLS QCEW tech sector MONTHLY (v3.5.7: removed v2.5's 1.5× "2026-era compute" inflation)
             1_950_000.0,                  # survival_threshold: ~65% of min sector capital (v2.5)
             0.16,                         # innovation_probability: monthly (was 0.48 quarterly)
             (2.0, 4.0),                   # innovation_return_multiplier: high tech upside
@@ -633,7 +633,7 @@ parameters preserved for exact behavioral compatibility.
             (6, 24), (0.18, 0.42), (0.015, 0.08),                  # maturity: 6-24 months (fits 60-round sim)
             # Empirically-calibrated fields (scaled for 120-180 month runway):
             (2_200_000.0, 4_000_000.0),  # initial_capital_range: 120-220 months runway
-            (19_500.0, 34_500.0),        # operational_cost_range: BLS retail sector MONTHLY × 1.5 (v2.5)
+            (13_000.0, 23_000.0),        # operational_cost_range: BLS QCEW retail sector MONTHLY (v3.5.7: removed v2.5's 1.5× inflation)
             1_430_000.0,                  # survival_threshold: ~65% of min sector capital (v2.5)
             0.11,                         # innovation_probability: monthly (was 0.32 quarterly)
             (1.6, 2.5),                   # innovation_return_multiplier: moderate returns
@@ -646,7 +646,7 @@ parameters preserved for exact behavioral compatibility.
             (6, 18), (0.45, 0.75), (0.12, 0.24),                   # maturity: 6-18 months (fits 60-round sim)
             # Empirically-calibrated fields (scaled for 120-180 month runway):
             (1_400_000.0, 2_500_000.0),  # initial_capital_range: 120-213 months runway
-            (12_500.0, 22_500.0),        # operational_cost_range: BLS services sector MONTHLY × 1.5 (v2.5)
+            (8_300.0, 15_000.0),         # operational_cost_range: BLS QCEW services sector MONTHLY (v3.5.7: removed v2.5's 1.5× inflation)
             910_000.0,                    # survival_threshold: ~65% of min sector capital (v2.5)
             0.13,                         # innovation_probability: monthly (was 0.38 quarterly)
             (1.6, 2.5),                   # innovation_return_multiplier: moderate returns
@@ -659,7 +659,7 @@ parameters preserved for exact behavioral compatibility.
             (18, 48), (0.28, 0.48), (0.04, 0.18),                  # maturity: 18-48 months (fits 60-round sim)
             # Empirically-calibrated fields (scaled for 120-180 month runway):
             (4_000_000.0, 7_500_000.0),  # initial_capital_range: 120-225 months runway
-            (40_050.0, 60_000.0),        # operational_cost_range: BLS manufacturing MONTHLY × 1.5 (v2.5)
+            (26_700.0, 40_000.0),        # operational_cost_range: BLS QCEW manufacturing MONTHLY (v3.5.7: removed v2.5's 1.5× inflation)
             2_600_000.0,                  # survival_threshold: ~65% of min sector capital (v2.5)
             0.17,                         # innovation_probability: monthly (was 0.52 quarterly)
             (1.5, 2.8),                   # innovation_return_multiplier: incremental improvements
