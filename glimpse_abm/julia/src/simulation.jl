@@ -568,7 +568,25 @@ function step!(sim::EmergentSimulation, round::Int)
             )
             push!(innovations, innov)
             cash_multiple = Float64(get(action, "cash_multiple", 1.5))
-            spawn_opportunity_from_innovation!(sim.market, innov, cash_multiple)
+            new_opp = spawn_opportunity_from_innovation!(sim.market, innov, cash_multiple)
+
+            # v3.5.16 Phase 2: record innovation outcome on spawned opp +
+            # combination success. Mirrors Python market.py:1147 + simulation.py:1025.
+            # Telemetry side-effects: spawned opp.market_impact reflects the
+            # innovation's cash_multiple, and combination_tracker accumulates
+            # success scores per knowledge-combination signature.
+            return_achieved = Bool(get(action, "success", false)) ? cash_multiple : 0.0
+            if !isnothing(new_opp) && new_opp isa Opportunity
+                record_innovation_outcome!(sim.market, new_opp,
+                                           Bool(get(action, "success", false)),
+                                           return_achieved)
+            end
+            sig = innov.combination_signature
+            if !isnothing(sig)
+                record_outcome!(sim.innovation_engine.combination_tracker,
+                                String(sig),
+                                Bool(get(action, "success", false)) ? 1.0 : 0.0)
+            end
         end
     end
 
