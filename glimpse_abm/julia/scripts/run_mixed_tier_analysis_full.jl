@@ -30,14 +30,19 @@ using Printf
 # EXPERIMENT PARAMETERS
 # ============================================================================
 
-const N_AGENTS = 2000
-const N_ROUNDS = 60
-const N_RUNS = 50
+# v3.5.21+: N_AGENTS / N_RUNS / N_ROUNDS readable from env so we can spin
+# off N-sensitivity appendix runs (N=1000, 5000) without forking the script.
+# Defaults match the v3.5.20 paper-headline configuration.
+const N_AGENTS = parse(Int, get(ENV, "N_AGENTS", "2000"))
+const N_ROUNDS = parse(Int, get(ENV, "N_ROUNDS", "60"))
+const N_RUNS   = parse(Int, get(ENV, "N_RUNS",   "50"))
 const AGENTS_PER_TIER = N_AGENTS ÷ 4
 const AI_TIERS = ["none", "basic", "advanced", "premium"]
-const BASE_SEED = 20260425
+const BASE_SEED = parse(Int, get(ENV, "BASE_SEED", "20260425"))
 
-const OUTPUT_DIR = joinpath(@__DIR__, "..", "results", "mixed_tier_full_$(Dates.format(now(), "yyyymmdd_HHMMSS"))")
+# Tag the output dir with N for sensitivity runs (e.g. mixed_tier_full_n5000_...)
+const _OUT_TAG = N_AGENTS == 2000 ? "" : "_n$(N_AGENTS)"
+const OUTPUT_DIR = joinpath(@__DIR__, "..", "results", "mixed_tier_full$(_OUT_TAG)_$(Dates.format(now(), "yyyymmdd_HHMMSS"))")
 
 # ============================================================================
 # HELPER FUNCTIONS
