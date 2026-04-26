@@ -1956,26 +1956,21 @@ function choose_ai_level(
     adoption_pressure = Float64(get(neighbor_signals, "ai_adoption_pressure", 0.0))
     peer_distribution = get(neighbor_signals, "ai_distribution", Dict{String,Float64}())
 
-    reserve_haircut = Dict("basic" => 0.0, "advanced" => 0.02, "premium" => 0.05)
-
-    # v3.4 [H] tier-specific trust attenuation: a low-trust agent is more
-    # skeptical of expensive tiers. tier_trust_factor scales the trust
-    # term per tier — none gets full trust regardless, basic mostly so,
-    # advanced and premium are increasingly attenuated for low-base-trust
-    # agents. A high-base-trust agent (1.0) sees full trust on every tier.
-    # Coefficients tuned so high-trust agents still find premium attractive
-    # while low-trust agents do not.
-    tier_skepticism_factor = Dict("none" => 0.0, "basic" => 0.05,
-                                  "advanced" => 0.10, "premium" => 0.20)
+    # v3.5.5 audit: removed three asymmetric tier-specific tunings that had
+    # no academic justification — `reserve_haircut` (basic 0/advanced 0.02/
+    # premium 0.05), `tier_skepticism_factor` (none 0/basic 0.05/advanced
+    # 0.10/premium 0.20), and the `cost_term *= 0.85` premium-only subsidy
+    # below. These were tuned to prevent premium extinction in v3.4 but
+    # represented unprincipled fingers-on-the-scale. Tier capability is now
+    # captured solely by AI_LEVELS (cost, info_quality, info_breadth,
+    # hallucination, per_use_cost) and AI_DOMAIN_CAPABILITIES.
 
     # Score each tier
     scores = Dict{String,Float64}()
     for tier in order
         posterior = posterior_means[tier]
-        # [H] Tier-specific trust: skepticism scales with (1 - base_trust)
-        skepticism = get(tier_skepticism_factor, tier, 0.0) * (1.0 - base_trust)
-        tier_trust = clamp(base_trust - skepticism, 0.0, 1.0)
-        trust_term = posterior * tier_trust
+        # Trust term: posterior expectation × base_trust (no tier attenuation)
+        trust_term = posterior * base_trust
 
         # [D] Tier-specific ROI: use this tier's own roi_history when
         # available (maintained by process_matured_investments!). Falls
@@ -2013,12 +2008,8 @@ function choose_ai_level(
         # in 1 round; 0.6 lets cost matter meaningfully without forcing
         # the corner solution.)
         cost_term = 0.6 * get(cost_ratios, tier, 0.0) * (1.0 - learning_relief)
-        if tier == "premium"
-            cost_term *= 0.85
-        end
 
         switch_penalty = max(0.0, compute_ai_switch_penalty(agent, current_level, tier) - learning_relief)
-        reserve_penalty = get(reserve_haircut, tier, 0.0) * max(0.0, 1.0 - capital_health)
 
         # Gumbel noise for stochastic selection
         noise = -log(-log(rand(agent.rng))) * 0.02  # Gumbel(0,1) * 0.02
@@ -2030,7 +2021,6 @@ function choose_ai_level(
             0.25 * capital_health +
             peer_term -
             cost_term -
-            reserve_penalty -
             switch_penalty -
             0.05 * avoidance +
             noise

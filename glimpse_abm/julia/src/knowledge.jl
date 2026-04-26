@@ -927,13 +927,18 @@ function apply_tier_decay!(
     ai_config = get(kb.config.AI_LEVELS, ai_level, kb.config.AI_LEVELS["none"])
     info_quality = Float64(get(ai_config, "info_quality", 0.0))
 
-    # Decay probabilities by tier
-    decay_map = Dict("none" => 0.08, "basic" => 0.05, "advanced" => 0.025, "premium" => 0.0)
-    drop_prob = get(decay_map, tier, 0.04)
-
-    # Higher AI quality reduces decay
+    # v3.5.5 audit: replaced tier-keyed decay_map (none=0.08, basic=0.05,
+    # advanced=0.025, premium=0.0) with a uniform base modulated by
+    # info_quality alone. The previous map was a redundant per-tier knob
+    # ON TOP of the existing retention_modifier — and premium having 0.0
+    # decay made the modifier irrelevant for that tier (premium literally
+    # never forgot any knowledge). Now tier differentiation flows from the
+    # single AI_LEVELS.info_quality field, which is the calibrated capability
+    # input. None decays at ~0.044/round, premium at ~0.028/round — premium
+    # still has a retention advantage but it's bounded and derived.
+    base_decay = 0.05
     retention_modifier = clamp(1.0 - 0.45 * info_quality, 0.2, 1.0)
-    drop_prob *= retention_modifier
+    drop_prob = base_decay * retention_modifier
 
     knowledge_ids = get(kb.agent_knowledge, agent_id, Set{String}())
     if isempty(knowledge_ids) || drop_prob <= 0.0
