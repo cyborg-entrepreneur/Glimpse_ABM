@@ -1310,15 +1310,16 @@ function perceive_uncertainty(
     # AI trust calibration
     base_ai_trust = ai_trust_trait
     avg_ai_trust = base_ai_trust
+    # v3.5.12: hallucination_rate removed — derived from telemetry fields
+    # (hallucination_experiences, usage_count) that had no production writers.
+    # Hallucination effects on agent perception now come solely from the
+    # AI_DOMAIN_CAPABILITIES.hallucination_rate at decision time (information.jl).
     hallucination_rate = 0.0
     if !isnothing(ai_learning_profile)
         trusts = collect(values(ai_learning_profile.domain_trust))
         if !isempty(trusts)
             avg_ai_trust = clamp(mean(trusts), 0.0, 1.0)
         end
-        total_hall = sum(values(ai_learning_profile.hallucination_experiences))
-        total_usage = max(1, sum(values(ai_learning_profile.usage_count)))
-        hallucination_rate = clamp(total_hall / total_usage, 0.0, 1.0)
     end
     avg_ai_trust = clamp(0.5 * base_ai_trust + 0.5 * avg_ai_trust, 0.0, 1.0)
 

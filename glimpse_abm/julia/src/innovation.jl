@@ -212,15 +212,10 @@ function attempt_innovation!(
         ]
         avg_trust = isempty(trust_values) ? 0.5 : mean(trust_values)
 
-        reliability_signals = Float64[]
-        for dom in ["technical_assessment", "innovation_potential"]
-            scores = get(learning_profile.accuracy_estimates, dom, Float64[])
-            if !isempty(scores)
-                push!(reliability_signals, mean(scores[max(1, length(scores)-4):end]) - 0.5)
-            end
-        end
-        reliability = isempty(reliability_signals) ? 0.0 : mean(reliability_signals)
-        dynamic_bonus = (avg_trust - 0.5) * 0.2 + reliability * 0.25 + clarity_signal * 0.15
+        # v3.5.12: accuracy_estimates field deleted (was never populated).
+        # The reliability signal it computed was always 0; folded into the
+        # dynamic_bonus derivation directly (omitting the dead reliability term).
+        dynamic_bonus = (avg_trust - 0.5) * 0.2 + clarity_signal * 0.15
     end
 
     structural_bonus = get(ai_bonus_map, ai_level, 0.0) * max(0.0, clarity_signal + 0.5)
@@ -240,28 +235,16 @@ function attempt_innovation!(
     end
 
     # Determine AI domains used. Gate: agent uses AI in a domain if trust is
-    # adequate AND recent evidence supports it. The accuracy_estimates dict is
-    # currently never populated, so the original gate (trust > 0.45 &&
-    # has_positive_outcome) was permanently blocked — every innovation's
-    # ai_domains_used was empty, ai_assisted forced to false, and the
-    # AI_QUALITY_BOOST branch at create_innovation never fired regardless of
-    # the agent's tier. With no track record yet, fall back to trust-only.
+    # adequate. v3.5.12: accuracy_estimates field deleted; the prior
+    # has_positive_outcome side-condition was vacuously false (empty dict)
+    # and is now removed entirely. Trust threshold (0.45) is the operative gate.
     ai_domains_used = String[]
     if ai_level != "none" && !isnothing(agent.ai_learning)
         learning_profile = agent.ai_learning
         for domain in ["technical_assessment", "innovation_potential"]
             trust = get(learning_profile.domain_trust, domain, 0.5)
-            recent_scores = get(learning_profile.accuracy_estimates, domain, Float64[])
-            if isempty(recent_scores)
-                if trust > 0.45
-                    push!(ai_domains_used, domain)
-                end
-            else
-                recent_positive = [s for s in recent_scores[max(1, length(recent_scores)-4):end] if s >= 0.65]
-                has_positive_outcome = length(recent_positive) > 0
-                if trust > 0.45 && has_positive_outcome
-                    push!(ai_domains_used, domain)
-                end
+            if trust > 0.45
+                push!(ai_domains_used, domain)
             end
         end
     end

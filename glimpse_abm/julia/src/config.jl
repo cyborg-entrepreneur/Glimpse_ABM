@@ -359,10 +359,11 @@ parameters preserved for exact behavioral compatibility.
 
     # v3.1 — Capital-saturation convexity threshold.
     # K_sat is the saturation ratio (total_invested / capacity) above which
-    # the convexity penalty starts. Unlike CROWDING_CAPACITY_K above (which
-    # operates on count-of-competitors and scales with √N), K_sat is a
-    # capital-ratio and does NOT scale with N — capacity and invested capital
-    # both scale together, so the ratio is population-invariant.
+    # the convexity penalty starts. K_sat is a capital-ratio and does NOT
+    # scale with N — capacity and invested capital both scale together, so
+    # the ratio is population-invariant. (v3.5.11 deleted the legacy
+    # CROWDING_CAPACITY_K count-based threshold; only this ratio threshold
+    # remains in use by the active convex-crowding model in models.jl:300.)
     #   K_sat = 1.0 → penalty starts at full capacity
     #   K_sat = 1.5 → penalty starts 50% above capacity (niche meaningfully oversubscribed)
     # Calibrated on N=1000 × 60 rounds × 4-tier fixed (seed=42):
@@ -937,7 +938,12 @@ const CALIBRATION_LIBRARY = Dict{String,CalibrationProfile}(
         name="venture_baseline_2024",
         description="Anchors the simulation to US venture benchmarks: ~55% five-year survival, ~25% ten-year survival. Monthly cadence.",
         overrides=Dict{String,Any}(
-            "BASE_OPERATIONAL_COST" => 6000.0,  # Monthly: calibrated for ~20% 10-yr survival
+            # NB: BASE_OPERATIONAL_COST removed in v3.5.12. Production charge
+            # path reads agent.operating_cost_estimate (sector-derived,
+            # initialized from sector_profile.operational_cost_range), not
+            # the global BASE_OPERATIONAL_COST. Override here was a no-op:
+            # tech agents charged $25k/mo regardless of this value. To scale
+            # operating costs as a calibration knob, use OPS_COST_INTENSITY.
             "SURVIVAL_CAPITAL_RATIO" => 0.56,
             "INSOLVENCY_GRACE_ROUNDS" => 6,  # 6 months grace period
             "DISCOVERY_PROBABILITY" => 0.073,  # Monthly (was 0.22 quarterly)

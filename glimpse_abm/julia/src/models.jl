@@ -685,12 +685,16 @@ end
 
 """
 Agent's learned understanding of AI capabilities.
+
+v3.5.12: removed three telemetry fields (accuracy_estimates,
+hallucination_experiences, usage_count) that had readers but no production
+writers. Reader paths in innovation.jl, uncertainty.jl, and models.jl were
+silently always-zero — the agent learning loop they implemented was never
+operative. Consistent with the v3.5.x cleanup of dead mechanisms (decay
+functions, hallucination_penalty, asymmetric tier branches).
 """
 mutable struct AILearningProfile
     domain_trust::Dict{String,Float64}
-    accuracy_estimates::Dict{String,Vector{Float64}}
-    hallucination_experiences::Dict{String,Int}
-    usage_count::Dict{String,Int}
     # Bayesian beliefs about AI tier effectiveness (alpha, beta parameters for Beta distribution)
     tier_beliefs::Dict{String,Dict{String,Float64}}
     # v3.4: per-tier rolling ROI window. Lets choose_ai_level use
@@ -724,9 +728,6 @@ function AILearningProfile()
 
     AILearningProfile(
         Dict(d => 0.5 for d in DEFAULT_DOMAINS),
-        Dict(d => Float64[] for d in DEFAULT_DOMAINS),
-        Dict(d => 0 for d in DEFAULT_DOMAINS),
-        Dict(d => 0 for d in DEFAULT_DOMAINS),
         tier_beliefs,
         Dict(t => Float64[] for t in AI_TIERS),  # v3.4: tier_roi_history
     )
@@ -812,8 +813,9 @@ function should_use_ai_for_domain(
     cost_type::String = "per_use"
 )::Bool
     trust = get(profile.domain_trust, domain, 0.5)
-    usage = get(profile.usage_count, domain, 0)
-    exploration_bonus = usage < 5 ? 0.3 : 0.0
+    # v3.5.12: usage_count field deleted — was always 0, exploration_bonus
+    # was always 0.3 by default. Folded that constant in.
+    exploration_bonus = 0.3
 
     cost_factor = if cost_type == "subscription"
         1.0
@@ -833,11 +835,9 @@ Get adjusted confidence based on learned AI trust.
 """
 function get_adjusted_confidence(profile::AILearningProfile, ai_confidence::Float64, domain::String)::Float64
     trust = get(profile.domain_trust, domain, 0.5)
-    hall_count = get(profile.hallucination_experiences, domain, 0)
-    usage = get(profile.usage_count, domain, 1)
-    hallucination_rate = hall_count / max(1, usage)
-    adjustment = trust * (1.0 - hallucination_rate)
-    return ai_confidence * adjustment
+    # v3.5.12: hallucination_experiences/usage_count deleted (no writers).
+    # Adjustment was always trust × (1 - 0/1) = trust. Returns ai_confidence × trust.
+    return ai_confidence * trust
 end
 
 # ============================================================================

@@ -6,6 +6,19 @@
 # generic success_count counters that conflate investment vs innovation).
 # Kept for historical reference only; do not run for paper figures.
 
+error("DEPRECATED v3.5.12 — single-population / pre-mixed-tier script.
+" *
+      "Replaced by run_mixed_tier_{analysis_full,refutation_v3,mechanism,placebo,lambda_sweep}.jl.
+" *
+      "This script contains pre-v3.5 calibration assumptions and stale knobs (e.g.,
+" *
+      "BASE_OPERATIONAL_COST overrides where production reads sector cost). It will
+" *
+      "silently produce wrong numbers if executed. Comment out this error() and rerun
+" *
+      "explicitly only if reading historical context — never for paper figures.")
+
+
 #!/usr/bin/env julia
 """
 DYNAMIC AI ADOPTION ANALYSIS
