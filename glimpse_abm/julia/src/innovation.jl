@@ -212,10 +212,20 @@ function attempt_innovation!(
         ]
         avg_trust = isempty(trust_values) ? 0.5 : mean(trust_values)
 
-        # v3.5.12: accuracy_estimates field deleted (was never populated).
-        # The reliability signal it computed was always 0; folded into the
-        # dynamic_bonus derivation directly (omitting the dead reliability term).
-        dynamic_bonus = (avg_trust - 0.5) * 0.2 + clarity_signal * 0.15
+        # v3.5.16 Phase 0: restored reliability signal (simplified out in v3.5.12).
+        # accuracy_estimates field is now back in AILearningProfile; writers will
+        # be wired in Phase 3. Until then this still evaluates to reliability=0
+        # (empty scores), matching v3.5.12 behavior, but preserves the formula
+        # structure so it'll fire correctly once writers populate the dict.
+        reliability_signals = Float64[]
+        for dom in ["technical_assessment", "innovation_potential"]
+            scores = get(learning_profile.accuracy_estimates, dom, Float64[])
+            if !isempty(scores)
+                push!(reliability_signals, mean(scores[max(1, length(scores)-4):end]) - 0.5)
+            end
+        end
+        reliability = isempty(reliability_signals) ? 0.0 : mean(reliability_signals)
+        dynamic_bonus = (avg_trust - 0.5) * 0.2 + reliability * 0.25 + clarity_signal * 0.15
     end
 
     structural_bonus = get(ai_bonus_map, ai_level, 0.0) * max(0.0, clarity_signal + 0.5)

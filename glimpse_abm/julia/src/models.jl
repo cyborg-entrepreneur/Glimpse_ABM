@@ -686,15 +686,20 @@ end
 """
 Agent's learned understanding of AI capabilities.
 
-v3.5.12: removed three telemetry fields (accuracy_estimates,
-hallucination_experiences, usage_count) that had readers but no production
-writers. Reader paths in innovation.jl, uncertainty.jl, and models.jl were
-silently always-zero — the agent learning loop they implemented was never
-operative. Consistent with the v3.5.x cleanup of dead mechanisms (decay
-functions, hallucination_penalty, asymmetric tier branches).
+v3.5.16 Phase 0: restored three telemetry fields removed in v3.5.12
+(accuracy_estimates, hallucination_experiences, usage_count) — they have
+active Python writers in information.py (lines 263, 275-280) and feed
+downstream decision logic (Python's models.py:640 get_adjusted_confidence,
+agents.py:2686 should_use_ai_for_domain gate, uncertainty.py:1181 hall-rate,
+innovation.py:136 reliability signal). Phase 3 of the rollout will wire
+the writers in information.jl. Until then they stay empty (matching pre-fix
+zero behavior).
 """
 mutable struct AILearningProfile
     domain_trust::Dict{String,Float64}
+    accuracy_estimates::Dict{String,Vector{Float64}}        # per-domain prediction accuracy track record
+    hallucination_experiences::Dict{String,Int}             # per-domain hallucination counter
+    usage_count::Dict{String,Int}                           # per-domain AI call counter
     # Bayesian beliefs about AI tier effectiveness (alpha, beta parameters for Beta distribution)
     tier_beliefs::Dict{String,Dict{String,Float64}}
     # v3.4: per-tier rolling ROI window. Lets choose_ai_level use
@@ -728,6 +733,9 @@ function AILearningProfile()
 
     AILearningProfile(
         Dict(d => 0.5 for d in DEFAULT_DOMAINS),
+        Dict(d => Float64[] for d in DEFAULT_DOMAINS),  # accuracy_estimates
+        Dict(d => 0 for d in DEFAULT_DOMAINS),          # hallucination_experiences
+        Dict(d => 0 for d in DEFAULT_DOMAINS),          # usage_count
         tier_beliefs,
         Dict(t => Float64[] for t in AI_TIERS),  # v3.4: tier_roi_history
     )
@@ -813,9 +821,11 @@ function should_use_ai_for_domain(
     cost_type::String = "per_use"
 )::Bool
     trust = get(profile.domain_trust, domain, 0.5)
-    # v3.5.12: usage_count field deleted — was always 0, exploration_bonus
-    # was always 0.3 by default. Folded that constant in.
-    exploration_bonus = 0.3
+    # v3.5.16 Phase 0: restored usage-based exploration_bonus (simplified out
+    # in v3.5.12). usage_count field is back; writer wired in Phase 3. Until
+    # then usage stays 0 → exploration_bonus = 0.3, matching v3.5.12 constant.
+    usage = get(profile.usage_count, domain, 0)
+    exploration_bonus = usage < 5 ? 0.3 : 0.0
 
     cost_factor = if cost_type == "subscription"
         1.0
@@ -835,9 +845,15 @@ Get adjusted confidence based on learned AI trust.
 """
 function get_adjusted_confidence(profile::AILearningProfile, ai_confidence::Float64, domain::String)::Float64
     trust = get(profile.domain_trust, domain, 0.5)
-    # v3.5.12: hallucination_experiences/usage_count deleted (no writers).
-    # Adjustment was always trust × (1 - 0/1) = trust. Returns ai_confidence × trust.
-    return ai_confidence * trust
+    # v3.5.16 Phase 0: restored hallucination-rate adjustment (simplified out
+    # in v3.5.12). Per-domain telemetry fields are back; writers wired in
+    # Phase 3. Until then hall_count = usage = 0 → hallucination_rate = 0 and
+    # adjustment = trust × 1 = trust, matching the v3.5.12 simplified return.
+    hall_count = get(profile.hallucination_experiences, domain, 0)
+    usage = get(profile.usage_count, domain, 1)
+    hallucination_rate = hall_count / max(1, usage)
+    adjustment = trust * (1.0 - hallucination_rate)
+    return ai_confidence * adjustment
 end
 
 # ============================================================================

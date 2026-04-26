@@ -638,12 +638,82 @@ end
 # KNOWLEDGE DECAY AND FORGETTING
 # ============================================================================
 
-# v3.5.11: apply_hallucination_penalty! deleted (no production callers in
-# any release of v3.x). Hallucination is currently captured at decision time
-# via AI_DOMAIN_CAPABILITIES.hallucination_rate which feeds the agent's
-# information-quality calculation (information.jl); no separate penalty path
-# is wired. If adding explicit penalties later, call from simulation.jl after
-# investment maturity rather than reintroducing the dead function.
+"""
+Apply hallucination penalty when AI misleads an agent.
+Reduces effective knowledge trust in the affected domain.
+
+v3.5.16 Phase 0: restored from a2129dc^ (pre-v3.5.11). Will be wired in
+Phase 4 of the Python-parity rollout. Mirrors knowledge.py:354.
+"""
+function apply_hallucination_penalty!(
+    kb::KnowledgeBase,
+    agent,  # EmergentAgent - untyped to avoid circular deps
+    domain::String,
+    severity::Float64=0.2
+)
+    resources = agent.resources
+    if isnothing(resources)
+        return
+    end
+
+    knowledge_map = resources.knowledge
+    if isempty(knowledge_map)
+        return
+    end
+
+    # Get available sectors from agent's knowledge
+    available_sectors = collect(keys(knowledge_map))
+    default_sector = !isempty(available_sectors) ? first(available_sectors) : "tech"
+
+    # Domain to sector mapping
+    base_domain_to_sector = Dict(
+        "market_analysis" => "retail",
+        "technical_assessment" => "tech",
+        "uncertainty_evaluation" => "service",
+        "innovation_potential" => "manufacturing"
+    )
+
+    domain_to_sector = Dict{String,String}()
+    for (d, s) in base_domain_to_sector
+        domain_to_sector[d] = s in available_sectors ? s : default_sector
+    end
+
+    target_sector = get(domain_to_sector, domain, nothing)
+    if isnothing(target_sector) || !haskey(knowledge_map, target_sector)
+        return
+    end
+
+    # Apply penalty to target sector
+    penalty = clamp(0.1 + severity * 0.45, 0.1, 0.65)
+    knowledge_map[target_sector] = max(0.01, knowledge_map[target_sector] * (1.0 - penalty))
+
+    # Propagate lighter penalty to adjacent sectors
+    neighbor_penalty = penalty * 0.35
+    for sector in available_sectors
+        if sector != target_sector
+            knowledge_map[sector] = max(0.01, knowledge_map[sector] * (1.0 - neighbor_penalty))
+        end
+    end
+
+    # Reduce cognitive capabilities
+    if !isnothing(resources.capabilities)
+        for key in ["uncertainty_management", "opportunity_evaluation"]
+            if haskey(resources.capabilities, key)
+                resources.capabilities[key] = max(0.01, resources.capabilities[key] * (1.0 - penalty * 0.25))
+            end
+        end
+    end
+
+    # Suppress domain trust in AI learning profile
+    ai_learning = agent.ai_learning
+    if !isnothing(ai_learning) && haskey(ai_learning.domain_trust, domain)
+        ai_learning.domain_trust[domain] = max(0.0, ai_learning.domain_trust[domain] - penalty * 0.4)
+    end
+
+    # Trigger targeted forgetting
+    current_level = agent.current_ai_level
+    forget_sector_knowledge!(kb, agent, target_sector, severity; ai_level=current_level)
+end
 
 """
 Forget knowledge in a specific sector based on severity.
