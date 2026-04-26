@@ -109,7 +109,11 @@ function run_single_mixed_simulation(run_idx::Int, seed::Int)
     # Per-round survival trajectories per tier
     trajectories = Dict{String, Vector{Float64}}(tier => Float64[] for tier in AI_TIERS)
 
-    # Run simulation, tracking survival each round
+    # Time-resolved saturation tracking — investments are released on maturity,
+    # so end-of-run snapshot misses peak crowding. Sample saturation each round.
+    sat_per_round = Dict{Int, Vector{Float64}}()  # round -> all live saturations
+
+    # Run simulation, tracking survival + saturation each round
     for round in 1:N_ROUNDS
         GlimpseABM.step!(sim, round)
         for tier in AI_TIERS
@@ -117,6 +121,13 @@ function run_single_mixed_simulation(run_idx::Int, seed::Int)
             alive_count = count(a -> a.alive, tier_agents)
             push!(trajectories[tier], alive_count / length(tier_agents))
         end
+        round_sats = Float64[]
+        for o in sim.market.opportunities
+            if o.capacity > 0 && o.total_invested > 0
+                push!(round_sats, o.total_invested / o.capacity)
+            end
+        end
+        sat_per_round[round] = round_sats
     end
 
     # End-of-run aggregation. Action shares are computed from agent.action_history
@@ -179,32 +190,49 @@ function run_single_mixed_simulation(run_idx::Int, seed::Int)
         )
     end
 
-    # Capacity-saturation diagnostics — extract from sim.market.opportunities
-    # to verify the convex crowding mechanism is active. saturation_max,
-    # quantiles, and fraction above K_sat tell us how often the penalty fires.
+    # Capacity-saturation diagnostics — time-resolved across all rounds.
+    # End-of-run snapshot misses peak crowding because investments are released
+    # on maturity (agents.jl:1316). Aggregate over the full per-round panel.
     K_sat = hasproperty(sim.config, :CROWDING_CAPACITY_RATIO_K) ?
         sim.config.CROWDING_CAPACITY_RATIO_K : 1.5
-    live_sats = Float64[]
-    for o in sim.market.opportunities
-        if o.capacity > 0 && o.total_invested > 0
-            push!(live_sats, o.total_invested / o.capacity)
-        end
+    all_sats = Float64[]
+    for r in 1:N_ROUNDS
+        append!(all_sats, get(sat_per_round, r, Float64[]))
     end
-    sat_diag = if isempty(live_sats)
-        Dict("n_active" => 0, "max" => 0.0, "p50" => 0.0, "p75" => 0.0,
+    # Per-round peak saturation (max in each round), then aggregate
+    round_maxes = Float64[]
+    for r in 1:N_ROUNDS
+        rs = get(sat_per_round, r, Float64[])
+        push!(round_maxes, isempty(rs) ? 0.0 : maximum(rs))
+    end
+    # Per-round frac above K, then aggregate
+    round_fracs_K = Float64[]
+    for r in 1:N_ROUNDS
+        rs = get(sat_per_round, r, Float64[])
+        push!(round_fracs_K, isempty(rs) ? 0.0 :
+              count(s -> s > K_sat, rs) / length(rs))
+    end
+    sat_diag = if isempty(all_sats)
+        Dict("n_obs" => 0, "max_overall" => 0.0, "p50" => 0.0, "p75" => 0.0,
              "p90" => 0.0, "p95" => 0.0, "p99" => 0.0,
-             "frac_above_K" => 0.0, "frac_above_2K" => 0.0)
+             "frac_above_K" => 0.0, "frac_above_2K" => 0.0,
+             "max_round_peak" => 0.0, "mean_round_peak" => 0.0,
+             "max_frac_above_K" => 0.0, "mean_frac_above_K_per_round" => 0.0)
     else
         Dict(
-            "n_active" => length(live_sats),
-            "max" => maximum(live_sats),
-            "p50" => quantile(live_sats, 0.5),
-            "p75" => quantile(live_sats, 0.75),
-            "p90" => quantile(live_sats, 0.9),
-            "p95" => quantile(live_sats, 0.95),
-            "p99" => quantile(live_sats, 0.99),
-            "frac_above_K" => count(s -> s > K_sat, live_sats) / length(live_sats),
-            "frac_above_2K" => count(s -> s > 2 * K_sat, live_sats) / length(live_sats),
+            "n_obs" => length(all_sats),
+            "max_overall" => maximum(all_sats),
+            "p50" => quantile(all_sats, 0.5),
+            "p75" => quantile(all_sats, 0.75),
+            "p90" => quantile(all_sats, 0.9),
+            "p95" => quantile(all_sats, 0.95),
+            "p99" => quantile(all_sats, 0.99),
+            "frac_above_K" => count(s -> s > K_sat, all_sats) / length(all_sats),
+            "frac_above_2K" => count(s -> s > 2 * K_sat, all_sats) / length(all_sats),
+            "max_round_peak" => maximum(round_maxes),
+            "mean_round_peak" => mean(round_maxes),
+            "max_frac_above_K" => maximum(round_fracs_K),
+            "mean_frac_above_K_per_round" => mean(round_fracs_K),
         )
     end
 
@@ -301,9 +329,11 @@ function aggregate_results(all_results::Vector{Dict})
         )
     end
 
-    # Aggregate saturation diagnostics across runs
-    sat_keys = ["max", "p50", "p75", "p90", "p95", "p99",
-                "frac_above_K", "frac_above_2K", "n_active"]
+    # Aggregate saturation diagnostics across runs (time-resolved)
+    sat_keys = ["max_overall", "p50", "p75", "p90", "p95", "p99",
+                "frac_above_K", "frac_above_2K", "n_obs",
+                "max_round_peak", "mean_round_peak",
+                "max_frac_above_K", "mean_frac_above_K_per_round"]
     sat_summary = Dict{String, Float64}()
     for key in sat_keys
         vals = Float64[]
@@ -412,8 +442,8 @@ function save_results(summary::Dict, all_results::Vector{Dict}, output_dir::Stri
     if haskey(summary, "saturation_summary")
         sat = summary["saturation_summary"]
         sat_row = [(
-            mean_n_active = get(sat, "mean_n_active", 0.0),
-            mean_max = get(sat, "mean_max", 0.0),
+            mean_n_obs = get(sat, "mean_n_obs", 0.0),
+            mean_max_overall = get(sat, "mean_max_overall", 0.0),
             mean_p50 = get(sat, "mean_p50", 0.0),
             mean_p75 = get(sat, "mean_p75", 0.0),
             mean_p90 = get(sat, "mean_p90", 0.0),
@@ -421,9 +451,10 @@ function save_results(summary::Dict, all_results::Vector{Dict}, output_dir::Stri
             mean_p99 = get(sat, "mean_p99", 0.0),
             mean_frac_above_K = get(sat, "mean_frac_above_K", 0.0),
             mean_frac_above_2K = get(sat, "mean_frac_above_2K", 0.0),
-            std_max = get(sat, "std_max", 0.0),
-            std_p95 = get(sat, "std_p95", 0.0),
-            std_frac_above_K = get(sat, "std_frac_above_K", 0.0),
+            mean_max_round_peak = get(sat, "mean_max_round_peak", 0.0),
+            mean_mean_round_peak = get(sat, "mean_mean_round_peak", 0.0),
+            mean_max_frac_above_K = get(sat, "mean_max_frac_above_K", 0.0),
+            mean_mean_frac_above_K_per_round = get(sat, "mean_mean_frac_above_K_per_round", 0.0),
         )]
         CSV.write(joinpath(output_dir, "saturation_diagnostics.csv"), DataFrame(sat_row))
     end
@@ -436,8 +467,8 @@ function save_results(summary::Dict, all_results::Vector{Dict}, output_dir::Stri
         s = r["saturation"]
         push!(sat_rows, (
             run_idx = r["run_idx"],
-            n_active = s["n_active"],
-            sat_max = s["max"],
+            n_obs = s["n_obs"],
+            sat_max_overall = s["max_overall"],
             sat_p50 = s["p50"],
             sat_p75 = s["p75"],
             sat_p90 = s["p90"],
@@ -445,6 +476,10 @@ function save_results(summary::Dict, all_results::Vector{Dict}, output_dir::Stri
             sat_p99 = s["p99"],
             frac_above_K = s["frac_above_K"],
             frac_above_2K = s["frac_above_2K"],
+            max_round_peak = s["max_round_peak"],
+            mean_round_peak = s["mean_round_peak"],
+            max_frac_above_K = s["max_frac_above_K"],
+            mean_frac_above_K_per_round = s["mean_frac_above_K_per_round"],
         ))
     end
     if !isempty(sat_rows)
@@ -515,22 +550,26 @@ function print_results(summary::Dict)
     # Panel I: Capacity-saturation diagnostics
     if haskey(summary, "saturation_summary")
         sat = summary["saturation_summary"]
-        println("\n  I. Capacity-Saturation Diagnostics (across active opportunities)")
+        println("\n  I. Capacity-Saturation Diagnostics (time-resolved across all rounds)")
         println("-"^60)
-        @printf("    Active opps per run:    %.0f ± %.0f\n",
-                get(sat, "mean_n_active", 0.0), get(sat, "std_n_active", 0.0))
-        @printf("    Saturation max:         %.2f ± %.2f\n",
-                get(sat, "mean_max", 0.0), get(sat, "std_max", 0.0))
-        @printf("    Saturation p95:         %.2f ± %.2f\n",
+        @printf("    Obs per run (round×opp): %.0f\n",
+                get(sat, "mean_n_obs", 0.0))
+        @printf("    Saturation max overall:  %.2f ± %.2f\n",
+                get(sat, "mean_max_overall", 0.0), get(sat, "std_max_overall", 0.0))
+        @printf("    Saturation p95:          %.2f ± %.2f\n",
                 get(sat, "mean_p95", 0.0), get(sat, "std_p95", 0.0))
-        @printf("    Saturation p50/p75/p90: %.2f / %.2f / %.2f\n",
+        @printf("    Saturation p50/p75/p90:  %.2f / %.2f / %.2f\n",
                 get(sat, "mean_p50", 0.0), get(sat, "mean_p75", 0.0),
                 get(sat, "mean_p90", 0.0))
-        @printf("    Frac above K_sat:       %.1f%% ± %.1f%%\n",
+        @printf("    Frac above K_sat (all):  %.1f%% ± %.1f%%\n",
                 100*get(sat, "mean_frac_above_K", 0.0),
                 100*get(sat, "std_frac_above_K", 0.0))
-        @printf("    Frac above 2×K_sat:     %.1f%%\n",
-                100*get(sat, "mean_frac_above_2K", 0.0))
+        @printf("    Max round peak sat:      %.2f (mean %.2f)\n",
+                get(sat, "mean_max_round_peak", 0.0),
+                get(sat, "mean_mean_round_peak", 0.0))
+        @printf("    Max-round frac above K:  %.1f%% (mean per-round %.1f%%)\n",
+                100*get(sat, "mean_max_frac_above_K", 0.0),
+                100*get(sat, "mean_mean_frac_above_K_per_round", 0.0))
     end
 
     println("\n" * "="^80)

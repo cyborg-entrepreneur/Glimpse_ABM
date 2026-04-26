@@ -1886,11 +1886,12 @@ function choose_ai_level(
     end
 
     # Compute cost ratios. v3.4 [A]: rescale relative to operating_cost so
-    # cost is felt at monthly-burn-rate scale (~$22.5K) rather than the
-    # huge ref_scale = max(operating_cost*4, cash_buffer*0.12) used pre-
-    # v3.4. Cost_ratio for premium subscription becomes 3500/22500 ≈ 0.156
-    # (vs pre-v3.4 0.0023 — about 70× more salient).
-    operating_cost = max(agent.config.BASE_OPERATIONAL_COST, 1.0)
+    # cost is felt at monthly-burn-rate scale rather than the huge ref_scale
+    # = max(operating_cost*4, cash_buffer*0.12) used pre-v3.4.
+    # v3.5.9: use agent.operating_cost_estimate (sector-derived) rather than
+    # global BASE_OPERATIONAL_COST so the agent's perceived cost environment
+    # matches the actual sector-specific charge in estimate_operational_costs.
+    operating_cost = max(agent.operating_cost_estimate, 1.0)
     recent_activity = max(1.0, Float64(get(metrics, "recent_ai_activity", 1.0)))
 
     cost_ratios = Dict{String,Float64}()
@@ -2769,8 +2770,10 @@ function make_decision!(
         )
     end
 
-    # Calculate utilities for each action
-    estimated_cost = agent.config.BASE_OPERATIONAL_COST
+    # Calculate utilities for each action. v3.5.9: use agent's sector-specific
+    # operating_cost_estimate (matches actual sector charge), not the global
+    # BASE_OPERATIONAL_COST.
+    estimated_cost = agent.operating_cost_estimate
 
     invest_utility = calculate_investment_utility(agent, opportunities, market_conditions, perception; ai_level=ai_level, info_system=info_system)
     innovate_utility = calculate_innovation_utility(agent, market_conditions, perception; ai_level=ai_level)
@@ -3061,6 +3064,14 @@ function estimate_operational_costs(
     # $22,500 like services — sector heterogeneity in operating costs
     # was effectively dead in the production charge path.
     base_cost = agent.operating_cost_estimate
+
+    # Apply OPS_COST_INTENSITY scaling (refutation knob; default 1.0).
+    # This is THE op-cost knob: refutation OPS_COST_50% sets it to 0.5,
+    # OPS_COST_25% to 0.25, etc. Earlier refutations overrode
+    # BASE_OPERATIONAL_COST, but production reads agent.operating_cost_estimate
+    # (sector-derived at construction), so those overrides were no-ops on
+    # actual burn.
+    base_cost *= agent.config.OPS_COST_INTENSITY
 
     # Competition pressure from active investments
     if !isempty(agent.active_investments)

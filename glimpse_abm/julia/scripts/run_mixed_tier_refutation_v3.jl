@@ -287,14 +287,15 @@ function get_test_suite()
             "crowd_weight" => 0.35, "volatility_weight" => 0.30,
             "ai_herd_weight" => 0.20, "premium_reuse_weight" => 0.20))))
 
-    # Operational cost reductions relative to current baseline of $22,500
-    # (config.jl:135). Earlier this script used absolute dollar values
-    # (5000 mislabeled "50%" when it's ~22%) — labels and values are now
-    # explicit fractions of the BLS-calibrated baseline.
-    push!(tests, RefutationTest("OPS_COST_50%", "Operational costs halved (\$11,250)", "OPERATIONS";
-        config_overrides=Dict{String,Any}("BASE_OPERATIONAL_COST" => 11250.0)))
-    push!(tests, RefutationTest("OPS_COST_25%", "Operational costs at 25% (\$5,625)", "OPERATIONS";
-        config_overrides=Dict{String,Any}("BASE_OPERATIONAL_COST" => 5625.0)))
+    # Operational cost reductions via OPS_COST_INTENSITY scalar (default 1.0).
+    # v3.5.9: earlier overrode BASE_OPERATIONAL_COST, but production charges
+    # use agent.operating_cost_estimate (sector-derived) — those overrides
+    # were no-ops on actual burn. Now uses the OPS_COST_INTENSITY knob,
+    # which estimate_operational_costs reads.
+    push!(tests, RefutationTest("OPS_COST_50%", "Operational costs halved (intensity=0.5)", "OPERATIONS";
+        config_overrides=Dict{String,Any}("OPS_COST_INTENSITY" => 0.5)))
+    push!(tests, RefutationTest("OPS_COST_25%", "Operational costs at 25% (intensity=0.25)", "OPERATIONS";
+        config_overrides=Dict{String,Any}("OPS_COST_INTENSITY" => 0.25)))
 
     push!(tests, RefutationTest("NO_CROWD_FREE_AI", "No crowding + Free AI", "COMBINED_FAV";
         config_overrides=Dict{String,Any}(

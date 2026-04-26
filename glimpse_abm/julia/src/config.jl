@@ -162,6 +162,7 @@ parameters preserved for exact behavioral compatibility.
     HALLUCINATION_INTENSITY::Float64 = 1.0  # Scale AI hallucination rates (0.0=none, 1.0=baseline, 2.0=double)
     OVERCONFIDENCE_INTENSITY::Float64 = 1.0  # Scale AI overconfidence effects (0.0=none, 1.0=baseline, 2.0=double)
     AI_COST_INTENSITY::Float64 = 1.0        # Scale AI subscription/usage costs (0.0=free, 1.0=baseline, 2.0=double)
+    OPS_COST_INTENSITY::Float64 = 1.0       # Scale agent.operating_cost_estimate (0.0=free, 1.0=baseline, 2.0=double); refutation knob
 
     # ========================================================================
     # NETWORK CONFIGURATION
@@ -620,7 +621,12 @@ parameters preserved for exact behavioral compatibility.
             # Empirically-calibrated fields (scaled for 120-180 month runway):
             # Reflects Series A/B rounds with 24-36 month runway before profitability
             (3_000_000.0, 6_000_000.0),  # initial_capital_range: 120-240 months runway
-            (45_000.0, 105_000.0),       # operational_cost_range: BLS QCEW NAICS 5415 wages ($130k/yr × 3-7 engineers / 12) × 1.4 overhead (v3.5.8)
+            (20_000.0, 30_000.0),        # operational_cost_range: NET BURN RATE for tech (v3.5.9)
+            # Reasoning: model's per-round op cost represents NET burn (gross opex - revenue
+            # from existing operations), not gross opex. Gross opex from BLS QCEW NAICS 5415
+            # wages ($130k/yr × 3-7 engineers / 12) × 1.4 overhead = $45-105k/mo, but going
+            # concerns typically have revenue covering 60-80% of opex, leaving ~30% net burn:
+            # 0.3 × ($45-105k) ≈ $13-32k. Center on $20-30k.
             1_950_000.0,                  # survival_threshold: ~65% of min sector capital (v2.5)
             0.16,                         # innovation_probability: monthly (was 0.48 quarterly)
             (2.0, 4.0),                   # innovation_return_multiplier: high tech upside
@@ -633,7 +639,7 @@ parameters preserved for exact behavioral compatibility.
             (6, 24), (0.18, 0.42), (0.015, 0.08),                  # maturity: 6-24 months (fits 60-round sim)
             # Empirically-calibrated fields (scaled for 120-180 month runway):
             (2_200_000.0, 4_000_000.0),  # initial_capital_range: 120-220 months runway
-            (20_000.0, 40_000.0),        # operational_cost_range: BLS QCEW NAICS 44-45 wages ($32k/yr × 5-10 staff / 12) × 1.5 overhead (v3.5.8)
+            (13_000.0, 23_000.0),        # operational_cost_range: net burn for retail; 0.3 × BLS QCEW NAICS 44-45 gross opex (v3.5.9)
             1_430_000.0,                  # survival_threshold: ~65% of min sector capital (v2.5)
             0.11,                         # innovation_probability: monthly (was 0.32 quarterly)
             (1.6, 2.5),                   # innovation_return_multiplier: moderate returns
@@ -646,7 +652,7 @@ parameters preserved for exact behavioral compatibility.
             (6, 18), (0.45, 0.75), (0.12, 0.24),                   # maturity: 6-18 months (fits 60-round sim)
             # Empirically-calibrated fields (scaled for 120-180 month runway):
             (1_400_000.0, 2_500_000.0),  # initial_capital_range: 120-213 months runway
-            (20_000.0, 42_000.0),        # operational_cost_range: BLS QCEW NAICS 56/81 wages ($45k/yr × 4-8 staff / 12) × 1.4 overhead (v3.5.8)
+            (8_300.0, 15_000.0),         # operational_cost_range: net burn for services; 0.3 × BLS QCEW NAICS 56/81 gross opex (v3.5.9)
             910_000.0,                    # survival_threshold: ~65% of min sector capital (v2.5)
             0.13,                         # innovation_probability: monthly (was 0.38 quarterly)
             (1.6, 2.5),                   # innovation_return_multiplier: moderate returns
@@ -659,7 +665,7 @@ parameters preserved for exact behavioral compatibility.
             (18, 48), (0.28, 0.48), (0.04, 0.18),                  # maturity: 18-48 months (fits 60-round sim)
             # Empirically-calibrated fields (scaled for 120-180 month runway):
             (4_000_000.0, 7_500_000.0),  # initial_capital_range: 120-225 months runway
-            (60_000.0, 105_000.0),       # operational_cost_range: BLS QCEW NAICS 31-33 wages ($70k/yr × 7-12 staff / 12) × 1.5 overhead (v3.5.8)
+            (26_700.0, 40_000.0),        # operational_cost_range: net burn for manufacturing; 0.3 × BLS QCEW NAICS 31-33 gross opex (v3.5.9)
             2_600_000.0,                  # survival_threshold: ~65% of min sector capital (v2.5)
             0.17,                         # innovation_probability: monthly (was 0.52 quarterly)
             (1.5, 2.8),                   # innovation_return_multiplier: incremental improvements
