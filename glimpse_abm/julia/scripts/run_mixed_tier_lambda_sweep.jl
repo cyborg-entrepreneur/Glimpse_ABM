@@ -78,8 +78,23 @@ end
 
 function run_one(seed::Int, lambda::Float64)
     sim = build_mixed_sim(seed, lambda)
+    # v3.5.10: time-resolved saturation. End-of-run snapshot misses peak
+    # crowding because investments release on maturity. Sample each round.
+    all_sats = Float64[]
+    round_maxes = Float64[]
+    round_fracs_K = Float64[]
     for r in 1:N_ROUNDS
         GlimpseABM.step!(sim, r)
+        round_sats = Float64[]
+        for o in sim.market.opportunities
+            if o.capacity > 0 && o.total_invested > 0
+                push!(round_sats, o.total_invested / o.capacity)
+            end
+        end
+        append!(all_sats, round_sats)
+        push!(round_maxes, isempty(round_sats) ? 0.0 : maximum(round_sats))
+        push!(round_fracs_K, isempty(round_sats) ? 0.0 :
+              count(s -> s > K_SAT_FIXED, round_sats) / length(round_sats))
     end
     out = Dict{String, Any}("seed" => seed, "lambda" => lambda)
     for tier in AI_TIERS
@@ -90,25 +105,27 @@ function run_one(seed::Int, lambda::Float64)
             mean(a.resources.capital for a in alive)
         out["$(tier)_innov_per_agent"] = sum(a.innovation_count for a in ta) / length(ta)
     end
-    # Saturation diagnostics
-    live_sats = Float64[]
-    for o in sim.market.opportunities
-        if o.capacity > 0 && o.total_invested > 0
-            push!(live_sats, o.total_invested / o.capacity)
-        end
-    end
-    if isempty(live_sats)
-        out["sat_max"] = 0.0
+    # Time-resolved saturation diagnostics
+    if isempty(all_sats)
+        out["sat_max_overall"] = 0.0
         out["sat_p95"] = 0.0
         out["sat_p75"] = 0.0
-        out["frac_above_K"] = 0.0
-        out["n_active_opps"] = 0
+        out["frac_above_K_overall"] = 0.0
+        out["max_round_peak"] = 0.0
+        out["mean_round_peak"] = 0.0
+        out["max_frac_above_K"] = 0.0
+        out["mean_frac_above_K_per_round"] = 0.0
+        out["n_obs"] = 0
     else
-        out["sat_max"] = maximum(live_sats)
-        out["sat_p95"] = quantile(live_sats, 0.95)
-        out["sat_p75"] = quantile(live_sats, 0.75)
-        out["frac_above_K"] = count(s -> s > K_SAT_FIXED, live_sats) / length(live_sats)
-        out["n_active_opps"] = length(live_sats)
+        out["sat_max_overall"] = maximum(all_sats)
+        out["sat_p95"] = quantile(all_sats, 0.95)
+        out["sat_p75"] = quantile(all_sats, 0.75)
+        out["frac_above_K_overall"] = count(s -> s > K_SAT_FIXED, all_sats) / length(all_sats)
+        out["max_round_peak"] = maximum(round_maxes)
+        out["mean_round_peak"] = mean(round_maxes)
+        out["max_frac_above_K"] = maximum(round_fracs_K)
+        out["mean_frac_above_K_per_round"] = mean(round_fracs_K)
+        out["n_obs"] = length(all_sats)
     end
     return out
 end
@@ -125,11 +142,15 @@ function summarize(results::Vector{Dict}, lambda::Float64)
     end
     summary["mean_survival_overall"] = mean(
         [mean([r["$(t)_survival"] for r in rows]) for t in AI_TIERS])
-    summary["sat_max_mean"] = mean(r["sat_max"] for r in rows)
+    summary["sat_max_overall_mean"] = mean(r["sat_max_overall"] for r in rows)
     summary["sat_p95_mean"] = mean(r["sat_p95"] for r in rows)
     summary["sat_p75_mean"] = mean(r["sat_p75"] for r in rows)
-    summary["frac_above_K_mean"] = mean(r["frac_above_K"] for r in rows)
-    summary["n_active_opps_mean"] = mean(r["n_active_opps"] for r in rows)
+    summary["frac_above_K_overall_mean"] = mean(r["frac_above_K_overall"] for r in rows)
+    summary["max_round_peak_mean"] = mean(r["max_round_peak"] for r in rows)
+    summary["mean_round_peak_mean"] = mean(r["mean_round_peak"] for r in rows)
+    summary["max_frac_above_K_mean"] = mean(r["max_frac_above_K"] for r in rows)
+    summary["mean_frac_above_K_per_round_mean"] = mean(r["mean_frac_above_K_per_round"] for r in rows)
+    summary["n_obs_mean"] = mean(r["n_obs"] for r in rows)
     return summary
 end
 
@@ -175,14 +196,17 @@ function main()
     println("\n" * "="^80)
     println("  LAMBDA SWEEP RESULTS")
     println("="^80)
-    @printf "  %5s %5s %5s %5s %5s %6s %6s %6s %6s %5s %6s\n" "λ" "none" "basic" "adv" "prem" "mean" "TE_b" "TE_a" "TE_p" "satP95" "%>K"
-    println("  " * "-"^80)
+    @printf "  %5s %5s %5s %5s %5s %6s %6s %6s %6s %6s %7s %6s %7s\n" "λ" "none" "basic" "adv" "prem" "mean" "TE_b" "TE_a" "TE_p" "p95sat" "rndPk" "%>K_o" "%>K_pk"
+    println("  " * "-"^85)
     for s in summaries
-        @printf "  %5.2f %5.2f %5.2f %5.2f %5.2f %6.3f %+6.2f %+6.2f %+6.2f %5.2f %5.1f%%\n" (
+        @printf "  %5.2f %5.2f %5.2f %5.2f %5.2f %6.3f %+6.2f %+6.2f %+6.2f %6.2f %7.2f %5.1f%% %6.1f%%\n" (
             s["lambda"], s["none_survival_mean"], s["basic_survival_mean"],
             s["advanced_survival_mean"], s["premium_survival_mean"],
             s["mean_survival_overall"], s["basic_te_pp"], s["advanced_te_pp"],
-            s["premium_te_pp"], s["sat_p95_mean"], 100*s["frac_above_K_mean"])...
+            s["premium_te_pp"],
+            s["sat_p95_mean"], s["max_round_peak_mean"],
+            100*s["frac_above_K_overall_mean"],
+            100*s["max_frac_above_K_mean"])...
     end
 
     # Save CSVs

@@ -1891,7 +1891,9 @@ function choose_ai_level(
     # v3.5.9: use agent.operating_cost_estimate (sector-derived) rather than
     # global BASE_OPERATIONAL_COST so the agent's perceived cost environment
     # matches the actual sector-specific charge in estimate_operational_costs.
-    operating_cost = max(agent.operating_cost_estimate, 1.0)
+    # v3.5.10: also apply OPS_COST_INTENSITY so refutation knob shifts both
+    # actual burn and perceived burn coherently.
+    operating_cost = max(agent.operating_cost_estimate * agent.config.OPS_COST_INTENSITY, 1.0)
     recent_activity = max(1.0, Float64(get(metrics, "recent_ai_activity", 1.0)))
 
     cost_ratios = Dict{String,Float64}()
@@ -2772,8 +2774,11 @@ function make_decision!(
 
     # Calculate utilities for each action. v3.5.9: use agent's sector-specific
     # operating_cost_estimate (matches actual sector charge), not the global
-    # BASE_OPERATIONAL_COST.
-    estimated_cost = agent.operating_cost_estimate
+    # BASE_OPERATIONAL_COST. v3.5.10: also apply OPS_COST_INTENSITY so
+    # refutation OPS_COST_50% etc. perturb both the actual charge AND the
+    # cost the agent perceives in its decision utility (otherwise the agent
+    # plans for full burn but pays half).
+    estimated_cost = agent.operating_cost_estimate * agent.config.OPS_COST_INTENSITY
 
     invest_utility = calculate_investment_utility(agent, opportunities, market_conditions, perception; ai_level=ai_level, info_system=info_system)
     innovate_utility = calculate_innovation_utility(agent, market_conditions, perception; ai_level=ai_level)

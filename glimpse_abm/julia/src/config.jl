@@ -725,9 +725,14 @@ function initialize!(config::EmergentConfig)
         scale = config.N_AGENTS / config.SCALE_REFERENCE_N  # ratio (e.g., 10 for 10K, 100 for 100K)
         sqrt_scale = sqrt(scale)
 
-        # Crowding capacity K: threshold for crowding penalty start.
-        # Scale by √N so the fraction of opportunities exceeding capacity
-        # stays approximately constant as population grows.
+        # v3.5.10 audit: do NOT scale CROWDING_CAPACITY_RATIO_K (the active
+        # convex-crowding threshold). The threshold is an economic property
+        # of the opportunity ("saturation 1.5× capacity triggers the
+        # convex penalty"), not a population-level statistic. Scaling it
+        # with √N collides with the x_min floor (models.jl:418) and pins
+        # all penalty levels to the same return distribution. The legacy
+        # CROWDING_CAPACITY_K (kept for backwards compat) is still scaled
+        # but currently unread by any active code path.
         config.CROWDING_CAPACITY_K *= sqrt_scale
 
         # Opportunity base capacity: max capital an opportunity absorbs.
