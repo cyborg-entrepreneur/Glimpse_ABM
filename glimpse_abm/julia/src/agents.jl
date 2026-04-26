@@ -1448,7 +1448,8 @@ function snapshot(agent::EmergentAgent, round::Int)::Dict{String,Any}
         "uncertainty_tolerance" => agent.uncertainty_tolerance,
         "innovativeness" => agent.innovativeness,
         "competence" => agent.competence,
-        "ai_trust" => agent.ai_trust
+        "ai_trust" => agent.ai_trust,
+        "paradox_signal" => agent.paradox_signal,
     )
 end
 

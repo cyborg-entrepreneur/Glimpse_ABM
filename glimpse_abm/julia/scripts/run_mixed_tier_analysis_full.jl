@@ -257,7 +257,7 @@ end
 """
 Aggregate results and compute summary statistics.
 """
-function aggregate_results(all_results::Vector{Dict})
+function aggregate_results(all_results::AbstractVector{<:AbstractDict})
     tier_data = Dict{String, Dict{String, Vector{Float64}}}()
     for tier in AI_TIERS
         tier_data[tier] = Dict(
@@ -318,25 +318,32 @@ function aggregate_results(all_results::Vector{Dict})
         end
     end
 
-    # Compute summary statistics
+    # Compute summary statistics. v3.5.19: every aggregate is guarded against
+    # empty / single-sample inputs so calibration sweeps and zero-success
+    # batches do not poison the saved CSVs with NaN. mean/std on a 0-length
+    # vector returns NaN; std on a 1-length vector also returns NaN (sample
+    # variance needs n>=2). safe_mean/safe_std collapse both edge cases to
+    # 0.0 so downstream consumers see a valid Float64.
+    safe_mean(v) = isempty(v) ? 0.0 : mean(v)
+    safe_std(v)  = length(v) < 2 ? 0.0 : std(v)
     summary_stats = Dict{String, Dict{String, Any}}()
     for tier in AI_TIERS
         d = tier_data[tier]
         summary_stats[tier] = Dict(
-            "mean_survival_rate" => mean(d["survival_rate"]),
-            "std_survival_rate" => std(d["survival_rate"]),
-            "mean_p50_capital" => mean(d["p50_capital"]),
-            "mean_p90_capital" => mean(d["p90_capital"]),
-            "mean_p95_capital" => mean(d["p95_capital"]),
-            "mean_innovate_share" => mean(d["innovate_share"]),
-            "mean_explore_share" => mean(d["explore_share"]),
-            "mean_innovations_per_agent" => mean(d["innovations_per_agent"]),
-            "mean_innovation_successes_per_agent" => mean(d["innovation_successes_per_agent"]),
-            "mean_innovation_success_rate" => mean(d["innovation_success_rate"]),
-            "mean_niches_per_agent" => mean(d["niches_per_agent"]),
-            "mean_combinations_per_agent" => mean(d["combinations_per_agent"]),
-            "mean_paradox_signal" => isempty(d["paradox_signal_mean"]) ? 0.0 : mean(d["paradox_signal_mean"]),
-            "std_paradox_signal" => isempty(d["paradox_signal_mean"]) ? 0.0 : std(d["paradox_signal_mean"]),
+            "mean_survival_rate" => safe_mean(d["survival_rate"]),
+            "std_survival_rate" => safe_std(d["survival_rate"]),
+            "mean_p50_capital" => safe_mean(d["p50_capital"]),
+            "mean_p90_capital" => safe_mean(d["p90_capital"]),
+            "mean_p95_capital" => safe_mean(d["p95_capital"]),
+            "mean_innovate_share" => safe_mean(d["innovate_share"]),
+            "mean_explore_share" => safe_mean(d["explore_share"]),
+            "mean_innovations_per_agent" => safe_mean(d["innovations_per_agent"]),
+            "mean_innovation_successes_per_agent" => safe_mean(d["innovation_successes_per_agent"]),
+            "mean_innovation_success_rate" => safe_mean(d["innovation_success_rate"]),
+            "mean_niches_per_agent" => safe_mean(d["niches_per_agent"]),
+            "mean_combinations_per_agent" => safe_mean(d["combinations_per_agent"]),
+            "mean_paradox_signal" => safe_mean(d["paradox_signal_mean"]),
+            "std_paradox_signal" => safe_std(d["paradox_signal_mean"]),
             "n_runs" => length(d["survival_rate"]),
             "trajectory" => get(mean_trajectories, tier, Float64[])
         )
@@ -355,8 +362,8 @@ function aggregate_results(all_results::Vector{Dict})
             haskey(r, "saturation") || continue
             push!(vals, Float64(r["saturation"][key]))
         end
-        sat_summary["mean_" * key] = isempty(vals) ? 0.0 : mean(vals)
-        sat_summary["std_" * key] = isempty(vals) ? 0.0 : std(vals)
+        sat_summary["mean_" * key] = safe_mean(vals)
+        sat_summary["std_" * key] = safe_std(vals)
     end
 
     return Dict(
@@ -371,7 +378,7 @@ end
 """
 Save comprehensive results to CSV files.
 """
-function save_results(summary::Dict, all_results::Vector{Dict}, output_dir::String)
+function save_results(summary::Dict, all_results::AbstractVector{<:AbstractDict}, output_dir::String)
     mkpath(output_dir)
     stats = summary["summary_stats"]
 
@@ -432,9 +439,11 @@ function save_results(summary::Dict, all_results::Vector{Dict}, output_dir::Stri
     end
     CSV.write(joinpath(output_dir, "per_run_data.csv"), DataFrame(run_rows))
 
-    # 3. Survival trajectories
+    # 3. Survival trajectories. v3.5.19: guard against empty trajectory dict
+    # (zero successful runs) and missing tier keys (partial-batch case).
     trajectories = summary["mean_trajectories"]
-    if !isempty(first(values(trajectories)))
+    if !isempty(trajectories) &&
+       all(haskey(trajectories, t) && !isempty(trajectories[t]) for t in AI_TIERS)
         traj_df = DataFrame(
             round=1:N_ROUNDS,
             none=trajectories["none"],
@@ -445,13 +454,18 @@ function save_results(summary::Dict, all_results::Vector{Dict}, output_dir::Stri
         CSV.write(joinpath(output_dir, "survival_trajectories.csv"), traj_df)
     end
 
-    # 4. Treatment effects
+    # 4. Treatment effects. v3.5.19: guard std_error denominator so a
+    # zero-success batch yields 0.0 instead of Inf (sqrt(0)) and a single-
+    # success batch yields std/1 = 0.0 (we already collapsed std to 0.0
+    # for n<2 in aggregate_results).
     baseline = stats["none"]["mean_survival_rate"]
     effects = [(
         tier=tier,
         survival_rate=stats[tier]["mean_survival_rate"],
         treatment_effect=(stats[tier]["mean_survival_rate"] - baseline) * 100,
-        std_error=stats[tier]["std_survival_rate"] / sqrt(stats[tier]["n_runs"])
+        std_error=stats[tier]["n_runs"] > 0 ?
+            stats[tier]["std_survival_rate"] / sqrt(stats[tier]["n_runs"]) :
+            0.0,
     ) for tier in AI_TIERS]
     CSV.write(joinpath(output_dir, "treatment_effects.csv"), DataFrame(effects))
 
@@ -625,7 +639,11 @@ function main()
             @warn "Run $run_idx failed: $e"
         end
 
-        c = Threads.atomic_add!(completed, 1)
+        # v3.5.19: Threads.atomic_add! returns the OLD value (Julia follows
+        # C __atomic_fetch_add semantics). Add 1 to get the post-increment
+        # count so the log prints 1..N (not 0..N-1) and the final N/N line
+        # actually fires.
+        c = Threads.atomic_add!(completed, 1) + 1
         if c % 10 == 0 || c == N_RUNS
             @printf("  Completed %d/%d runs (%.1fs elapsed)\n", c, N_RUNS, time() - start_time)
         end
