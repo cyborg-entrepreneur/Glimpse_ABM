@@ -638,79 +638,12 @@ end
 # KNOWLEDGE DECAY AND FORGETTING
 # ============================================================================
 
-"""
-Apply hallucination penalty when AI misleads an agent.
-Reduces effective knowledge trust in the affected domain.
-"""
-function apply_hallucination_penalty!(
-    kb::KnowledgeBase,
-    agent,  # EmergentAgent - untyped to avoid circular deps
-    domain::String,
-    severity::Float64=0.2
-)
-    resources = agent.resources
-    if isnothing(resources)
-        return
-    end
-
-    knowledge_map = resources.knowledge
-    if isempty(knowledge_map)
-        return
-    end
-
-    # Get available sectors from agent's knowledge
-    available_sectors = collect(keys(knowledge_map))
-    default_sector = !isempty(available_sectors) ? first(available_sectors) : "tech"
-
-    # Domain to sector mapping
-    base_domain_to_sector = Dict(
-        "market_analysis" => "retail",
-        "technical_assessment" => "tech",
-        "uncertainty_evaluation" => "service",
-        "innovation_potential" => "manufacturing"
-    )
-
-    domain_to_sector = Dict{String,String}()
-    for (d, s) in base_domain_to_sector
-        domain_to_sector[d] = s in available_sectors ? s : default_sector
-    end
-
-    target_sector = get(domain_to_sector, domain, nothing)
-    if isnothing(target_sector) || !haskey(knowledge_map, target_sector)
-        return
-    end
-
-    # Apply penalty to target sector
-    penalty = clamp(0.1 + severity * 0.45, 0.1, 0.65)
-    knowledge_map[target_sector] = max(0.01, knowledge_map[target_sector] * (1.0 - penalty))
-
-    # Propagate lighter penalty to adjacent sectors
-    neighbor_penalty = penalty * 0.35
-    for sector in available_sectors
-        if sector != target_sector
-            knowledge_map[sector] = max(0.01, knowledge_map[sector] * (1.0 - neighbor_penalty))
-        end
-    end
-
-    # Reduce cognitive capabilities
-    if !isnothing(resources.capabilities)
-        for key in ["uncertainty_management", "opportunity_evaluation"]
-            if haskey(resources.capabilities, key)
-                resources.capabilities[key] = max(0.01, resources.capabilities[key] * (1.0 - penalty * 0.25))
-            end
-        end
-    end
-
-    # Suppress domain trust in AI learning profile
-    ai_learning = agent.ai_learning
-    if !isnothing(ai_learning) && haskey(ai_learning.domain_trust, domain)
-        ai_learning.domain_trust[domain] = max(0.0, ai_learning.domain_trust[domain] - penalty * 0.4)
-    end
-
-    # Trigger targeted forgetting
-    current_level = agent.current_ai_level
-    forget_sector_knowledge!(kb, agent, target_sector, severity; ai_level=current_level)
-end
+# v3.5.11: apply_hallucination_penalty! deleted (no production callers in
+# any release of v3.x). Hallucination is currently captured at decision time
+# via AI_DOMAIN_CAPABILITIES.hallucination_rate which feeds the agent's
+# information-quality calculation (information.jl); no separate penalty path
+# is wired. If adding explicit penalties later, call from simulation.jl after
+# investment maturity rather than reintroducing the dead function.
 
 """
 Forget knowledge in a specific sector based on severity.
@@ -859,117 +792,15 @@ function prune_by_sector_strength!(
     end
 end
 
-"""
-Apply sector-specific knowledge decay to agent resources.
-Uses calibrated decay rates from SectorProfile (based on Ebbinghaus forgetting curve
-and industry skill depreciation research).
+# apply_sector_decay! deleted in v3.5.11 (one-shot learning model;
+# see comment block above the prior apply_tier_decay! deletion).
 
-Decay rates by sector (per round):
-- Tech: 0.12 (2-3 year half-life, fast obsolescence)
-- Retail: 0.07 (4-5 year half-life)
-- Service: 0.05 (5-7 year half-life, stable expertise)
-- Manufacturing: 0.03 (7-10 year half-life, most durable)
-"""
-function apply_sector_decay!(
-    kb::KnowledgeBase,
-    agent,  # EmergentAgent - untyped to avoid circular deps
-    current_round::Int;
-    usage_weights::Dict{String,Float64}=Dict{String,Float64}(),
-    rng::AbstractRNG=Random.default_rng()
-)
-    if isnothing(agent.resources)
-        return
-    end
-
-    resources = agent.resources
-    knowledge_map = resources.knowledge
-    if isempty(knowledge_map)
-        return
-    end
-
-    for sector in collect(keys(knowledge_map))
-        # Get sector-specific decay rate from SectorProfile
-        sector_profile = get(kb.config.SECTOR_PROFILES, sector, nothing)
-        sector_decay_rate = if !isnothing(sector_profile) && hasproperty(sector_profile, :knowledge_decay_rate)
-            sector_profile.knowledge_decay_rate
-        else
-            0.075  # Default fallback
-        end
-
-        # Activity modifier - recent usage reduces decay
-        usage_factor = clamp(get(usage_weights, sector, 0.0), 0.0, 1.0)
-        activity_mod = 1.0 - 0.5 * usage_factor
-
-        # Add some noise
-        noise = clamp(randn(rng) * 0.1 + 1.0, 0.7, 1.3)
-
-        # Calculate effective decay rate
-        effective_decay = sector_decay_rate * activity_mod * noise
-        effective_decay = clamp(effective_decay, 0.0, 0.9)
-
-        # Apply decay
-        knowledge_map[sector] = max(0.01, knowledge_map[sector] * (1.0 - effective_decay))
-    end
-end
-
-"""
-Apply tier-specific knowledge decay.
-"""
-function apply_tier_decay!(
-    kb::KnowledgeBase,
-    agent_id::Int,
-    ai_level::String;
-    rng::AbstractRNG=Random.default_rng()
-)
-    tier = normalize_ai_label(ai_level)
-
-    # Get AI info signals
-    ai_config = get(kb.config.AI_LEVELS, ai_level, kb.config.AI_LEVELS["none"])
-    info_quality = Float64(get(ai_config, "info_quality", 0.0))
-
-    # v3.5.5 audit: replaced tier-keyed decay_map (none=0.08, basic=0.05,
-    # advanced=0.025, premium=0.0) with a uniform base modulated by
-    # info_quality alone. The previous map was a redundant per-tier knob
-    # ON TOP of the existing retention_modifier — and premium having 0.0
-    # decay made the modifier irrelevant for that tier (premium literally
-    # never forgot any knowledge).
-    #
-    # v3.5.6 calibration: base_decay = 0.013 anchors none-tier knowledge
-    # to a 5-year half-life ((1-0.013*0.8875)^60 ≈ 0.50), matching the
-    # McKinsey/WEF tech-skill obsolescence estimate. Premium decays at
-    # 0.013 × 0.5635 ≈ 0.0073/round → 60-month retention ≈ 0.64. Earlier
-    # base_decay = 0.05 implied 5-year retention of 6-18% — too aggressive
-    # for entrepreneurs running businesses with records, databases, and
-    # (for AI tiers) persistent retrieval; pulled mean survival well below
-    # the BLS 50-55% band. Tier differentiation flows from
-    # AI_LEVELS.info_quality alone.
-    base_decay = 0.013
-    retention_modifier = clamp(1.0 - 0.45 * info_quality, 0.2, 1.0)
-    drop_prob = base_decay * retention_modifier
-
-    knowledge_ids = get(kb.agent_knowledge, agent_id, Set{String}())
-    if isempty(knowledge_ids) || drop_prob <= 0.0
-        return
-    end
-
-    if rand(rng) >= drop_prob
-        return
-    end
-
-    # Only drop non-base knowledge
-    drop_candidates = [kid for kid in knowledge_ids if !startswith(kid, "base_")]
-    if isempty(drop_candidates)
-        return
-    end
-
-    drop_count = max(1, Int(round(length(drop_candidates) * max(0.05, drop_prob))))
-    n_remove = min(length(drop_candidates), drop_count)
-    removed = Random.shuffle(collect(drop_candidates))[1:n_remove]
-
-    for kid in removed
-        delete!(knowledge_ids, kid)
-    end
-end
+# v3.5.11 audit: apply_tier_decay! / apply_sector_decay! / apply_hallucination_penalty!
+# DELETED (had no production callers in any release of v3.x). The model uses
+# one-shot learning: agents accumulate knowledge through innovation/exploration
+# and never lose it. Knowledge decay is a separate research literature; if
+# adding it later, wire decay calls into simulation.jl's per-round step!
+# at the right phase rather than re-introducing dead functions.
 
 """
 Update domain belief using Bayesian update.

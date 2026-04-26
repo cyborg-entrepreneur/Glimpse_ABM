@@ -2772,13 +2772,16 @@ function make_decision!(
         )
     end
 
-    # Calculate utilities for each action. v3.5.9: use agent's sector-specific
-    # operating_cost_estimate (matches actual sector charge), not the global
-    # BASE_OPERATIONAL_COST. v3.5.10: also apply OPS_COST_INTENSITY so
-    # refutation OPS_COST_50% etc. perturb both the actual charge AND the
-    # cost the agent perceives in its decision utility (otherwise the agent
-    # plans for full burn but pays half).
-    estimated_cost = agent.operating_cost_estimate * agent.config.OPS_COST_INTENSITY
+    # Calculate utilities for each action. v3.5.11: use estimate_operational_costs
+    # so the agent's perceived cost reflects (a) sector-specific base via
+    # agent.operating_cost_estimate, (b) OPS_COST_INTENSITY refutation knob,
+    # and (c) competition multiplier from agent's own active investments —
+    # all three components of what's actually charged. (The round-local
+    # severity multiplier in simulation.jl is bounded [0.7, 1.9] and is a
+    # market-wide stochastic variable not visible at decision time, so it's
+    # not modeled in perceived cost; this represents agents reacting to
+    # expected burn, with realized burn fluctuating ±50% via severity.)
+    estimated_cost = estimate_operational_costs(agent, market)
 
     invest_utility = calculate_investment_utility(agent, opportunities, market_conditions, perception; ai_level=ai_level, info_system=info_system)
     innovate_utility = calculate_innovation_utility(agent, market_conditions, perception; ai_level=ai_level)

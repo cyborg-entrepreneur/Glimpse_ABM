@@ -1,3 +1,11 @@
+# DEPRECATED v3.5.11 — single-population / pre-mixed-tier script.
+# Not invoked by the current paper pipeline. Mixed-tier ports live at
+# run_mixed_tier_{analysis_full,refutation_v3,mechanism,placebo,lambda_sweep}.jl.
+# Contains pre-v3.5 calibration assumptions (e.g., BASE_OPERATIONAL_COST
+# overrides where production reads sector cost; legacy decay_map dicts;
+# generic success_count counters that conflate investment vs innovation).
+# Kept for historical reference only; do not run for paper figures.
+
 #!/usr/bin/env julia
 """
 DETAILED DYNAMIC AI ADOPTION ANALYSIS

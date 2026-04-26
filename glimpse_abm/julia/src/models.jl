@@ -277,6 +277,11 @@ function realized_return(
     # =========================================================================
     # CROWDING PENALTY MODEL
     # =========================================================================
+    # Captured outside the if-branch so it can be applied to the realized
+    # Pareto draw later (rather than to base_mean before the draw, which
+    # was muted by the x_min floor at line 418).
+    convex_crowding_penalty = 0.0
+
     # Check which crowding model to use
     use_capacity_convexity = !isnothing(config) &&
         hasfield(typeof(config), :USE_CAPACITY_CONVEXITY_CROWDING) &&
@@ -312,8 +317,16 @@ function realized_return(
         effective_sat = saturation + crowding_index * 0.3
 
         excess = max(0.0, effective_sat / K_sat - 1.0)
-        crowding_penalty = λ * (excess ^ γ)
-        base_mean *= exp(-crowding_penalty)
+        convex_crowding_penalty = λ * (excess ^ γ)
+        # v3.5.11: deferred application — penalty multiplies the realized
+        # Pareto draw below (after the x_min floor), NOT base_mean here.
+        # Earlier the penalty was applied to base_mean before the Pareto
+        # draw, but x_min = clamp(base_mean * 0.24, 0.15, 5.0) at line 418
+        # floors at 0.15 — so any base_mean below 0.625 produced the same
+        # x_min and therefore identical Pareto draws regardless of penalty
+        # magnitude. Probe: at saturation 5×, λ ∈ {0.5, 1.5, 5, 10} produced
+        # identical returns. Applying the penalty multiplicatively to the
+        # realized Pareto draw propagates it faithfully regardless of x_min.
 
         # Scarcity and novelty adjustments (reduced weight since crowding now unified)
         scarcity_bonus = 0.10 * scarcity_signal
@@ -425,6 +438,16 @@ function realized_return(
 
     # Pareto draw already scales with base_mean via x_min — no additional quality scaling needed
     scaled_return = pareto_draw
+
+    # v3.5.11: apply convex-crowding penalty multiplicatively to the realized
+    # return AFTER the Pareto draw. Earlier this multiplied base_mean before
+    # the draw, but the x_min floor at line 418 (0.15) collapsed all penalty
+    # levels above a threshold to identical x_min and therefore identical
+    # Pareto draws. Applying after the draw makes the penalty fire faithfully
+    # regardless of base_mean's relationship to the floor.
+    if convex_crowding_penalty > 0.0
+        scaled_return *= exp(-convex_crowding_penalty)
+    end
 
     # Downside risk adjustment — risk signal plus a hot-market variance term.
     # Hot markets (demand > supply) expose the investor to more contested-

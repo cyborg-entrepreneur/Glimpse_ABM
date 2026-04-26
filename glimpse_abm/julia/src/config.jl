@@ -338,27 +338,6 @@ parameters preserved for exact behavioral compatibility.
     # ========================================================================
     USE_CAPACITY_CONVEXITY_CROWDING::Bool = true  # Enable new crowding model
 
-    # K = Carrying capacity: competition level where penalties START
-    # Interpretation: "effective rivals" that can coexist without pain
-    # At competition < K: no crowding penalty (healthy competition)
-    # At competition = K: penalty just starts.
-    #
-    # v2.5 calibration: K = 1.5 (was 8.0 in earlier canonical drift).
-    # Diagnostic at N=1000 with K=8 showed max competition only reached 2.57
-    # across a 60-round run, so the convexity penalty was DEAD CODE — no
-    # opportunity ever crossed K, exp(-penalty) was always 1.0. The
-    # convergence-driven crowding mechanism (premium agents piling into the
-    # same top-ranked opps → penalty on those opps' returns) couldn't engage.
-    # Restored to v1's K=1.5 so the top ~5-15% of crowded opportunities now
-    # incur a measurable convexity penalty.
-    #
-    # Population scaling multiplies K by √(N/N_ref), so K stays correlated
-    # with the per-opp competition pressure that grows with N.
-    #   N=1K:   K = 1.50
-    #   N=10K:  K = 4.74
-    #   N=100K: K = 15.0
-    CROWDING_CAPACITY_K::Float64 = 1.5
-
     # γ = Convexity exponent: how sharply penalties increase beyond capacity
     # γ = 1: linear (gentle)
     # γ = 1.5: mildly convex (gradual ramp — realistic for competitive markets)
@@ -725,15 +704,12 @@ function initialize!(config::EmergentConfig)
         scale = config.N_AGENTS / config.SCALE_REFERENCE_N  # ratio (e.g., 10 for 10K, 100 for 100K)
         sqrt_scale = sqrt(scale)
 
-        # v3.5.10 audit: do NOT scale CROWDING_CAPACITY_RATIO_K (the active
-        # convex-crowding threshold). The threshold is an economic property
-        # of the opportunity ("saturation 1.5× capacity triggers the
-        # convex penalty"), not a population-level statistic. Scaling it
-        # with √N collides with the x_min floor (models.jl:418) and pins
-        # all penalty levels to the same return distribution. The legacy
-        # CROWDING_CAPACITY_K (kept for backwards compat) is still scaled
-        # but currently unread by any active code path.
-        config.CROWDING_CAPACITY_K *= sqrt_scale
+        # v3.5.11: removed the legacy CROWDING_CAPACITY_K scaling line. That
+        # field has been dead since v3.1 (active convex-crowding model reads
+        # CROWDING_CAPACITY_RATIO_K at models.jl:300). The active threshold
+        # is an economic per-opp property and intentionally does NOT scale
+        # with N — saturation = total_invested/capacity stays bounded as N
+        # grows because OPPORTUNITY_BASE_CAPACITY also scales √N (below).
 
         # Opportunity base capacity: max capital an opportunity absorbs.
         # Total capital scales linearly with N, opportunities sub-linearly.
@@ -752,7 +728,7 @@ function initialize!(config::EmergentConfig)
         config.COMPETITION_DECAY_RATE = min(0.10, 0.02 * sqrt_scale)
 
         config._POPULATION_SCALING_APPLIED = true
-        @info "Population scaling applied" N=config.N_AGENTS ref=config.SCALE_REFERENCE_N scale sqrt_scale K=config.CROWDING_CAPACITY_K capacity=config.OPPORTUNITY_BASE_CAPACITY neighbors=config.NETWORK_N_NEIGHBORS decay=config.COMPETITION_DECAY_RATE
+        @info "Population scaling applied" N=config.N_AGENTS ref=config.SCALE_REFERENCE_N scale sqrt_scale K_ratio=config.CROWDING_CAPACITY_RATIO_K capacity=config.OPPORTUNITY_BASE_CAPACITY neighbors=config.NETWORK_N_NEIGHBORS decay=config.COMPETITION_DECAY_RATE
     end
 
     return config

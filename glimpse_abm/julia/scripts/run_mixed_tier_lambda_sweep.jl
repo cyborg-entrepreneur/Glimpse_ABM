@@ -28,7 +28,7 @@ const N_ROUNDS = 60
 const N_RUNS = 30
 const AI_TIERS = ["none", "basic", "advanced", "premium"]
 const BASE_SEED = 20260425
-const LAMBDA_VALUES = [0.5, 1.0, 1.5, 2.0, 2.5]
+const LAMBDA_VALUES = [2.0, 4.0, 6.0, 8.0, 12.0]
 const K_SAT_FIXED = 1.5
 const GAMMA_FIXED = 1.5
 

@@ -182,15 +182,15 @@ end
     @testset "initialize! is idempotent for population scaling" begin
         cfg = EmergentConfig(N_AGENTS=4000, RANDOM_SEED=42)
         GlimpseABM.initialize!(cfg)
-        k_after_first = cfg.CROWDING_CAPACITY_K
         cap_after_first = cfg.OPPORTUNITY_BASE_CAPACITY
+        thresh_after_first = cfg.DISRUPTION_COMPETITION_THRESHOLD
         # Second call should be a no-op
         GlimpseABM.initialize!(cfg)
-        @test cfg.CROWDING_CAPACITY_K == k_after_first
         @test cfg.OPPORTUNITY_BASE_CAPACITY == cap_after_first
+        @test cfg.DISRUPTION_COMPETITION_THRESHOLD == thresh_after_first
         # And third
         GlimpseABM.initialize!(cfg)
-        @test cfg.CROWDING_CAPACITY_K == k_after_first
+        @test cfg.OPPORTUNITY_BASE_CAPACITY == cap_after_first
     end
 
     # ------------------------------------------------------------------
