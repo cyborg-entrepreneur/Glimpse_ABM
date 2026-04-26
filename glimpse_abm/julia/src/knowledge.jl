@@ -932,11 +932,18 @@ function apply_tier_decay!(
     # info_quality alone. The previous map was a redundant per-tier knob
     # ON TOP of the existing retention_modifier — and premium having 0.0
     # decay made the modifier irrelevant for that tier (premium literally
-    # never forgot any knowledge). Now tier differentiation flows from the
-    # single AI_LEVELS.info_quality field, which is the calibrated capability
-    # input. None decays at ~0.044/round, premium at ~0.028/round — premium
-    # still has a retention advantage but it's bounded and derived.
-    base_decay = 0.05
+    # never forgot any knowledge).
+    #
+    # v3.5.6 calibration: base_decay = 0.013 anchors none-tier knowledge
+    # to a 5-year half-life ((1-0.013*0.8875)^60 ≈ 0.50), matching the
+    # McKinsey/WEF tech-skill obsolescence estimate. Premium decays at
+    # 0.013 × 0.5635 ≈ 0.0073/round → 60-month retention ≈ 0.64. Earlier
+    # base_decay = 0.05 implied 5-year retention of 6-18% — too aggressive
+    # for entrepreneurs running businesses with records, databases, and
+    # (for AI tiers) persistent retrieval; pulled mean survival well below
+    # the BLS 50-55% band. Tier differentiation flows from
+    # AI_LEVELS.info_quality alone.
+    base_decay = 0.013
     retention_modifier = clamp(1.0 - 0.45 * info_quality, 0.2, 1.0)
     drop_prob = base_decay * retention_modifier
 
