@@ -241,17 +241,29 @@ function get_test_suite()
         execution_multipliers=Dict("none"=>1.0,"basic"=>1.5,"advanced"=>2.5,"premium"=>10.0),
         quality_boosts=Dict("none"=>0.0,"basic"=>0.15,"advanced"=>0.30,"premium"=>0.50)))
 
+    # CROWDING tests must override BOTH the sector-level COMPETITION_SCALE_FACTOR
+    # AND the capital-saturation CROWDING_STRENGTH_LAMBDA (default 1.5). The
+    # latter is the actual capital-saturation knob in models.jl:302; previously
+    # only COMPETITION_SCALE_FACTOR was scaled, so "CROWDING_OFF" left
+    # capacity-saturation crowding fully active and the test was uninformative.
     push!(tests, RefutationTest(
         "CROWDING_OFF", "Disable all competition/crowding dynamics", "CROWDING";
         config_overrides=Dict{String,Any}(
             "DISABLE_COMPETITION_DYNAMICS" => true,
-            "COMPETITION_SCALE_FACTOR" => 0.0)))
+            "COMPETITION_SCALE_FACTOR" => 0.0,
+            "CROWDING_STRENGTH_LAMBDA" => 0.0)))
     push!(tests, RefutationTest("CROWDING_25%", "Crowding penalties reduced by 75%", "CROWDING";
-        config_overrides=Dict{String,Any}("COMPETITION_SCALE_FACTOR" => 0.25)))
+        config_overrides=Dict{String,Any}(
+            "COMPETITION_SCALE_FACTOR" => 0.25,
+            "CROWDING_STRENGTH_LAMBDA" => 0.375)))
     push!(tests, RefutationTest("CROWDING_50%", "Crowding penalties reduced by 50%", "CROWDING";
-        config_overrides=Dict{String,Any}("COMPETITION_SCALE_FACTOR" => 0.5)))
+        config_overrides=Dict{String,Any}(
+            "COMPETITION_SCALE_FACTOR" => 0.5,
+            "CROWDING_STRENGTH_LAMBDA" => 0.75)))
     push!(tests, RefutationTest("CROWDING_75%", "Crowding penalties reduced by 25%", "CROWDING";
-        config_overrides=Dict{String,Any}("COMPETITION_SCALE_FACTOR" => 0.75)))
+        config_overrides=Dict{String,Any}(
+            "COMPETITION_SCALE_FACTOR" => 0.75,
+            "CROWDING_STRENGTH_LAMBDA" => 1.125)))
 
     push!(tests, RefutationTest("COST_0%", "AI is completely free (no costs)", "COST";
         config_overrides=Dict{String,Any}("AI_COST_INTENSITY" => 0.0)))
@@ -284,15 +296,18 @@ function get_test_suite()
         config_overrides=Dict{String,Any}(
             "DISABLE_COMPETITION_DYNAMICS" => true,
             "COMPETITION_SCALE_FACTOR" => 0.0,
+            "CROWDING_STRENGTH_LAMBDA" => 0.0,
             "AI_COST_INTENSITY" => 0.0)))
     push!(tests, RefutationTest("NO_CROWD_5X_EXEC", "No crowding + 5x execution", "COMBINED_FAV";
         execution_multipliers=Dict("none"=>1.0,"basic"=>1.2,"advanced"=>1.6,"premium"=>5.0),
         config_overrides=Dict{String,Any}(
             "DISABLE_COMPETITION_DYNAMICS" => true,
-            "COMPETITION_SCALE_FACTOR" => 0.0)))
+            "COMPETITION_SCALE_FACTOR" => 0.0,
+            "CROWDING_STRENGTH_LAMBDA" => 0.0)))
     push!(tests, RefutationTest("CROWD_50_FREE_AI", "50% crowding + Free AI", "COMBINED_FAV";
         config_overrides=Dict{String,Any}(
             "COMPETITION_SCALE_FACTOR" => 0.5,
+            "CROWDING_STRENGTH_LAMBDA" => 0.75,
             "AI_COST_INTENSITY" => 0.0)))
     push!(tests, RefutationTest("ALL_FAVORABLE",
         "All favorable: no crowd, free AI, 10x exec, +50% quality", "COMBINED_FAV";
@@ -301,6 +316,7 @@ function get_test_suite()
         config_overrides=Dict{String,Any}(
             "DISABLE_COMPETITION_DYNAMICS" => true,
             "COMPETITION_SCALE_FACTOR" => 0.0,
+            "CROWDING_STRENGTH_LAMBDA" => 0.0,
             "AI_COST_INTENSITY" => 0.0,
             "RECURSION_WEIGHTS" => Dict(
                 "crowd_weight" => 0.0, "volatility_weight" => 0.30,

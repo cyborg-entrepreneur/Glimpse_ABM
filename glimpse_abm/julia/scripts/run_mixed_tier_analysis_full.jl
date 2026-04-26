@@ -106,88 +106,52 @@ function run_single_mixed_simulation(run_idx::Int, seed::Int)
         end
     end
 
-    # Initialize tracking structures
+    # Per-round survival trajectories per tier
     trajectories = Dict{String, Vector{Float64}}(tier => Float64[] for tier in AI_TIERS)
 
-    # Action tracking per tier
-    action_counts = Dict{String, Dict{String, Int}}()
-    for tier in AI_TIERS
-        action_counts[tier] = Dict("invest" => 0, "innovate" => 0, "explore" => 0, "maintain" => 0)
-    end
-
-    # Innovation tracking
-    innovation_attempts = Dict{String, Int}(tier => 0 for tier in AI_TIERS)
-    innovation_successes = Dict{String, Int}(tier => 0 for tier in AI_TIERS)
-    niches_created = Dict{String, Int}(tier => 0 for tier in AI_TIERS)
-
-    # Cumulative niches over time
-    cumulative_niches = Dict{String, Vector{Int}}(tier => Int[] for tier in AI_TIERS)
-
-    # Run simulation with tracking
+    # Run simulation, tracking survival each round
     for round in 1:N_ROUNDS
-        # Track pre-step state for action counting
-        pre_step_actions = Dict{Int, String}()
-
         GlimpseABM.step!(sim, round)
-
-        # Track survival by tier
         for tier in AI_TIERS
             tier_agents = filter(a -> a.fixed_ai_level == tier, sim.agents)
             alive_count = count(a -> a.alive, tier_agents)
             push!(trajectories[tier], alive_count / length(tier_agents))
         end
-
-        # Track actions and innovations (approximate from agent state)
-        for agent in sim.agents
-            if agent.alive
-                tier = agent.fixed_ai_level
-
-                # Track last action if available
-                if hasproperty(agent, :last_action) && !isnothing(agent.last_action)
-                    action = string(agent.last_action)
-                    if haskey(action_counts[tier], action)
-                        action_counts[tier][action] += 1
-                    end
-                end
-
-                # Track innovations
-                if hasproperty(agent, :innovation_attempts)
-                    innovation_attempts[tier] = max(innovation_attempts[tier],
-                        get(agent.innovation_attempts, :total, 0))
-                end
-                if hasproperty(agent, :innovation_successes)
-                    innovation_successes[tier] = max(innovation_successes[tier],
-                        get(agent.innovation_successes, :total, 0))
-                end
-            end
-        end
-
-        # Track cumulative niches (simplified - count from market if available)
-        for tier in AI_TIERS
-            push!(cumulative_niches[tier], niches_created[tier])
-        end
     end
 
-    # Compute final statistics by tier
+    # End-of-run aggregation. Action shares are computed from agent.action_history
+    # over ALL agents (alive + dead), not just survivors at the end. Earlier
+    # passes used last_action on agents alive after each step!, which excluded
+    # actions taken by agents that died that round — biasing shares toward the
+    # actions of survivors. Using action_history over all agents fixes that.
     tier_stats = Dict{String, Dict{String, Any}}()
 
     for tier in AI_TIERS
         tier_agents = filter(a -> a.fixed_ai_level == tier, sim.agents)
         alive = filter(a -> a.alive, tier_agents)
 
-        # Wealth statistics
         survivor_capitals = [a.resources.capital for a in alive]
 
-        # Compute action shares
-        total_actions = sum(values(action_counts[tier]))
-        innovate_share = total_actions > 0 ? action_counts[tier]["innovate"] / total_actions : 0.0
-        explore_share = total_actions > 0 ? action_counts[tier]["explore"] / total_actions : 0.0
+        # Action counts from full action_history (no survivorship bias)
+        action_counts = Dict("invest" => 0, "innovate" => 0, "explore" => 0, "maintain" => 0)
+        for agent in tier_agents
+            for act in agent.action_history
+                haskey(action_counts, act) && (action_counts[act] += 1)
+            end
+        end
+        total_actions = sum(values(action_counts))
+        innovate_share = total_actions > 0 ? action_counts["innovate"] / total_actions : 0.0
+        explore_share = total_actions > 0 ? action_counts["explore"] / total_actions : 0.0
 
-        # Innovation metrics — agent struct fields (v3.3.4+)
+        # Innovation metrics — agent struct fields (v3.3.4+, post-bug-fix)
         tier_innovation_count = sum(a.innovation_count for a in tier_agents)
         tier_innovation_successes = sum(a.innovation_success_count for a in tier_agents)
         tier_innovation_success_rate = tier_innovation_count > 0 ?
             tier_innovation_successes / tier_innovation_count : 0.0
+
+        # Niches discovered — read from agent uncertainty metrics
+        tier_total_niches = sum(a.uncertainty_metrics.niches_discovered for a in tier_agents)
+        tier_combinations = sum(a.uncertainty_metrics.new_combinations_created for a in tier_agents)
 
         tier_stats[tier] = Dict(
             "total" => length(tier_agents),
@@ -196,24 +160,22 @@ function run_single_mixed_simulation(run_idx::Int, seed::Int)
             "survival_rate" => length(alive) / length(tier_agents),
             "trajectory" => trajectories[tier],
 
-            # Wealth metrics
             "mean_survivor_capital" => isempty(survivor_capitals) ? 0.0 : mean(survivor_capitals),
             "median_survivor_capital" => isempty(survivor_capitals) ? 0.0 : median(survivor_capitals),
             "p50_capital" => isempty(survivor_capitals) ? 0.0 : quantile(survivor_capitals, 0.5),
             "p90_capital" => isempty(survivor_capitals) ? 0.0 : quantile(survivor_capitals, 0.9),
             "p95_capital" => isempty(survivor_capitals) ? 0.0 : quantile(survivor_capitals, 0.95),
 
-            # Action shares
             "innovate_share" => innovate_share,
             "explore_share" => explore_share,
-            "action_counts" => action_counts[tier],
+            "action_counts" => action_counts,
 
-            # Innovation metrics
             "innovations_per_agent" => tier_innovation_count / length(tier_agents),
             "innovation_successes_per_agent" => tier_innovation_successes / length(tier_agents),
             "innovation_success_rate" => tier_innovation_success_rate,
-            "total_niches" => niches_created[tier],
-            "cumulative_niches" => cumulative_niches[tier]
+            "total_niches" => tier_total_niches,
+            "niches_per_agent" => tier_total_niches / length(tier_agents),
+            "combinations_per_agent" => tier_combinations / length(tier_agents),
         )
     end
 
@@ -241,7 +203,9 @@ function aggregate_results(all_results::Vector{Dict})
             "explore_share" => Float64[],
             "innovations_per_agent" => Float64[],
             "innovation_successes_per_agent" => Float64[],
-            "innovation_success_rate" => Float64[]
+            "innovation_success_rate" => Float64[],
+            "niches_per_agent" => Float64[],
+            "combinations_per_agent" => Float64[]
         )
     end
 
@@ -264,6 +228,8 @@ function aggregate_results(all_results::Vector{Dict})
                 push!(tier_data[tier]["innovations_per_agent"], stats["innovations_per_agent"])
                 push!(tier_data[tier]["innovation_successes_per_agent"], stats["innovation_successes_per_agent"])
                 push!(tier_data[tier]["innovation_success_rate"], stats["innovation_success_rate"])
+                push!(tier_data[tier]["niches_per_agent"], stats["niches_per_agent"])
+                push!(tier_data[tier]["combinations_per_agent"], stats["combinations_per_agent"])
                 push!(all_trajectories[tier], stats["trajectory"])
             end
         end
@@ -298,6 +264,8 @@ function aggregate_results(all_results::Vector{Dict})
             "mean_innovations_per_agent" => mean(d["innovations_per_agent"]),
             "mean_innovation_successes_per_agent" => mean(d["innovation_successes_per_agent"]),
             "mean_innovation_success_rate" => mean(d["innovation_success_rate"]),
+            "mean_niches_per_agent" => mean(d["niches_per_agent"]),
+            "mean_combinations_per_agent" => mean(d["combinations_per_agent"]),
             "n_runs" => length(d["survival_rate"]),
             "trajectory" => get(mean_trajectories, tier, Float64[])
         )
@@ -334,6 +302,8 @@ function save_results(summary::Dict, all_results::Vector{Dict}, output_dir::Stri
             mean_innovations_per_agent=s["mean_innovations_per_agent"],
             mean_innovation_successes_per_agent=s["mean_innovation_successes_per_agent"],
             mean_innovation_success_rate=s["mean_innovation_success_rate"],
+            mean_niches_per_agent=s["mean_niches_per_agent"],
+            mean_combinations_per_agent=s["mean_combinations_per_agent"],
             n_runs=s["n_runs"]
         ))
     end
@@ -360,7 +330,9 @@ function save_results(summary::Dict, all_results::Vector{Dict}, output_dir::Stri
                     explore_share=s["explore_share"],
                     innovations_per_agent=s["innovations_per_agent"],
                     innovation_successes_per_agent=s["innovation_successes_per_agent"],
-                    innovation_success_rate=s["innovation_success_rate"]
+                    innovation_success_rate=s["innovation_success_rate"],
+                    niches_per_agent=s["niches_per_agent"],
+                    combinations_per_agent=s["combinations_per_agent"],
                 ))
             end
         end

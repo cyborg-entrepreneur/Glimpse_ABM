@@ -1078,6 +1078,12 @@ function _execute_innovate!(
             outcome["failure_reason"] = "no_viable_combination"
             outcome["is_new_combination"] = false
 
+            # Count this as an innovation attempt (no Innovation object was
+            # created, but the agent did select :innovate and burn R&D). Without
+            # this increment, innovation_count was below action-selection counts
+            # by ~10% (probe: 370 actions vs 337 counted innovations).
+            agent.innovation_count += 1
+            agent.innovation_failure_count += 1
             agent.failure_count += 1
         end
     else
