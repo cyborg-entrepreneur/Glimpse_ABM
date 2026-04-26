@@ -785,7 +785,10 @@ function forget_stale_knowledge!(
         return
     end
 
-    config_max = get(kb.config.parameters, "MAX_AGENT_KNOWLEDGE", 120)
+    # v3.5.16 Phase 1: Julia EmergentConfig has direct fields, not a parameters
+    # Dict (Python pattern). Read MAX_AGENT_KNOWLEDGE directly as a struct field.
+    config_max = !isnothing(kb.config) && hasproperty(kb.config, :MAX_AGENT_KNOWLEDGE) ?
+        kb.config.MAX_AGENT_KNOWLEDGE : 120
     max_keep = isnothing(max_size) ? config_max : max_size
     if max_keep <= 0
         max_keep = 60

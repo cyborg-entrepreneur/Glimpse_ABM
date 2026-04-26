@@ -307,6 +307,15 @@ function step!(sim::EmergentSimulation, round::Int)
             else
                 update_state_from_outcome!(agent, m; ai_was_accurate=nothing)
             end
+
+            # v3.5.16 Phase 1: record paradox observation (confidence-vs-ROI gap).
+            # Mirrors Python simulation.py:1041 post-maturity call. Pure
+            # telemetry — populates agent state for paper diagnostics, no
+            # downstream effect on decisions.
+            decision_conf = Float64(get(m, "decision_confidence", get(m, "ai_confidence", 0.5)))
+            realized_roi = Float64(get(m, "return_multiple", 1.0))
+            record_paradox_observation!(agent, decision_conf, realized_roi;
+                                        ai_used=(ai_tier != "none"))
         end
         append!(all_matured, matured)
         # Solvency check deferred to end-of-round (see comment above Phase 1.5).
@@ -477,7 +486,32 @@ function step!(sim::EmergentSimulation, round::Int)
                 get(action, "success", false) ? 1.5 : 0.5
             end
             update_tier_belief!(agent.ai_learning, ai_tier, return_mult)
+
+            # v3.5.16 Phase 1: record paradox observation for innovate/explore.
+            # Mirrors Python simulation.py:1246. Pure telemetry.
+            decision_conf = Float64(get(action, "decision_confidence",
+                                        get(action, "ai_confidence", 0.5)))
+            record_paradox_observation!(agent, decision_conf, return_mult;
+                                        ai_used=(ai_tier != "none"))
         end
+    end
+
+    # v3.5.16 Phase 1: end-of-round knowledge maintenance.
+    # Mirrors Python simulation.py:1294-1295. Cull stale knowledge that's
+    # rarely used and prune sectors below strength threshold. Prevents
+    # unbounded knowledge-portfolio growth across long runs and matches
+    # the Python implementation's per-round bookkeeping.
+    max_knowledge = hasproperty(sim.config, :MAX_AGENT_KNOWLEDGE) ?
+        sim.config.MAX_AGENT_KNOWLEDGE : nothing
+    prune_threshold = hasproperty(sim.config, :SECTOR_STRENGTH_PRUNE_THRESHOLD) ?
+        sim.config.SECTOR_STRENGTH_PRUNE_THRESHOLD : 0.05
+    for agent in sim.agents
+        agent.alive || continue
+        forget_stale_knowledge!(sim.knowledge_base, agent, round;
+                                max_size=max_knowledge, drop_fraction=0.1)
+        prune_by_sector_strength!(sim.knowledge_base, agent,
+                                  agent.resources.knowledge;
+                                  threshold=prune_threshold)
     end
 
     # Phase 4: Final survival check for all agents (matches Python lines 1077-1078)
