@@ -179,10 +179,40 @@ function run_single_mixed_simulation(run_idx::Int, seed::Int)
         )
     end
 
+    # Capacity-saturation diagnostics — extract from sim.market.opportunities
+    # to verify the convex crowding mechanism is active. saturation_max,
+    # quantiles, and fraction above K_sat tell us how often the penalty fires.
+    K_sat = hasproperty(sim.config, :CROWDING_CAPACITY_RATIO_K) ?
+        sim.config.CROWDING_CAPACITY_RATIO_K : 1.5
+    live_sats = Float64[]
+    for o in sim.market.opportunities
+        if o.capacity > 0 && o.total_invested > 0
+            push!(live_sats, o.total_invested / o.capacity)
+        end
+    end
+    sat_diag = if isempty(live_sats)
+        Dict("n_active" => 0, "max" => 0.0, "p50" => 0.0, "p75" => 0.0,
+             "p90" => 0.0, "p95" => 0.0, "p99" => 0.0,
+             "frac_above_K" => 0.0, "frac_above_2K" => 0.0)
+    else
+        Dict(
+            "n_active" => length(live_sats),
+            "max" => maximum(live_sats),
+            "p50" => quantile(live_sats, 0.5),
+            "p75" => quantile(live_sats, 0.75),
+            "p90" => quantile(live_sats, 0.9),
+            "p95" => quantile(live_sats, 0.95),
+            "p99" => quantile(live_sats, 0.99),
+            "frac_above_K" => count(s -> s > K_sat, live_sats) / length(live_sats),
+            "frac_above_2K" => count(s -> s > 2 * K_sat, live_sats) / length(live_sats),
+        )
+    end
+
     return Dict(
         "run_idx" => run_idx,
         "seed" => seed,
         "tier_stats" => tier_stats,
+        "saturation" => sat_diag,
         "status" => "completed"
     )
 end
@@ -271,10 +301,26 @@ function aggregate_results(all_results::Vector{Dict})
         )
     end
 
+    # Aggregate saturation diagnostics across runs
+    sat_keys = ["max", "p50", "p75", "p90", "p95", "p99",
+                "frac_above_K", "frac_above_2K", "n_active"]
+    sat_summary = Dict{String, Float64}()
+    for key in sat_keys
+        vals = Float64[]
+        for r in all_results
+            r["status"] == "completed" || continue
+            haskey(r, "saturation") || continue
+            push!(vals, Float64(r["saturation"][key]))
+        end
+        sat_summary["mean_" * key] = isempty(vals) ? 0.0 : mean(vals)
+        sat_summary["std_" * key] = isempty(vals) ? 0.0 : std(vals)
+    end
+
     return Dict(
         "summary_stats" => summary_stats,
         "tier_data" => tier_data,
         "mean_trajectories" => mean_trajectories,
+        "saturation_summary" => sat_summary,
         "successful_runs" => successful_runs
     )
 end
@@ -362,6 +408,49 @@ function save_results(summary::Dict, all_results::Vector{Dict}, output_dir::Stri
     ) for tier in AI_TIERS]
     CSV.write(joinpath(output_dir, "treatment_effects.csv"), DataFrame(effects))
 
+    # 5. Saturation diagnostics — single-row summary
+    if haskey(summary, "saturation_summary")
+        sat = summary["saturation_summary"]
+        sat_row = [(
+            mean_n_active = get(sat, "mean_n_active", 0.0),
+            mean_max = get(sat, "mean_max", 0.0),
+            mean_p50 = get(sat, "mean_p50", 0.0),
+            mean_p75 = get(sat, "mean_p75", 0.0),
+            mean_p90 = get(sat, "mean_p90", 0.0),
+            mean_p95 = get(sat, "mean_p95", 0.0),
+            mean_p99 = get(sat, "mean_p99", 0.0),
+            mean_frac_above_K = get(sat, "mean_frac_above_K", 0.0),
+            mean_frac_above_2K = get(sat, "mean_frac_above_2K", 0.0),
+            std_max = get(sat, "std_max", 0.0),
+            std_p95 = get(sat, "std_p95", 0.0),
+            std_frac_above_K = get(sat, "std_frac_above_K", 0.0),
+        )]
+        CSV.write(joinpath(output_dir, "saturation_diagnostics.csv"), DataFrame(sat_row))
+    end
+
+    # 6. Per-run saturation (for distribution plots)
+    sat_rows = []
+    for r in all_results
+        r["status"] == "completed" || continue
+        haskey(r, "saturation") || continue
+        s = r["saturation"]
+        push!(sat_rows, (
+            run_idx = r["run_idx"],
+            n_active = s["n_active"],
+            sat_max = s["max"],
+            sat_p50 = s["p50"],
+            sat_p75 = s["p75"],
+            sat_p90 = s["p90"],
+            sat_p95 = s["p95"],
+            sat_p99 = s["p99"],
+            frac_above_K = s["frac_above_K"],
+            frac_above_2K = s["frac_above_2K"],
+        ))
+    end
+    if !isempty(sat_rows)
+        CSV.write(joinpath(output_dir, "per_run_saturation.csv"), DataFrame(sat_rows))
+    end
+
     println("Results saved to: $output_dir")
 end
 
@@ -421,6 +510,27 @@ function print_results(summary::Dict)
     println("-"^60)
     for tier in AI_TIERS
         @printf("    %-12s: %.3f\n", uppercasefirst(tier), stats[tier]["mean_innovations_per_agent"])
+    end
+
+    # Panel I: Capacity-saturation diagnostics
+    if haskey(summary, "saturation_summary")
+        sat = summary["saturation_summary"]
+        println("\n  I. Capacity-Saturation Diagnostics (across active opportunities)")
+        println("-"^60)
+        @printf("    Active opps per run:    %.0f ± %.0f\n",
+                get(sat, "mean_n_active", 0.0), get(sat, "std_n_active", 0.0))
+        @printf("    Saturation max:         %.2f ± %.2f\n",
+                get(sat, "mean_max", 0.0), get(sat, "std_max", 0.0))
+        @printf("    Saturation p95:         %.2f ± %.2f\n",
+                get(sat, "mean_p95", 0.0), get(sat, "std_p95", 0.0))
+        @printf("    Saturation p50/p75/p90: %.2f / %.2f / %.2f\n",
+                get(sat, "mean_p50", 0.0), get(sat, "mean_p75", 0.0),
+                get(sat, "mean_p90", 0.0))
+        @printf("    Frac above K_sat:       %.1f%% ± %.1f%%\n",
+                100*get(sat, "mean_frac_above_K", 0.0),
+                100*get(sat, "std_frac_above_K", 0.0))
+        @printf("    Frac above 2×K_sat:     %.1f%%\n",
+                100*get(sat, "mean_frac_above_2K", 0.0))
     end
 
     println("\n" * "="^80)
