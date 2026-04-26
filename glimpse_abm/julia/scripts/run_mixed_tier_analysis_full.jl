@@ -164,6 +164,20 @@ function run_single_mixed_simulation(run_idx::Int, seed::Int)
         tier_total_niches = sum(a.uncertainty_metrics.niches_discovered for a in tier_agents)
         tier_combinations = sum(a.uncertainty_metrics.new_combinations_created for a in tier_agents)
 
+        # v3.5.17: paradox_signal reader (was orphan-write since v3.5.16 Phase 1).
+        # Per-tier mean of agent.last_outcome["paradox_signal"] — accumulated
+        # confidence-vs-ROI gap with inertia. Emit so the paper has a durable
+        # diagnostic for "did agents systematically over/under-trust their AI?"
+        paradox_signals = Float64[]
+        for a in tier_agents
+            sig = get(a.last_outcome, "paradox_signal", nothing)
+            if !isnothing(sig)
+                push!(paradox_signals, Float64(sig))
+            end
+        end
+        tier_paradox_mean = isempty(paradox_signals) ? 0.0 : mean(paradox_signals)
+        tier_paradox_n = length(paradox_signals)
+
         tier_stats[tier] = Dict(
             "total" => length(tier_agents),
             "survived" => length(alive),
@@ -187,6 +201,8 @@ function run_single_mixed_simulation(run_idx::Int, seed::Int)
             "total_niches" => tier_total_niches,
             "niches_per_agent" => tier_total_niches / length(tier_agents),
             "combinations_per_agent" => tier_combinations / length(tier_agents),
+            "paradox_signal_mean" => tier_paradox_mean,
+            "paradox_signal_n" => tier_paradox_n,
         )
     end
 

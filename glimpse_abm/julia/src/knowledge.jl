@@ -739,9 +739,11 @@ function forget_sector_knowledge!(
         return
     end
 
-    # Get AI info quality to modulate severity
+    # Get AI info quality to modulate severity. v3.5.17: AILevelConfig is a
+    # Julia struct, not a Dict — access via field access, not get(struct, key).
     ai_config = get(kb.config.AI_LEVELS, ai_level, kb.config.AI_LEVELS["none"])
-    info_quality = Float64(get(ai_config, "info_quality", 0.0))
+    info_quality = !isnothing(ai_config) && hasproperty(ai_config, :info_quality) ?
+        Float64(ai_config.info_quality) : 0.0
     severity = clamp(severity * (1.0 - 0.25 * info_quality), 0.05, 1.0)
 
     # Find pieces in this sector
@@ -783,7 +785,8 @@ function forget_stale_knowledge!(
     agent,
     current_round::Int;
     max_size::Union{Int,Nothing}=nothing,
-    drop_fraction::Float64=0.1
+    drop_fraction::Float64=0.1,
+    rng::Random.AbstractRNG=hasproperty(agent, :rng) ? agent.rng : Random.default_rng()
 )
     knowledge_ids = collect(get(kb.agent_knowledge, agent.id, Set{String}()))
     if isempty(knowledge_ids)
@@ -829,7 +832,7 @@ function forget_stale_knowledge!(
         random_pool = [kid for kid in knowledge_ids if !(kid in to_remove)]
         if !isempty(random_pool)
             n_random = min(length(random_pool), remaining)
-            random_remove = Random.shuffle(random_pool)[1:n_random]
+            random_remove = Random.shuffle(rng, random_pool)[1:n_random]
             append!(to_remove, random_remove)
         end
     end

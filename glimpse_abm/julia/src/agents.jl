@@ -851,7 +851,14 @@ function _execute_invest!(
     # Store estimated return (use latent if not provided)
     est_ret = isnothing(estimated_return) ? opportunity.latent_return_potential : estimated_return
 
-    # Record investment with estimated return for uncertainty tracking
+    # Record investment with estimated return for uncertainty tracking.
+    # v3.5.17: persist AI metadata (hallucination, confidence, domain) and
+    # sector into active_investments so they survive to maturity. Earlier
+    # the v3.5.16 Phase 3/4 wiring read these from the matured outcome dict
+    # but they weren't propagated through process_matured_investments! —
+    # readers got `false`/`0.5`/`"market_analysis"`/`"tech"` defaults that
+    # silently routed all telemetry to the same bucket regardless of the
+    # actual investment.
     investment = Dict{String,Any}(
         "opportunity_id" => opportunity.id,
         "opportunity" => opportunity,
@@ -860,7 +867,11 @@ function _execute_invest!(
         "maturity_round" => round + opportunity.time_to_maturity,
         "ai_level" => get_ai_level(agent),
         "estimated_return" => est_ret,
-        "competition_at_entry" => hasfield(typeof(opportunity), :competition) ? opportunity.competition : 0.0
+        "competition_at_entry" => hasfield(typeof(opportunity), :competition) ? opportunity.competition : 0.0,
+        "sector" => opportunity.sector,
+        "ai_contains_hallucination" => !isnothing(ai_info) ? ai_info.contains_hallucination : false,
+        "ai_confidence" => !isnothing(ai_info) ? Float64(ai_info.confidence) : 0.5,
+        "ai_analysis_domain" => !isnothing(ai_info) ? something(ai_info.domain, "market_analysis") : "market_analysis",
     )
     push!(agent.active_investments, investment)
 
@@ -1371,6 +1382,17 @@ function process_matured_investments!(
                 # update_ai_trust! never fires for matured outcomes even when
                 # the investment was made using AI.
                 "ai_used" => invested_tier != "none",
+                # v3.5.17: forward AI metadata + sector from active_investments
+                # to matured outcome so simulation.jl Phase 3/4 readers see real
+                # data instead of defaults. Without this all hallucination
+                # detection routed to "no halluc", domain to "market_analysis",
+                # confidence to 0.5, sector to "tech".
+                "ai_contains_hallucination" => Bool(get(investment, "ai_contains_hallucination", false)),
+                "ai_confidence" => Float64(get(investment, "ai_confidence", 0.5)),
+                "ai_analysis_domain" => String(get(investment, "ai_analysis_domain", "market_analysis")),
+                "sector" => let s = get(investment, "sector", nothing)
+                    isnothing(s) ? "tech" : String(s)
+                end,
             ))
         else
             push!(remaining_investments, investment)

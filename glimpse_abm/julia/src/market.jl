@@ -1426,10 +1426,14 @@ function record_innovation_outcome!(
         opportunity.market_impact = return_achieved
         intrinsic_gain = clamp(return_achieved, 0.2, 3.5)
 
-        # Adjust return potential
+        # Adjust return potential. v3.5.17: upper bound raised from 4.0 to 25.0
+        # to match the spawn_opportunity_from_innovation! ceiling at line 1493.
+        # Earlier cap dampened high-novelty/scarcity spawned opps from their
+        # legitimate 5-25× range down to 4.0 the first time this fired —
+        # eliminating most unicorn upside immediately after spawn.
         opportunity.latent_return_potential = clamp(
             opportunity.latent_return_potential + 0.05 * intrinsic_gain,
-            0.15, 4.0
+            0.15, 25.0
         )
     else
         opportunity.market_impact = 0.0
