@@ -22,7 +22,7 @@ using CSV
 using Dates
 using Printf
 
-const N_AGENTS = 1000
+const N_AGENTS = 2000
 const N_ROUNDS = 60
 const N_RUNS = 50
 const N_PLACEBO_ITERATIONS = 1000

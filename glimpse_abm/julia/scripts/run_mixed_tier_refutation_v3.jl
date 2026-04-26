@@ -26,7 +26,7 @@ using Printf
 
 include(joinpath(@__DIR__, "_safe_stats.jl"))
 
-const N_AGENTS = 1000
+const N_AGENTS = 2000
 const N_ROUNDS = 60
 const N_RUNS = 50
 const AGENTS_PER_TIER = N_AGENTS ÷ 4

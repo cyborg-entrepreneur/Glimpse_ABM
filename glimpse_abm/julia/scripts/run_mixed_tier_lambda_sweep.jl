@@ -25,9 +25,9 @@ using Printf
 
 include(joinpath(@__DIR__, "_safe_stats.jl"))
 
-const N_AGENTS = 1000
+const N_AGENTS = 2000
 const N_ROUNDS = 60
-const N_RUNS = 30
+const N_RUNS = 50
 const AI_TIERS = ["none", "basic", "advanced", "premium"]
 const BASE_SEED = 20260425
 const LAMBDA_VALUES = [2.0, 4.0, 6.0, 8.0, 12.0]
