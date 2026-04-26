@@ -339,6 +339,63 @@ function clear_cache!(sys::InformationSystem)
     empty!(sys.information_cache)
 end
 
+"""
+Update an agent's AI learning profile with realized investment outcome data.
+
+v3.5.16 Phase 3: Julia port of Python's information.py:258-289
+update_agent_learning. Increments usage_count per AI call, computes
+realized-vs-predicted return error, appends accuracy score, increments
+hallucination_experiences when contains_hallucination AND prediction
+was inaccurate, and updates per-domain trust on success or
+high-confidence inaccuracy.
+
+This is the writer that v3.5.12 inadvertently removed and v3.5.16 Phase 0
+restored the fields for. With this writer in place, the readers in
+innovation.jl, uncertainty.jl, and models.jl finally see populated data
+instead of zero defaults.
+"""
+function update_agent_learning!(profile::AILearningProfile, domain::String,
+                                investment_amount::Float64, capital_returned::Float64,
+                                predicted_return::Float64, contains_hallucination::Bool,
+                                ai_confidence::Float64, success::Bool)
+    # Defensive defaults for new domains
+    if !haskey(profile.usage_count, domain)
+        profile.usage_count[domain] = 0
+    end
+    if !haskey(profile.accuracy_estimates, domain)
+        profile.accuracy_estimates[domain] = Float64[]
+    end
+    if !haskey(profile.hallucination_experiences, domain)
+        profile.hallucination_experiences[domain] = 0
+    end
+    if !haskey(profile.domain_trust, domain)
+        profile.domain_trust[domain] = 0.5
+    end
+
+    profile.usage_count[domain] += 1
+
+    actual_return = capital_returned / max(1.0, investment_amount)
+    return_error = abs(actual_return - predicted_return) / max(1.0, abs(predicted_return))
+    was_accurate = return_error < 0.3
+
+    push!(profile.accuracy_estimates[domain], clamp(1.0 - return_error, 0.0, 1.0))
+    while length(profile.accuracy_estimates[domain]) > 20
+        popfirst!(profile.accuracy_estimates[domain])
+    end
+
+    if contains_hallucination && !was_accurate
+        profile.hallucination_experiences[domain] += 1
+    end
+
+    if success
+        update_trust!(profile, domain, was_accurate; magnitude=0.1)
+    elseif !was_accurate && ai_confidence > 0.7
+        update_trust!(profile, domain, false; magnitude=0.2)
+    end
+
+    return was_accurate
+end
+
 # ============================================================================
 # ENHANCED AI ANALYSIS (Numba-equivalent in Julia)
 # ============================================================================

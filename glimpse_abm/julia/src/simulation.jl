@@ -316,6 +316,36 @@ function step!(sim::EmergentSimulation, round::Int)
             realized_roi = Float64(get(m, "return_multiple", 1.0))
             record_paradox_observation!(agent, decision_conf, realized_roi;
                                         ai_used=(ai_tier != "none"))
+
+            # v3.5.16 Phase 3: update AILearningProfile per-domain telemetry
+            # via update_agent_learning! (writer for accuracy_estimates,
+            # hallucination_experiences, usage_count) AND Bayesian per-domain
+            # belief via update_domain_belief!. Mirrors Python information.py
+            # update_agent_learning + knowledge.py:634 update_domain_belief.
+            # Uses ai_analysis_domain from action propagation; falls back to
+            # "market_analysis" since investment is the primary user of that
+            # domain in Python's classification.
+            if ai_tier != "none"
+                domain = String(get(m, "ai_analysis_domain", "market_analysis"))
+                inv_amount = Float64(get(m, "investment_amount",
+                                         get(m, "investment", Dict()) isa Dict ?
+                                            get(get(m, "investment", Dict()), "amount", 1.0) : 1.0))
+                cap_returned = Float64(get(m, "capital_returned",
+                                           inv_amount * Float64(get(m, "return_multiple", 1.0))))
+                pred_return = Float64(get(m, "estimated_return", 1.0))
+                hall = Bool(get(m, "ai_contains_hallucination", false))
+                conf = Float64(get(m, "ai_confidence", 0.5))
+                success = Bool(get(m, "success", false))
+                update_agent_learning!(agent.ai_learning, domain,
+                                       inv_amount, cap_returned, pred_return,
+                                       hall, conf, success)
+                # Bayesian per-domain belief (alpha/beta Beta-distribution
+                # parameters). Evidence is the accuracy score from the same
+                # outcome.
+                evidence = clamp(1.0 - abs(cap_returned/max(1.0, inv_amount) - pred_return) /
+                                  max(1.0, abs(pred_return)), 0.0, 1.0)
+                update_domain_belief!(sim.knowledge_base, agent.id, domain, evidence)
+            end
         end
         append!(all_matured, matured)
         # Solvency check deferred to end-of-round (see comment above Phase 1.5).

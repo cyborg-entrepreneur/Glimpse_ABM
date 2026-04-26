@@ -60,6 +60,10 @@ mutable struct KnowledgeBase
     knowledge_usage::Dict{String,Int}
     domain_to_sector::Dict{String,String}
     sector_to_domain::Dict{String,String}
+    # v3.5.16 Phase 3: Bayesian per-agent per-domain beliefs (alpha/beta).
+    # Updated by update_domain_belief! at investment maturity. Nested:
+    # agent_id → domain → ("alpha"/"beta") → Float64.
+    agent_domain_beliefs::Dict{Int,Dict{String,Dict{String,Float64}}}
 end
 
 """
@@ -105,7 +109,8 @@ function KnowledgeBase(config::Union{EmergentConfig,Nothing}=nothing)
         Knowledge[],
         Dict{String,Int}(),
         domain_to_sector,
-        sector_to_domain
+        sector_to_domain,
+        Dict{Int,Dict{String,Dict{String,Float64}}}(),  # agent_domain_beliefs
     )
 
     # Initialize base knowledge

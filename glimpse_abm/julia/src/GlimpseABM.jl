@@ -88,7 +88,7 @@ export InformationSystem
 export InnovationEngine
 export CombinationTracker
 export get_accessible_knowledge
-export get_information
+export get_information, update_agent_learning!
 export attempt_innovation!
 export evaluate_innovation_success!
 export get_component_scarcity_metric
