@@ -164,17 +164,10 @@ function run_single_mixed_simulation(run_idx::Int, seed::Int)
         tier_total_niches = sum(a.uncertainty_metrics.niches_discovered for a in tier_agents)
         tier_combinations = sum(a.uncertainty_metrics.new_combinations_created for a in tier_agents)
 
-        # v3.5.17: paradox_signal reader (was orphan-write since v3.5.16 Phase 1).
-        # Per-tier mean of agent.last_outcome["paradox_signal"] — accumulated
-        # confidence-vs-ROI gap with inertia. Emit so the paper has a durable
-        # diagnostic for "did agents systematically over/under-trust their AI?"
-        paradox_signals = Float64[]
-        for a in tier_agents
-            sig = get(a.last_outcome, "paradox_signal", nothing)
-            if !isnothing(sig)
-                push!(paradox_signals, Float64(sig))
-            end
-        end
+        # v3.5.18: paradox_signal reader migrated to the persistent agent field
+        # added in v3.5.18 (was orphan-overwrite via agent.last_outcome before).
+        # Per-tier mean of accumulated confidence-vs-ROI gap with inertia.
+        paradox_signals = Float64[Float64(a.paradox_signal) for a in tier_agents]
         tier_paradox_mean = isempty(paradox_signals) ? 0.0 : mean(paradox_signals)
         tier_paradox_n = length(paradox_signals)
 
@@ -279,7 +272,8 @@ function aggregate_results(all_results::Vector{Dict})
             "innovation_successes_per_agent" => Float64[],
             "innovation_success_rate" => Float64[],
             "niches_per_agent" => Float64[],
-            "combinations_per_agent" => Float64[]
+            "combinations_per_agent" => Float64[],
+            "paradox_signal_mean" => Float64[],
         )
     end
 
@@ -304,6 +298,7 @@ function aggregate_results(all_results::Vector{Dict})
                 push!(tier_data[tier]["innovation_success_rate"], stats["innovation_success_rate"])
                 push!(tier_data[tier]["niches_per_agent"], stats["niches_per_agent"])
                 push!(tier_data[tier]["combinations_per_agent"], stats["combinations_per_agent"])
+                push!(tier_data[tier]["paradox_signal_mean"], stats["paradox_signal_mean"])
                 push!(all_trajectories[tier], stats["trajectory"])
             end
         end
@@ -340,6 +335,8 @@ function aggregate_results(all_results::Vector{Dict})
             "mean_innovation_success_rate" => mean(d["innovation_success_rate"]),
             "mean_niches_per_agent" => mean(d["niches_per_agent"]),
             "mean_combinations_per_agent" => mean(d["combinations_per_agent"]),
+            "mean_paradox_signal" => isempty(d["paradox_signal_mean"]) ? 0.0 : mean(d["paradox_signal_mean"]),
+            "std_paradox_signal" => isempty(d["paradox_signal_mean"]) ? 0.0 : std(d["paradox_signal_mean"]),
             "n_runs" => length(d["survival_rate"]),
             "trajectory" => get(mean_trajectories, tier, Float64[])
         )
@@ -396,6 +393,8 @@ function save_results(summary::Dict, all_results::Vector{Dict}, output_dir::Stri
             mean_innovation_success_rate=s["mean_innovation_success_rate"],
             mean_niches_per_agent=s["mean_niches_per_agent"],
             mean_combinations_per_agent=s["mean_combinations_per_agent"],
+            mean_paradox_signal=s["mean_paradox_signal"],
+            std_paradox_signal=s["std_paradox_signal"],
             n_runs=s["n_runs"]
         ))
     end
@@ -425,6 +424,8 @@ function save_results(summary::Dict, all_results::Vector{Dict}, output_dir::Stri
                     innovation_success_rate=s["innovation_success_rate"],
                     niches_per_agent=s["niches_per_agent"],
                     combinations_per_agent=s["combinations_per_agent"],
+                    paradox_signal_mean=get(s, "paradox_signal_mean", 0.0),
+                    paradox_signal_n=get(s, "paradox_signal_n", 0),
                 ))
             end
         end

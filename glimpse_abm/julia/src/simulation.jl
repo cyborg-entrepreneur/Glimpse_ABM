@@ -373,7 +373,11 @@ function step!(sim::EmergentSimulation, round::Int)
     if !isempty(all_matured)
         sector_rois = Dict{String,Vector{Float64}}()
         for m in all_matured
-            sector = String(get(m, "sector", "tech"))
+            # v3.5.18: use "unknown" fallback (was "tech") to surface missing
+            # metadata; skip-if-unknown below avoids misattributing branch
+            # feedback to a real sector when the source record is incomplete.
+            sector = String(get(m, "sector", "unknown"))
+            sector == "unknown" && continue
             ret = Float64(get(m, "return_multiple", 1.0))
             roi = ret - 1.0  # ROI as fractional change
             push!(get!(sector_rois, sector, Float64[]), roi)
@@ -551,10 +555,18 @@ function step!(sim::EmergentSimulation, round::Int)
             end
             update_tier_belief!(agent.ai_learning, ai_tier, return_mult)
 
-            # v3.5.16 Phase 1: record paradox observation for innovate/explore.
-            # Mirrors Python simulation.py:1246. Pure telemetry.
-            decision_conf = Float64(get(action, "decision_confidence",
-                                        get(action, "ai_confidence", 0.5)))
+            # v3.5.16 Phase 1 + v3.5.18 fix: record paradox observation for
+            # innovate/explore. make_decision! stores decision_confidence inside
+            # outcome["perception"]["decision_confidence"], NOT at the top level
+            # of the action dict — earlier read landed on the ai_confidence
+            # fallback every time. Mirrors Python simulation.py:1246.
+            perception = get(action, "perception", nothing)
+            decision_conf = if perception isa Dict
+                Float64(get(perception, "decision_confidence",
+                            get(action, "ai_confidence", 0.5)))
+            else
+                Float64(get(action, "ai_confidence", 0.5))
+            end
             record_paradox_observation!(agent, decision_conf, return_mult;
                                         ai_used=(ai_tier != "none"))
         end

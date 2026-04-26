@@ -339,6 +339,13 @@ mutable struct EmergentAgent
     action_history::Vector{String}
     last_action::String
     last_outcome::Dict{String,Any}
+    # v3.5.18: persistent paradox signal (confidence-vs-ROI gap with inertia).
+    # Earlier this lived in the last_outcome dict under a paradox_signal key,
+    # but last_outcome gets WHOLESALE-REPLACED later in the same round
+    # (agents.jl:762, update_state_from_outcome! at :2996). Move to a
+    # dedicated field so the signal accumulates across rounds for paper
+    # diagnostics.
+    paradox_signal::Float64
 
     # Portfolio
     active_investments::Vector{Dict{String,Any}}
@@ -451,6 +458,7 @@ function EmergentAgent(
         String[],  # action_history
         "maintain",  # last_action
         Dict{String,Any}(),  # last_outcome
+        0.0,  # paradox_signal (v3.5.18, persistent)
         Dict{String,Any}[],  # active_investments
         AgentUncertaintyMetrics(),  # uncertainty_metrics (emergent, agent-level)
         rng
@@ -872,6 +880,12 @@ function _execute_invest!(
         "ai_contains_hallucination" => !isnothing(ai_info) ? ai_info.contains_hallucination : false,
         "ai_confidence" => !isnothing(ai_info) ? Float64(ai_info.confidence) : 0.5,
         "ai_analysis_domain" => !isnothing(ai_info) ? something(ai_info.domain, "market_analysis") : "market_analysis",
+        # v3.5.18: persist decision_confidence (the agent's perceived confidence
+        # at decision time, distinct from ai_confidence which is the AI's stated
+        # confidence in its information). Paradox observation needs the agent's
+        # confidence vs realized ROI; matured-investment fallback to ai_confidence
+        # was a different signal.
+        "decision_confidence" => isnothing(confidence) ? 0.5 : Float64(confidence),
     )
     push!(agent.active_investments, investment)
 
@@ -1387,12 +1401,16 @@ function process_matured_investments!(
                 # data instead of defaults. Without this all hallucination
                 # detection routed to "no halluc", domain to "market_analysis",
                 # confidence to 0.5, sector to "tech".
+                # v3.5.18: also forward decision_confidence (distinct from
+                # ai_confidence) so paradox observation reads the agent's
+                # confidence at decision time, not the AI's confidence in its info.
                 "ai_contains_hallucination" => Bool(get(investment, "ai_contains_hallucination", false)),
                 "ai_confidence" => Float64(get(investment, "ai_confidence", 0.5)),
                 "ai_analysis_domain" => String(get(investment, "ai_analysis_domain", "market_analysis")),
                 "sector" => let s = get(investment, "sector", nothing)
-                    isnothing(s) ? "tech" : String(s)
+                    isnothing(s) ? "unknown" : String(s)
                 end,
+                "decision_confidence" => Float64(get(investment, "decision_confidence", 0.5)),
             ))
         else
             push!(remaining_investments, investment)
@@ -3078,14 +3096,12 @@ function record_paradox_observation!(
     # Weight by AI usage
     weight = ai_used ? 1.2 : 0.8
 
-    # Update paradox signal with inertia
+    # Update paradox signal with inertia. v3.5.18: write to the persistent
+    # agent.paradox_signal field, not agent.last_outcome (which gets
+    # wholesale-replaced later in the round by update_state_from_outcome!).
     inertia = 0.85
-    if !haskey(agent.last_outcome, "paradox_signal")
-        agent.last_outcome["paradox_signal"] = 0.0
-    end
-    old_signal = Float64(get(agent.last_outcome, "paradox_signal", 0.0))
-    new_signal = inertia * old_signal + (1.0 - inertia) * gap * weight
-    agent.last_outcome["paradox_signal"] = clamp(new_signal, -1.0, 1.0)
+    new_signal = inertia * agent.paradox_signal + (1.0 - inertia) * gap * weight
+    agent.paradox_signal = clamp(new_signal, -1.0, 1.0)
 end
 
 # ============================================================================
