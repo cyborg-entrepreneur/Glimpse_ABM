@@ -336,7 +336,7 @@ function step!(sim::EmergentSimulation, round::Int)
                 hall = Bool(get(m, "ai_contains_hallucination", false))
                 conf = Float64(get(m, "ai_confidence", 0.5))
                 success = Bool(get(m, "success", false))
-                update_agent_learning!(agent.ai_learning, domain,
+                was_accurate = update_agent_learning!(agent.ai_learning, domain,
                                        inv_amount, cap_returned, pred_return,
                                        hall, conf, success)
                 # Bayesian per-domain belief (alpha/beta Beta-distribution
@@ -345,10 +345,44 @@ function step!(sim::EmergentSimulation, round::Int)
                 evidence = clamp(1.0 - abs(cap_returned/max(1.0, inv_amount) - pred_return) /
                                   max(1.0, abs(pred_return)), 0.0, 1.0)
                 update_domain_belief!(sim.knowledge_base, agent.id, domain, evidence)
+
+                # v3.5.16 Phase 4: when an AI hallucination is DETECTED
+                # (contains_hallucination AND prediction was inaccurate),
+                # apply the knowledge-trust penalty. Severity scales with
+                # the magnitude of the prediction error. Mirrors Python
+                # simulation.py:1071. apply_hallucination_penalty! itself
+                # triggers forget_sector_knowledge! on the affected sector
+                # (knowledge.jl:712), so #12 fires implicitly.
+                if hall && !was_accurate
+                    actual_ratio = cap_returned / max(1.0, inv_amount)
+                    err_normalized = abs(actual_ratio - pred_return) / max(1.0, abs(pred_return))
+                    severity = clamp(err_normalized, 0.1, 0.6)
+                    apply_hallucination_penalty!(sim.knowledge_base, agent, domain, severity)
+                end
             end
         end
         append!(all_matured, matured)
         # Solvency check deferred to end-of-round (see comment above Phase 1.5).
+    end
+
+    # v3.5.16 Phase 4: apply branch (sector) feedback based on aggregated
+    # ROI from this round's matured investments. Mirrors Python market.py:548.
+    # Each sector's branch parameters drift toward the realized mean ROI,
+    # creating a feedback loop where good-performing sectors gradually
+    # produce better returns and bad-performing sectors degrade.
+    if !isempty(all_matured)
+        sector_rois = Dict{String,Vector{Float64}}()
+        for m in all_matured
+            sector = String(get(m, "sector", "tech"))
+            ret = Float64(get(m, "return_multiple", 1.0))
+            roi = ret - 1.0  # ROI as fractional change
+            push!(get!(sector_rois, sector, Float64[]), roi)
+        end
+        for (sector, rois) in sector_rois
+            if !isempty(rois)
+                apply_branch_feedback!(sim.market, sector, mean(rois))
+            end
+        end
     end
 
     # Get available opportunities (after applying costs, matching Python timing)
