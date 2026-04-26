@@ -221,26 +221,11 @@ function _update_short_term!(env::KnightianUncertaintyEnvironment, metric::Strin
     end
 end
 
-"""
-Decay short-term buffer for a metric.
-"""
-function _decay_short_term!(env::KnightianUncertaintyEnvironment, metric::String, fallback::Float64; agent_id::Union{Int,Nothing} = nothing)
-    buffer = _short_buffer(env, metric, agent_id)
-    if !isempty(buffer)
-        baseline = buffer[end]
-    else
-        baseline = isfinite(fallback) ? fallback : 0.0
-    end
-    if !isfinite(baseline)
-        baseline = 0.0
-    end
-    # No decay: retain last signal strength when no new data arrives
-    push!(buffer, baseline)
-    max_size = env.short_term_window
-    while length(buffer) > max_size
-        popfirst!(buffer)
-    end
-end
+# v3.5.14: _decay_short_term! deleted (no production callers in any release).
+# The "no decay" comment in the original implementation was honest — the
+# function pushed the last value back into the buffer unchanged. If signal
+# decay is wanted later, wire it into the active short-term-buffer update
+# loop in _update_short_term! rather than reintroducing this dead function.
 
 """
 Normalize metric value (floor at zero).

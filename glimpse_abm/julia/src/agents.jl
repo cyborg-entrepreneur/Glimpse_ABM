@@ -2131,14 +2131,16 @@ function calculate_investment_utility(
             est_return = info.estimated_return
             est_uncertainty = info.estimated_uncertainty
             conf = info.confidence
-            contains_halluc = info.contains_hallucination
+            # v3.5.14: contains_hallucination read removed; the agent doesn't
+            # perceive the hidden truth flag (it applies an EXPECTED tier-rate
+            # discount inside evaluate_opportunity_basic). The realized
+            # outcome at investment maturity reflects the bad decision.
         end
 
         base_score = evaluate_opportunity_basic(agent, opp, market_conditions;
                                                 estimated_return=est_return,
                                                 estimated_uncertainty=est_uncertainty,
-                                                confidence=conf,
-                                                contains_hallucination=contains_halluc)
+                                                confidence=conf)
 
         # AI tier advantage now reflects perceived (not latent) return.
         noise_reduction = info_quality * 0.3
@@ -2426,7 +2428,13 @@ function evaluate_opportunity_basic(
     estimated_return::Union{Float64,Nothing} = nothing,
     estimated_uncertainty::Union{Float64,Nothing} = nothing,
     confidence::Union{Float64,Nothing} = nothing,
-    contains_hallucination::Bool = false,
+    # NB: contains_hallucination kwarg removed in v3.5.14. The function used
+    # to read it (hidden-truth-leakage); v3.5.13 replaced that with a
+    # tier-aware expected-hallucination discount derived from
+    # AI_DOMAIN_CAPABILITIES, but the now-unused kwarg was still in the
+    # signature with call sites passing it. Removed to prevent any future
+    # reintroduction of the leakage. Realized outcomes still penalize
+    # hallucinated decisions through investment maturity.
 )::Float64
     # Expected profit margin: use AI-tier-aware estimate when provided,
     # else fall back to the hidden latent value (diagnostic path only).
@@ -2670,21 +2678,20 @@ function evaluate_portfolio_opportunities(
     for opp in opp_pool
         est_return = get(estimated_returns, opp.id, opp.latent_return_potential)
         # v2.7: pull the full Information object when available so scoring uses
-        # AI-tier-aware uncertainty + confidence + hallucination flags.
+        # AI-tier-aware uncertainty + confidence. v3.5.14: contains_hallucination
+        # no longer threaded through (was hidden-truth leakage; replaced by
+        # tier-aware EXPECTED discount inside evaluate_opportunity_basic).
         est_unc = nothing
         conf = nothing
-        contains_halluc = false
         if haskey(info_cache_local, opp.id)
             inf = info_cache_local[opp.id]
             est_unc = inf.estimated_uncertainty
             conf = inf.confidence
-            contains_halluc = inf.contains_hallucination
         end
         base_score = evaluate_opportunity_basic(agent, opp, market_conditions;
                                                 estimated_return=est_return,
                                                 estimated_uncertainty=est_unc,
-                                                confidence=conf,
-                                                contains_hallucination=contains_halluc)
+                                                confidence=conf)
         final_score = apply_uncertainty_adjustments(agent, base_score, opp, perception)
 
         eval_record = Dict{String,Any}(
