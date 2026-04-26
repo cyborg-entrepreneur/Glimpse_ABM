@@ -103,7 +103,7 @@ export EmergentSimulation
 # at runtime (undefined update_burn_history!) and lacked v2/v2.1 wirings.
 # Use EmergentSimulation for all production runs.
 export EmergentAgent
-export VectorizedAgentState
+# VectorizedAgentState removed in v3.5.21 (A2 dead mechanism — see agents.jl).
 export MarketEnvironment
 export KnightianUncertaintyEnvironment
 

@@ -625,107 +625,11 @@ function get_ai_level(agent::EmergentAgent)::String
     return agent.current_ai_level
 end
 
-"""
-Select an action based on uncertainty perception and agent state.
-"""
-function select_action(
-    agent::EmergentAgent,
-    market_conditions::MarketConditions,
-    uncertainty_state::Dict{String,Any};
-    available_opportunities::Vector{Opportunity} = Opportunity[]
-)::String
-    if !agent.alive
-        return "maintain"
-    end
-
-    capital = get_capital(agent)
-    # Use sector-specific survival threshold (aligned with check_survival!)
-    survival_threshold = _get_sector_survival_threshold(agent)
-
-    # Capital pressure
-    capital_ratio = capital / agent.config.INITIAL_CAPITAL
-    under_pressure = capital < survival_threshold * 1.5
-
-    # Extract uncertainty levels
-    actor_ignorance = get(get(uncertainty_state, "actor_ignorance", Dict()), "level", 0.0)
-    practical_indet = get(get(uncertainty_state, "practical_indeterminism", Dict()), "level", 0.0)
-    agentic_novelty = get(get(uncertainty_state, "agentic_novelty", Dict()), "level", 0.0)
-    competitive_rec = get(get(uncertainty_state, "competitive_recursion", Dict()), "level", 0.0)
-
-    composite_uncertainty = (actor_ignorance + practical_indet + agentic_novelty + competitive_rec) / 4
-
-    # Base action scores
-    scores = Dict(
-        "invest" => 0.0,
-        "innovate" => 0.0,
-        "explore" => 0.0,
-        "maintain" => 0.0
-    )
-
-    # Investment score - higher when uncertainty is moderate and capital is good
-    # Decreases when competitive recursion is high (crowded opportunities)
-    if !isempty(available_opportunities)
-        invest_factor = get_response_factor(
-            agent.uncertainty_response, "practical_indeterminism", practical_indet;
-            rng=agent.rng
-        )
-        scores["invest"] = 0.4 * invest_factor * capital_ratio * (1.0 - competitive_rec * 0.5)
-    end
-
-    # Innovation score - higher when agentic novelty potential is high
-    # ALSO increases when competitive recursion is high - natural response to crowding
-    # is to create new opportunities rather than compete for existing ones
-    innovate_factor = get_response_factor(
-        agent.uncertainty_response, "agentic_novelty", agentic_novelty;
-        rng=agent.rng
-    )
-    competition_innovation_boost = competitive_rec * 0.4  # Boost innovation when competition is high
-    scores["innovate"] = 0.3 * agent.innovativeness * innovate_factor * (1.0 + agentic_novelty * 0.3 + competition_innovation_boost)
-
-    # Exploration score - higher when ignorance is high
-    # Also increases with competition - seek new niches when existing ones are crowded
-    explore_factor = get_response_factor(
-        agent.uncertainty_response, "actor_ignorance", actor_ignorance;
-        rng=agent.rng
-    )
-    competition_explore_boost = competitive_rec * 0.25  # Explore more when competition is high
-    scores["explore"] = 0.25 * explore_factor * (1.0 + actor_ignorance * 0.5 + competition_explore_boost)
-
-    # Maintain score - higher under high uncertainty or capital pressure
-    maintain_base = 0.2
-    if under_pressure
-        maintain_base += 0.3
-    end
-    if composite_uncertainty > 0.6
-        maintain_base += 0.2
-    end
-    scores["maintain"] = maintain_base
-
-    # Apply temperature and select
-    temperature = agent.config.ACTION_SELECTION_TEMPERATURE
-    noise = agent.config.ACTION_SELECTION_NOISE
-
-    # Add noise and apply softmax-like selection
-    for action in keys(scores)
-        scores[action] += noise * randn(agent.rng)
-        scores[action] = max(0.0, scores[action])
-    end
-
-    # Normalize to probabilities
-    total = sum(values(scores))
-    if total > 0
-        for action in keys(scores)
-            scores[action] /= total
-        end
-    else
-        scores["maintain"] = 1.0
-    end
-
-    # Sample action
-    actions = collect(keys(scores))
-    weights = [scores[a] for a in actions]
-    return weighted_choice(actions, weights; rng=agent.rng)
-end
+# v3.5.21: deleted select_action — A2 dead mechanism (~100 LOC), no callers.
+# Production decision flow uses make_decision! (agents.jl:2780) which
+# implements full utility-based action selection. select_action was an
+# earlier softmax-over-uncertainty-factors prototype that was superseded
+# by the utility-based path during Python parity work and never deleted.
 
 """
 Execute an action and return the outcome.
@@ -861,8 +765,13 @@ function _execute_invest!(
         opportunity.total_invested += invest_amount
     end
 
-    # Store estimated return (use latent if not provided)
-    est_ret = isnothing(estimated_return) ? opportunity.latent_return_potential : estimated_return
+    # v3.5.21: F3 — replaced ground-truth fallback with neutral 1.0 (break-even).
+    # In production estimated_return is always provided by the calling
+    # information path (calculate_investment_utility passes the AI-tier-noisy
+    # estimate); a missing kwarg means a test/probe path, where we should
+    # NEVER leak opportunity.latent_return_potential. Use 1.0 as the
+    # "no expected premium" sentinel instead.
+    est_ret = isnothing(estimated_return) ? 1.0 : estimated_return
 
     # Record investment with estimated return for uncertainty tracking.
     # v3.5.17: persist AI metadata (hallucination, confidence, domain) and
@@ -1459,66 +1368,11 @@ function snapshot(agent::EmergentAgent, round::Int)::Dict{String,Any}
     )
 end
 
-# ============================================================================
-# VECTORIZED AGENT STATE (for batch operations)
-# ============================================================================
-
-"""
-Vectorized agent state for efficient batch operations.
-"""
-mutable struct VectorizedAgentState
-    n_agents::Int
-    capitals::Vector{Float64}
-    alive::BitVector
-    ai_levels::Vector{String}
-    survival_rounds::Vector{Int}
-    success_counts::Vector{Int}
-    failure_counts::Vector{Int}
-    innovation_counts::Vector{Int}
-end
-
-function VectorizedAgentState(agents::Vector{EmergentAgent})
-    n = length(agents)
-    return VectorizedAgentState(
-        n,
-        [get_capital(a) for a in agents],
-        BitVector([a.alive for a in agents]),
-        [get_ai_level(a) for a in agents],
-        [a.survival_rounds for a in agents],
-        [a.success_count for a in agents],
-        [a.failure_count for a in agents],
-        [a.innovation_count for a in agents]
-    )
-end
-
-"""
-Sync vectorized state back to individual agents.
-"""
-function sync_to_agents!(state::VectorizedAgentState, agents::Vector{EmergentAgent})
-    for i in 1:min(state.n_agents, length(agents))
-        set_capital!(agents[i], state.capitals[i])
-        agents[i].alive = state.alive[i]
-        agents[i].survival_rounds = state.survival_rounds[i]
-        agents[i].success_count = state.success_counts[i]
-        agents[i].failure_count = state.failure_counts[i]
-        agents[i].innovation_count = state.innovation_counts[i]
-    end
-end
-
-"""
-Update vectorized state from individual agents.
-"""
-function sync_from_agents!(state::VectorizedAgentState, agents::Vector{EmergentAgent})
-    for i in 1:min(state.n_agents, length(agents))
-        state.capitals[i] = get_capital(agents[i])
-        state.alive[i] = agents[i].alive
-        state.ai_levels[i] = get_ai_level(agents[i])
-        state.survival_rounds[i] = agents[i].survival_rounds
-        state.success_counts[i] = agents[i].success_count
-        state.failure_counts[i] = agents[i].failure_count
-        state.innovation_counts[i] = agents[i].innovation_count
-    end
-end
+# v3.5.21: deleted VectorizedAgentState struct + constructor + sync_to_agents! +
+# sync_from_agents! — A2 dead mechanism (~50 LOC). The struct was an unused
+# batch-operation API surface (exported but no internal callers). Removed
+# from src/GlimpseABM.jl exports as well. If batch vectorization is needed
+# later, prefer working directly on the agents Vector with broadcasting.
 
 # ============================================================================
 # HELPER FUNCTIONS
@@ -2161,7 +2015,12 @@ function calculate_investment_utility(
         # confidence, contains_hallucination) so evaluate_opportunity_basic can use
         # the tier-aware uncertainty + confidence in its scoring. Earlier only
         # estimated_return was used, understating premium's info-quality advantage.
-        est_return = opp.latent_return_potential
+        # v3.5.21: F3 — initialize est_return to neutral 1.0 (break-even) instead
+        # of opp.latent_return_potential. Production always overwrites this on
+        # the next line via info.estimated_return; the fallback only matters when
+        # info_system === nothing (test paths), where leaking ground truth
+        # would falsify diagnostics.
+        est_return = 1.0
         est_uncertainty = nothing
         conf = nothing
         contains_halluc = false
@@ -2483,9 +2342,12 @@ function evaluate_opportunity_basic(
     # reintroduction of the leakage. Realized outcomes still penalize
     # hallucinated decisions through investment maturity.
 )::Float64
-    # Expected profit margin: use AI-tier-aware estimate when provided,
-    # else fall back to the hidden latent value (diagnostic path only).
-    expected_return = isnothing(estimated_return) ? opportunity.latent_return_potential : estimated_return
+    # Expected profit margin: use AI-tier-aware estimate when provided.
+    # v3.5.21: F3 — fallback changed from opportunity.latent_return_potential
+    # (hidden ground truth) to neutral 1.0 (break-even). Production callers
+    # always pass estimated_return; the fallback only matters in test/probe
+    # paths, where leaking the latent value would invalidate scoring.
+    expected_return = isnothing(estimated_return) ? 1.0 : estimated_return
     expected_margin = expected_return - 1.0
 
     # v2.7: Use the AI-tier-aware uncertainty estimate when provided. Premium
@@ -2690,8 +2552,15 @@ function evaluate_portfolio_opportunities(
                 set_capital!(agent, get_capital(agent) - per_use_charge)
             end
         end
-    elseif length(opp_pool) > 1
-        # Diagnostic/test path: inline tier-noise estimate (no hallucinations)
+    else
+        # Diagnostic/test path: inline tier-noise estimate (no hallucinations).
+        # v3.5.21: F4 — apply tier noise to the single-opportunity case as well.
+        # Pre-fix the single-opp branch read opp.latent_return_potential
+        # directly, removing tier differentiation in that edge case (all tiers
+        # observed identical "perfect" return). Now the noise uses agent.rng
+        # so tier info_quality still affects the perceived return even with one
+        # candidate, which preserves the model's tier-noise-driven decision
+        # variance.
         ai_config = get(agent.config.AI_LEVELS, ai_level, nothing)
         info_quality = isnothing(ai_config) ? 0.25 : Float64(ai_config.info_quality)
         base_noise_scale = 0.5 * (1.0 - info_quality)
@@ -2711,11 +2580,6 @@ function evaluate_portfolio_opportunities(
             end
             estimated_returns[opp.id] = est
         end
-    else
-        # Single-opportunity edge case: no tier noise needed
-        for opp in opp_pool
-            estimated_returns[opp.id] = opp.latent_return_potential
-        end
     end
 
     # ─────────────────────────────────────────────────────────────────
@@ -2723,7 +2587,12 @@ function evaluate_portfolio_opportunities(
     # ─────────────────────────────────────────────────────────────────
 
     for opp in opp_pool
-        est_return = get(estimated_returns, opp.id, opp.latent_return_potential)
+        # v3.5.21: F3 — fallback changed from opp.latent_return_potential
+        # to neutral 1.0 (break-even). The estimated_returns dict is populated
+        # for every opp earlier in this function; the fallback only fires if
+        # the dict somehow misses the opp.id (probe path). Don't leak ground
+        # truth in that path.
+        est_return = get(estimated_returns, opp.id, 1.0)
         # v2.7: pull the full Information object when available so scoring uses
         # AI-tier-aware uncertainty + confidence. v3.5.14: contains_hallucination
         # no longer threaded through (was hidden-truth leakage; replaced by

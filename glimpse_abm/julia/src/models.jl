@@ -992,26 +992,9 @@ function compute_roe(tracker::PerformanceTracker, current_capital::Float64)::Flo
     return (current_capital - tracker.initial_equity) / denominator
 end
 
-"""
-Get performance snapshot.
-"""
-function performance_snapshot(tracker::PerformanceTracker, current_capital::Float64)::Dict{String,Float64}
-    stats = Dict{String,Float64}(
-        "roe" => compute_roe(tracker, current_capital),
-        "roic_overall" => compute_roic(tracker, nothing)
-    )
-
-    for action in ["invest", "innovate", "explore"]
-        stats["roic_$(action)"] = compute_roic(tracker, action)
-        stats["capital_deployed_$(action)"] = get(tracker.deployed_by_action, action, 0.0)
-        stats["capital_returned_$(action)"] = get(tracker.returned_by_action, action, 0.0)
-    end
-
-    stats["capital_deployed_total"] = get(tracker.deployed_by_action, "overall", 0.0)
-    stats["capital_returned_total"] = get(tracker.returned_by_action, "overall", 0.0)
-
-    return stats
-end
+# v3.5.21: deleted performance_snapshot — A2 dead mechanism, no callers.
+# compute_roe / compute_roic are still exported and called individually
+# where per-metric reads are needed.
 
 # ============================================================================
 # PORTFOLIO
@@ -1223,26 +1206,11 @@ function check_matured_investments!(
     return newly_matured
 end
 
-"""
-Archive matured investments to lightweight snapshots.
-"""
-function archive_matured_history!(portfolio::Portfolio)
-    for investment in portfolio.matured_investments
-        snapshot = Dict{String,Any}(
-            "opportunity_id" => investment.opportunity_id,
-            "sector" => investment.sector,
-            "entry_round" => investment.entry_round,
-            "maturation_round" => investment.maturation_round,
-            "time_to_maturity" => investment.time_to_maturity,
-            "investment_amount" => investment.amount,
-            "capital_returned" => investment.returns,
-            "success" => investment.success,
-            "ai_level_used" => investment.ai_level_used
-        )
-        push!(portfolio.past_investments, snapshot)
-    end
-    empty!(portfolio.matured_investments)
-end
+# v3.5.21: deleted archive_matured_history! — A2 dead mechanism, no callers.
+# Production maturity flow uses agents.jl process_matured_investments! which
+# emits matured outcomes directly; the Portfolio struct's
+# matured_investments / past_investments fields are part of an unused
+# legacy bookkeeping path.
 
 """
 Update portfolio diversification score.
@@ -1454,130 +1422,10 @@ function update_response_weight!(
     profile.response_weights[uncertainty_type] = clamp(updated_weight, 0.0, 1.0)
 end
 
-# ============================================================================
-# AI TIER BELIEFS (Bayesian)
-# ============================================================================
-
-"""
-Bayesian beliefs about AI tier performance.
-"""
-mutable struct AITierBeliefs
-    alpha::Dict{String,Float64}  # Beta distribution alpha (successes + 1)
-    beta::Dict{String,Float64}   # Beta distribution beta (failures + 1)
-    usage_count::Dict{String,Int}
-    success_count::Dict{String,Int}
-    total_returns::Dict{String,Float64}
-    total_invested::Dict{String,Float64}
-end
-
-function AITierBeliefs()
-    tiers = ["none", "basic", "advanced", "premium"]
-    AITierBeliefs(
-        Dict(t => 1.0 for t in tiers),  # Uniform prior
-        Dict(t => 1.0 for t in tiers),
-        Dict(t => 0 for t in tiers),
-        Dict(t => 0 for t in tiers),
-        Dict(t => 0.0 for t in tiers),
-        Dict(t => 0.0 for t in tiers)
-    )
-end
-
-"""
-Get expected performance for a tier (posterior mean of Beta distribution).
-"""
-function get_expected_performance(beliefs::AITierBeliefs, tier::String)::Float64
-    a = get(beliefs.alpha, tier, 1.0)
-    b = get(beliefs.beta, tier, 1.0)
-    return a / (a + b)
-end
-
-"""
-Get uncertainty about a tier (posterior variance).
-"""
-function get_tier_uncertainty(beliefs::AITierBeliefs, tier::String)::Float64
-    a = get(beliefs.alpha, tier, 1.0)
-    b = get(beliefs.beta, tier, 1.0)
-    return (a * b) / ((a + b)^2 * (a + b + 1))
-end
-
-"""
-Update beliefs based on outcome.
-"""
-function update_belief!(beliefs::AITierBeliefs, tier::String, success::Bool, investment::Float64, returns::Float64)
-    tier_key = lowercase(tier)
-
-    beliefs.usage_count[tier_key] = get(beliefs.usage_count, tier_key, 0) + 1
-    beliefs.total_invested[tier_key] = get(beliefs.total_invested, tier_key, 0.0) + investment
-    beliefs.total_returns[tier_key] = get(beliefs.total_returns, tier_key, 0.0) + returns
-
-    if success
-        beliefs.alpha[tier_key] = get(beliefs.alpha, tier_key, 1.0) + 1.0
-        beliefs.success_count[tier_key] = get(beliefs.success_count, tier_key, 0) + 1
-    else
-        beliefs.beta[tier_key] = get(beliefs.beta, tier_key, 1.0) + 1.0
-    end
-end
-
-"""
-Select AI tier using Thompson Sampling.
-"""
-function select_tier_thompson(
-    beliefs::AITierBeliefs;
-    available_tiers::Vector{String} = ["none", "basic", "advanced", "premium"],
-    rng::Random.AbstractRNG = Random.default_rng()
-)::String
-    best_tier = "none"
-    best_sample = -Inf
-
-    for tier in available_tiers
-        a = get(beliefs.alpha, tier, 1.0)
-        b = get(beliefs.beta, tier, 1.0)
-
-        # Sample from Beta distribution
-        sample = rand(rng, Distributions.Beta(a, b))
-
-        if sample > best_sample
-            best_sample = sample
-            best_tier = tier
-        end
-    end
-
-    return best_tier
-end
-
-"""
-Select AI tier using Upper Confidence Bound.
-"""
-function select_tier_ucb(
-    beliefs::AITierBeliefs;
-    available_tiers::Vector{String} = ["none", "basic", "advanced", "premium"],
-    exploration_weight::Float64 = 2.0
-)::String
-    total_usage = sum(get(beliefs.usage_count, t, 0) for t in available_tiers)
-
-    if total_usage == 0
-        return "none"
-    end
-
-    best_tier = "none"
-    best_score = -Inf
-
-    for tier in available_tiers
-        usage = get(beliefs.usage_count, tier, 0)
-        mean_perf = get_expected_performance(beliefs, tier)
-
-        if usage == 0
-            score = Inf  # Explore unused tiers
-        else
-            exploration_bonus = exploration_weight * sqrt(log(total_usage + 1) / usage)
-            score = mean_perf + exploration_bonus
-        end
-
-        if score > best_score
-            best_score = score
-            best_tier = tier
-        end
-    end
-
-    return best_tier
-end
+# v3.5.21: deleted dead AITierBeliefs / update_belief! / select_tier_thompson /
+# select_tier_ucb / get_expected_performance / get_tier_uncertainty (~120 LOC).
+# This was a Julia-only Bayesian Thompson-sampling/UCB tier-selection module
+# that was never wired into the production simulation. Python parity uses
+# `_choose_ai_level` (mirrored as `choose_ai_level` at agents.jl:1854); no
+# Bayesian tier-selection scaffolding exists in Python. Deleted as A2 dead
+# mechanism per deep-debugging-review SKILL §9 catalog.

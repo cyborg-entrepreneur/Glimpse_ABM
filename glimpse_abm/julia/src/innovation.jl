@@ -796,39 +796,7 @@ end
 
 # Note: calculate_potential is defined in models.jl
 
-"""
-Get innovation metrics for an agent.
-"""
-function get_innovation_metrics(engine::InnovationEngine, agent_id::Int)::Dict{String,Any}
-    agent_innovations = get(engine.innovation_history, agent_id, Innovation[])
-
-    if isempty(agent_innovations)
-        return Dict{String,Any}(
-            "total_innovations" => 0,
-            "successful_innovations" => 0,
-            "success_rate" => 0.0,
-            "avg_quality" => 0.0,
-            "avg_novelty" => 0.0,
-            "total_impact" => 0.0,
-            "knowledge_pieces" => 0,
-            "ai_assisted_count" => 0,
-            "ai_success_rate" => 0.0
-        )
-    end
-
-    successful = [inn for inn in agent_innovations if inn.success]
-    ai_assisted = [inn for inn in agent_innovations if inn.ai_assisted]
-    ai_successful = [inn for inn in ai_assisted if inn.success]
-
-    return Dict{String,Any}(
-        "total_innovations" => length(agent_innovations),
-        "successful_innovations" => length(successful),
-        "success_rate" => length(successful) / length(agent_innovations),
-        "avg_quality" => mean([inn.quality for inn in agent_innovations]),
-        "avg_novelty" => mean([inn.novelty for inn in agent_innovations]),
-        "total_impact" => sum(something(inn.market_impact, 0.0) for inn in agent_innovations),
-        "knowledge_pieces" => length(get(engine.knowledge_base.agent_knowledge, agent_id, Set{String}())),
-        "ai_assisted_count" => length(ai_assisted),
-        "ai_success_rate" => isempty(ai_assisted) ? 0.0 : length(ai_successful) / length(ai_assisted)
-    )
-end
+# v3.5.21: deleted get_innovation_metrics — A2 dead mechanism, no callers.
+# Per-tier innovation aggregates are computed inline in the analysis
+# scripts (run_mixed_tier_analysis_full.jl) by reading
+# agent.innovation_count / innovation_success_count fields directly.

@@ -577,53 +577,10 @@ function _compute_component_scarcity(env::KnightianUncertaintyEnvironment)::Floa
     return blend
 end
 
-"""
-Track innovation outcomes to update novelty perceptions.
-
-Parameters
-----------
-env : KnightianUncertaintyEnvironment
-    The uncertainty environment to update.
-opportunity_id : String
-    Unique identifier for the opportunity/innovation.
-success : Union{Bool,Nothing}
-    Whether the innovation was successful.
-impact : Union{Float64,Nothing}
-    Impact/magnitude of the innovation.
-combination_signature : Union{String,Nothing}
-    Unique signature describing the combination of elements.
-new_possibility_rate : Union{Float64,Nothing}
-    Rate at which new possibilities are being discovered [0,1].
-scarcity : Union{Float64,Nothing}
-    Current resource/component scarcity signal [0,1].
-"""
-function register_innovation_event!(
-    env::KnightianUncertaintyEnvironment,
-    opportunity_id::String;
-    success::Union{Bool,Nothing}=nothing,
-    impact::Union{Float64,Nothing}=nothing,
-    combination_signature::Union{String,Nothing}=nothing,
-    new_possibility_rate::Union{Float64,Nothing}=nothing,
-    scarcity::Union{Float64,Nothing}=nothing
-)
-    # Track the innovation record
-    record = Dict{String,Any}(
-        "opportunity_id" => opportunity_id,
-        "success" => success,
-        "impact" => impact,
-        "combination_signature" => combination_signature
-    )
-    push!(env.innovation_success_tracker, record)
-
-    # Update agentic novelty state
-    if new_possibility_rate !== nothing
-        env.agentic_novelty_state["recent_new_possibility_rate"] = clamp(new_possibility_rate, 0.0, 1.0)
-    end
-
-    if scarcity !== nothing
-        env.agentic_novelty_state["recent_scarcity_signal"] = clamp(scarcity, 0.0, 1.0)
-    end
-end
+# v3.5.21: deleted register_innovation_event! — A2 dead mechanism. Function
+# was the only writer to env.innovation_success_tracker, which has no
+# readers anywhere in the codebase. Field left in struct for now to minimize
+# blast radius; future cleanup can remove the field and its initializer.
 
 """
 Measure environment-level uncertainty across the four Knightian dimensions.
