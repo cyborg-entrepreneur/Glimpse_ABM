@@ -1138,6 +1138,12 @@ function _execute_innovate!(
             outcome["success"] = false
             outcome["recovery"] = recovery
             outcome["fallback_mode"] = true
+
+            # Mirror the engine path's failure accounting (agents.jl:1029-1033).
+            # innovation_count was already incremented above the if-branch;
+            # this path just needs the failure-side counters.
+            agent.innovation_failure_count += 1
+            agent.failure_count += 1
         end
     end
 
@@ -3058,7 +3064,13 @@ function estimate_operational_costs(
     agent::EmergentAgent,
     market::MarketEnvironment
 )::Float64
-    base_cost = agent.config.BASE_OPERATIONAL_COST
+    # Use the sector-specific cost initialized in the agent constructor
+    # (agents.jl:402, sector midpoint of operational_cost_range), not the
+    # global BASE_OPERATIONAL_COST. Earlier this hardcoded the global
+    # value, so e.g. tech agents (initialized at $37,500) were charged
+    # $22,500 like services — sector heterogeneity in operating costs
+    # was effectively dead in the production charge path.
+    base_cost = agent.operating_cost_estimate
 
     # Competition pressure from active investments
     if !isempty(agent.active_investments)

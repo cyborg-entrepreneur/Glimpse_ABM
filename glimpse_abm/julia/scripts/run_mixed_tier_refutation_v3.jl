@@ -287,10 +287,14 @@ function get_test_suite()
             "crowd_weight" => 0.35, "volatility_weight" => 0.30,
             "ai_herd_weight" => 0.20, "premium_reuse_weight" => 0.20))))
 
-    push!(tests, RefutationTest("OPS_COST_50%", "Operational costs halved", "OPERATIONS";
-        config_overrides=Dict{String,Any}("BASE_OPERATIONAL_COST" => 5000.0)))
-    push!(tests, RefutationTest("OPS_COST_25%", "Operational costs reduced to 25%", "OPERATIONS";
-        config_overrides=Dict{String,Any}("BASE_OPERATIONAL_COST" => 2500.0)))
+    # Operational cost reductions relative to current baseline of $22,500
+    # (config.jl:135). Earlier this script used absolute dollar values
+    # (5000 mislabeled "50%" when it's ~22%) — labels and values are now
+    # explicit fractions of the BLS-calibrated baseline.
+    push!(tests, RefutationTest("OPS_COST_50%", "Operational costs halved (\$11,250)", "OPERATIONS";
+        config_overrides=Dict{String,Any}("BASE_OPERATIONAL_COST" => 11250.0)))
+    push!(tests, RefutationTest("OPS_COST_25%", "Operational costs at 25% (\$5,625)", "OPERATIONS";
+        config_overrides=Dict{String,Any}("BASE_OPERATIONAL_COST" => 5625.0)))
 
     push!(tests, RefutationTest("NO_CROWD_FREE_AI", "No crowding + Free AI", "COMBINED_FAV";
         config_overrides=Dict{String,Any}(

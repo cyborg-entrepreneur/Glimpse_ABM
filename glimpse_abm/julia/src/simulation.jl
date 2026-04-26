@@ -246,15 +246,17 @@ function step!(sim::EmergentSimulation, round::Int)
         if !agent.alive
             continue
         end
-        # Calculate base cost
+        # Calculate base cost (sector-specific via agent.operating_cost_estimate
+        # in estimate_operational_costs)
         estimated_cost = estimate_operational_costs(agent, sim.market)
         # Apply severity multiplier (matching Python _apply_operating_costs)
         operating_cost = max(0.0, estimated_cost * severity)
-        agent.operating_cost_estimate = operating_cost
+        # NB: do NOT write `agent.operating_cost_estimate = operating_cost` here.
+        # That would compound each round (estimate_operational_costs reads
+        # the field as base, then severity multiplies it again next round).
+        # The field is the sector-base; severity is round-local.
         if operating_cost > 0.0
             set_capital!(agent, get_capital(agent) - operating_cost)
-            # Check survival after operating costs (matches Python line 189)
-            check_survival!(agent, round)
         end
     end
 
@@ -263,12 +265,16 @@ function step!(sim::EmergentSimulation, round::Int)
         if !agent.alive
             continue
         end
-        subscription_cost = apply_subscription_carry!(agent, round)
-        # Check survival after subscription charges
-        if subscription_cost > 0.0
-            check_survival!(agent, round)
-        end
+        apply_subscription_carry!(agent, round)
     end
+
+    # Solvency strike accrual is consolidated at end-of-round (Phase 4 below).
+    # Earlier the per-round insolvency_rounds counter was incremented up to
+    # 4× per round (after operating costs, after subscription billing, after
+    # matured investments, and at end-of-round) — AI tiers paid an extra
+    # subscription-billing strike that no-AI agents skipped, artificially
+    # raising premium failure rate by ~33%. Removing intermediate calls
+    # makes the strike accrual reflect end-of-round solvency only.
 
     # Phase 2: Process matured investments (matching Python BLOCK 1)
     # Pass market_conditions with uncertainty_state (matches Python line 913)
@@ -299,8 +305,7 @@ function step!(sim::EmergentSimulation, round::Int)
             end
         end
         append!(all_matured, matured)
-        # Check survival after matured investments (matches Python line 1003)
-        check_survival!(agent, round)
+        # Solvency check deferred to end-of-round (see comment above Phase 1.5).
     end
 
     # Get available opportunities (after applying costs, matching Python timing)
