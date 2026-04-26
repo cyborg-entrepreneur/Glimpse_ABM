@@ -1350,7 +1350,40 @@ function get_response_factor(
     return 1.0 - (uncertainty_level * weight)
 end
 
-# v3.5.15: dead orphan function deleted (no callers in any release of v3.x).
+"""
+Update response profile from outcome.
+"""
+function update_from_outcome!(
+    profile::UncertaintyResponseProfile,
+    uncertainty_perception::Dict{String,Any},
+    action::String,
+    outcome::Dict{String,Any},
+    market_conditions::Dict{String,Any}
+)
+    success = get(outcome, "success", false)
+    investment_amount = max(get(outcome, "investment_amount", 1.0), 1.0)
+    returns = get(outcome, "capital_returned", 0.0) / investment_amount
+
+    for u_type in keys(profile.response_weights)
+        if haskey(uncertainty_perception, u_type)
+            u_data = uncertainty_perception[u_type]
+            level = if isa(u_data, Dict)
+                get(u_data, "level", get(u_data, "$(split(u_type, "_")[1])_level", 0.0))
+            else
+                0.0
+            end
+
+            push!(profile.outcome_history[u_type], (level, returns, success))
+
+            # Trim to memory limit
+            if length(profile.outcome_history[u_type]) > profile.memory_limit
+                popfirst!(profile.outcome_history[u_type])
+            end
+
+            update_response_weight!(profile, u_type, market_conditions)
+        end
+    end
+end
 
 """
 Update response weight for a specific uncertainty type.
@@ -1451,7 +1484,23 @@ function get_tier_uncertainty(beliefs::AITierBeliefs, tier::String)::Float64
     return (a * b) / ((a + b)^2 * (a + b + 1))
 end
 
-# v3.5.15: dead orphan function deleted (no callers in any release of v3.x).
+"""
+Update beliefs based on outcome.
+"""
+function update_belief!(beliefs::AITierBeliefs, tier::String, success::Bool, investment::Float64, returns::Float64)
+    tier_key = lowercase(tier)
+
+    beliefs.usage_count[tier_key] = get(beliefs.usage_count, tier_key, 0) + 1
+    beliefs.total_invested[tier_key] = get(beliefs.total_invested, tier_key, 0.0) + investment
+    beliefs.total_returns[tier_key] = get(beliefs.total_returns, tier_key, 0.0) + returns
+
+    if success
+        beliefs.alpha[tier_key] = get(beliefs.alpha, tier_key, 1.0) + 1.0
+        beliefs.success_count[tier_key] = get(beliefs.success_count, tier_key, 0) + 1
+    else
+        beliefs.beta[tier_key] = get(beliefs.beta, tier_key, 1.0) + 1.0
+    end
+end
 
 """
 Select AI tier using Thompson Sampling.
