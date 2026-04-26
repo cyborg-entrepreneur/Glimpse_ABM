@@ -919,6 +919,12 @@ const CALIBRATION_LIBRARY = Dict{String,CalibrationProfile}(
             "N_AGENTS" => 500,
             "N_ROUNDS" => 600,  # 600 months = 50 years (was 200 quarters)
             "N_RUNS" => 30,
+            # NB: INITIAL_CAPITAL removed in v3.5.13. The scalar is a no-op
+            # unless USE_UNIFORM_INITIAL_CAPITAL=true; the EmergentAgent
+            # constructor samples from sector_profile.initial_capital_range
+            # by default. To force uniform capital (e.g., for causal
+            # identification), set BOTH the scalar AND the flag.
+            "USE_UNIFORM_INITIAL_CAPITAL" => true,
             "INITIAL_CAPITAL" => 5_000_000.0,
             "SURVIVAL_CAPITAL_RATIO" => 0.40,
             "USE_NETWORK_EFFECTS" => false,

@@ -378,13 +378,18 @@ function record_ai_signals!(
         end
     end
 
-    # Update herding patterns with decay
+    # Update herding patterns with decay. v3.5.13: prior was double-decayed
+    # for opps receiving new counts — once at the loop above, again at the
+    # `* decay` in the inner read. Probe: with decay=0.5, prior 100 + new
+    # count 1 produced 26 (= 50 * 0.5 + 1) instead of 51 (= 50 + 1). Now
+    # the `* decay` in the second loop is removed since the first loop
+    # already applied decay to all keys.
     decay = Float64(getfield_default(env.config, :AI_HERDING_DECAY, 1.0))
     for key in collect(keys(herding_patterns))
         herding_patterns[key] *= decay
     end
     for (opp_id, count) in herding_counts
-        prior = get(herding_patterns, opp_id, 0.0) * decay
+        prior = get(herding_patterns, opp_id, 0.0)  # already decayed above
         herding_patterns[opp_id] = prior + count
     end
 

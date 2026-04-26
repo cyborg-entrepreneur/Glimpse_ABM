@@ -1381,26 +1381,12 @@ function process_matured_investments!(
     return matured_outcomes
 end
 
-"""
-Apply operational costs for the round using sector-specific costs.
-"""
-function apply_operational_costs!(agent::EmergentAgent, round::Int)
-    if !agent.alive
-        return
-    end
-
-    # Use sector-specific operational cost from SECTOR_PROFILES
-    sector_profile = get(agent.config.SECTOR_PROFILES, agent.primary_sector, nothing)
-    cost = if !isnothing(sector_profile) && hasproperty(sector_profile, :operational_cost_range)
-        # Use agent's stored estimate (mid-range from sector profile)
-        agent.operating_cost_estimate
-    else
-        agent.config.BASE_OPERATIONAL_COST
-    end
-
-    current = get_capital(agent)
-    set_capital!(agent, current - cost)
-end
+# v3.5.13: apply_operational_costs! deleted — was unused. Production op-cost
+# charging happens in simulation.jl's apply_operating_costs! via
+# estimate_operational_costs(agent, market) which applies sector cost +
+# OPS_COST_INTENSITY + active-investment competition multiplier + severity.
+# The deleted helper bypassed all four; if anyone restored it, charges
+# would diverge from the actual production path.
 
 """
 Get a snapshot of the agent's current state.
@@ -1893,7 +1879,27 @@ function choose_ai_level(
     # matches the actual sector-specific charge in estimate_operational_costs.
     # v3.5.10: also apply OPS_COST_INTENSITY so refutation knob shifts both
     # actual burn and perceived burn coherently.
-    operating_cost = max(agent.operating_cost_estimate * agent.config.OPS_COST_INTENSITY, 1.0)
+    # v3.5.13: also apply the same active-investment competition multiplier
+    # estimate_operational_costs uses (1 + 0.2 × avg_competition). Earlier
+    # choose_ai_level read raw operating_cost_estimate * intensity but
+    # production charge added competition pressure on top. Replicating
+    # the formula here (rather than calling estimate_operational_costs)
+    # because choose_ai_level doesn't have market in scope and the
+    # multiplier depends only on agent.active_investments.
+    raw_burn = agent.operating_cost_estimate * agent.config.OPS_COST_INTENSITY
+    if !isempty(agent.active_investments)
+        comps = Float64[]
+        for inv in agent.active_investments
+            opp = get(inv, "opportunity", nothing)
+            if !isnothing(opp) && opp isa Opportunity
+                push!(comps, opp.competition)
+            end
+        end
+        if !isempty(comps)
+            raw_burn *= 1.0 + mean(comps) * 0.2
+        end
+    end
+    operating_cost = max(raw_burn, 1.0)
     recent_activity = max(1.0, Float64(get(metrics, "recent_ai_activity", 1.0)))
 
     cost_ratios = Dict{String,Float64}()
@@ -2453,38 +2459,37 @@ function evaluate_opportunity_basic(
     # At conf = 0.5, no change. At conf = 0.99, +15% score. At conf = 0.05, -25%.
     score *= 0.75 + 0.5 * conf
 
-    # v2.8: hallucination DETECTABILITY, not ground-truth penalty.
-    # `contains_hallucination` is the hidden fact that the Information object
-    # was generated as a hallucination. Agents don't directly know this — they
-    # can only DETECT it probabilistically. Detection probability scales with
-    # analytical_ability + the confidence dissonance (high-confidence
-    # hallucinations are actually HARDER to catch, matching the literature on
-    # overconfidence: see Moore & Healy 2008). Earlier v2.7 applied the penalty
-    # directly from the ground-truth flag, which artificially protected
-    # agents from hallucinations — understating premium's actual tier cost.
-    if contains_hallucination
-        analytical = Float64(get(agent.traits, "analytical_ability", 0.5))
-        # v3.3: Detection is now primarily analytical-ability driven and
-        # symmetric across confidence levels. The old formula subtracted
-        # `conf_disbelief` into detect_prob, which INVERTED detection for
-        # high-confidence hallucinations — premium's confident signals were
-        # the hardest to catch. This contradicts the literature: analytical
-        # reviewers catch MORE errors in confidently-presented claims, not
-        # fewer (Moore & Healy 2008 applies to the *producer's* overconfidence,
-        # not the *consumer's* detection ability). New formula: detection
-        # scales with analytical ability plus a small floor — independent of
-        # the AI's stated confidence. Premium still pays for hallucinations
-        # when they occur; it just doesn't get an asymmetric free pass.
-        detect_prob = clamp(analytical * 0.6 + 0.15, 0.1, 0.85)
-        if rand(agent.rng) < detect_prob
-            # Detected — agent discounts the score (they sense something is off)
-            halluc_mult = 0.75 - 0.35 * analytical
-            score *= halluc_mult
-        end
-        # UN-detected hallucinations apply no penalty here; the realized
-        # return will reflect the bad decision downstream through the
-        # investment-maturation path.
+    # v3.5.13 — hidden-truth-leakage fix. Earlier this branch read
+    # contains_hallucination (the hidden ground truth) and only applied the
+    # discount when the information actually was a hallucination. Probe:
+    # "score 1.767 without flag vs mean 0.993 with flag" — agents had
+    # privileged access to the truth. Real-world agents can't know in
+    # advance whether a specific AI call hallucinated; they apply expected-
+    # hallucination discounts based on (a) their tier's known hallucination
+    # rate and (b) their own analytical ability.
+    #
+    # Replace the truth-flag check with a tier-aware EXPECTED discount that
+    # fires on EVERY evaluation regardless of whether this specific call
+    # was actually hallucinated. Realized outcomes still punish agents that
+    # acted on hallucinated information through the maturity path.
+    ai_tier = get_ai_level(agent)
+    tier_capabilities = get(agent.config.AI_DOMAIN_CAPABILITIES, ai_tier, nothing)
+    if !isnothing(tier_capabilities)
+        # Average hallucination rate across the four cognitive domains for this tier
+        domain_halls = [get(tier_capabilities, dom, nothing)
+                        for dom in ["market_analysis", "technical_assessment",
+                                    "uncertainty_evaluation", "innovation_potential"]]
+        rates = [d.hallucination_rate for d in domain_halls if !isnothing(d)]
+        expected_hall_rate = isempty(rates) ? 0.1 : mean(rates)
+    else
+        expected_hall_rate = 0.1
     end
+    analytical = Float64(get(agent.traits, "analytical_ability", 0.5))
+    # Expected discount = expected_hall_rate × (cost of an undetected hall × undetected fraction).
+    # Per-call discount magnitude calibrated to roughly match the prior
+    # truth-flag-detected discount in expectation, while applying uniformly.
+    expected_discount = expected_hall_rate * (0.75 - 0.35 * analytical)
+    score *= clamp(1.0 - expected_discount, 0.5, 1.0)
 
     # Regime multiplier
     regime = market_conditions.regime

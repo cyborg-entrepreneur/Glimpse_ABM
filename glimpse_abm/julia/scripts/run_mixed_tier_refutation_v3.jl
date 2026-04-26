@@ -79,9 +79,15 @@ function build_config(test::RefutationTest, seed::Int)
     end
     for (key, value) in test.config_overrides
         key_sym = Symbol(key)
-        if hasproperty(config, key_sym)
-            setfield!(config, key_sym, value)
+        # v3.5.13: error on unknown keys instead of silently dropping them.
+        # The previous `if hasproperty` check made future refutations no-op
+        # without warning if a config field was renamed or deleted upstream.
+        if !hasproperty(config, key_sym)
+            error("Refutation override targets unknown config field '$key' " *
+                  "in test '$(test.name)'. Either the field was renamed/removed " *
+                  "or this is a typo. Production overrides must reference live fields.")
         end
+        setfield!(config, key_sym, value)
     end
     return config
 end
