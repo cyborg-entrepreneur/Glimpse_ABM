@@ -455,7 +455,13 @@ function realized_return(
     # 100-1000×. Allow that here; the convergence-crowding mechanism
     # (v3.1 capital-saturation convexity) still constrains crowded niches,
     # so unicorn returns require uncrowded + scarce + novel opportunities.
-    scarcity_headroom = 20.0 + 30.0 * max(0.0, scarcity_signal + novelty_signal - 0.8)
+    #
+    # v3.5.4: coefficient was 30 in v3.5, capping the formula at 56×
+    # (20 + 30 * max((1+1)-0.8, 0) = 56) before the 200× clamp ever
+    # applied — the headline ceiling was effectively unreachable. Now
+    # 150 so the formula can actually reach 200× when scarcity+novelty
+    # both max out at 1.0 (20 + 150 * 1.2 = 200).
+    scarcity_headroom = 20.0 + 150.0 * max(0.0, scarcity_signal + novelty_signal - 0.8)
     upper_bound = clamp(scarcity_headroom, 5.0, 200.0)
     # Lower bound: 0.0 = total loss, 0.5 = 50% loss, 1.0 = break-even
     # Note: RETURN_LOWER_BOUND should be ≥0 to represent minimum return multiple

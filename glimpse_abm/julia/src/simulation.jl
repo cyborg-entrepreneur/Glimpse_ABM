@@ -285,10 +285,14 @@ function step!(sim::EmergentSimulation, round::Int)
         end
         matured = process_matured_investments!(agent, sim.market, round; market_conditions=market_conditions)
         for m in matured
-            # Update tier beliefs based on investment outcomes
+            # Update tier beliefs based on investment outcomes. Pass the
+            # realized return_multiple to the continuous overload so a 3×
+            # return updates more strongly than a 1.1× barely-success;
+            # earlier this called the Boolean convenience method, collapsing
+            # all positive outcomes to multiplier=1.5 regardless of magnitude.
             ai_tier = get(m, "ai_level", get_ai_level(agent))
-            success = get(m, "success", false)
-            update_tier_belief!(agent.ai_learning, ai_tier, success)
+            return_mult = Float64(get(m, "return_multiple", get(m, "success", false) ? 1.5 : 0.5))
+            update_tier_belief!(agent.ai_learning, ai_tier, return_mult)
             # v2.7: wire update_state_from_outcome! so AI-trust and
             # experience-driven trait evolution actually run. The function
             # was defined (agents.jl:update_state_from_outcome!) but had no
@@ -449,7 +453,12 @@ function step!(sim::EmergentSimulation, round::Int)
         end
     end
 
-    # Update tier beliefs from immediate action outcomes (innovate, explore)
+    # Update tier beliefs from immediate action outcomes (innovate, explore).
+    # Use cash_multiple (innovate) when available; otherwise convert Boolean
+    # success to a 1.5/0.5 multiplier estimate. Earlier this called the
+    # Boolean overload directly, discarding ROI magnitude — emergent-mode
+    # tier choice couldn't distinguish a 5× innovation from a barely-positive
+    # 1.05× one.
     for action in agent_actions
         agent_id = get(action, "agent_id", 0)
         if agent_id < 1 || agent_id > length(sim.agents)
@@ -461,9 +470,13 @@ function step!(sim::EmergentSimulation, round::Int)
         end
         action_type = get(action, "action", "maintain")
         if action_type in ["innovate", "explore"]
-            success = get(action, "success", false)
             ai_tier = get(action, "ai_level_used", get_ai_level(agent))
-            update_tier_belief!(agent.ai_learning, ai_tier, success)
+            return_mult = if haskey(action, "cash_multiple")
+                Float64(action["cash_multiple"])
+            else
+                get(action, "success", false) ? 1.5 : 0.5
+            end
+            update_tier_belief!(agent.ai_learning, ai_tier, return_mult)
         end
     end
 
