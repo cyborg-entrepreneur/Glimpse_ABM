@@ -3037,34 +3037,7 @@ function evolve_traits_from_experience!(
     end
 end
 
-"""
-Record a paradox observation (confidence vs outcome gap).
-"""
-function record_paradox_observation!(
-    agent::EmergentAgent,
-    decision_confidence::Float64,
-    realized_roi::Float64;
-    ai_used::Bool = false
-)
-    decision_conf = clamp(decision_confidence, 0.05, 0.99)
-    roi_value = clamp(realized_roi, 0.0, 3.0)
-
-    # Convert ROI to score
-    roi_score = 1.0 / (1.0 + exp(-3.0 * (roi_value - 1.0)))
-    gap = decision_conf - roi_score
-
-    # Weight by AI usage
-    weight = ai_used ? 1.2 : 0.8
-
-    # Update paradox signal with inertia
-    inertia = 0.85
-    if !haskey(agent.last_outcome, "paradox_signal")
-        agent.last_outcome["paradox_signal"] = 0.0
-    end
-    old_signal = Float64(get(agent.last_outcome, "paradox_signal", 0.0))
-    new_signal = inertia * old_signal + (1.0 - inertia) * gap * weight
-    agent.last_outcome["paradox_signal"] = clamp(new_signal, -1.0, 1.0)
-end
+# v3.5.15: dead orphan function deleted (no callers in any release of v3.x).
 
 # ============================================================================
 # OPERATIONAL COSTS

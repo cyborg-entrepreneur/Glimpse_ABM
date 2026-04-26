@@ -645,51 +645,7 @@ end
 # is wired. If adding explicit penalties later, call from simulation.jl after
 # investment maturity rather than reintroducing the dead function.
 
-"""
-Forget knowledge in a specific sector based on severity.
-"""
-function forget_sector_knowledge!(
-    kb::KnowledgeBase,
-    agent,
-    sector::String,
-    severity::Float64;
-    ai_level::String="none"
-)
-    if isempty(sector)
-        return
-    end
-
-    agent_knowledge = get(kb.agent_knowledge, agent.id, Set{String}())
-    if isempty(agent_knowledge)
-        return
-    end
-
-    # Get AI info quality to modulate severity
-    ai_config = get(kb.config.AI_LEVELS, ai_level, kb.config.AI_LEVELS["none"])
-    info_quality = Float64(get(ai_config, "info_quality", 0.0))
-    severity = clamp(severity * (1.0 - 0.25 * info_quality), 0.05, 1.0)
-
-    # Find pieces in this sector
-    piece_ids = String[]
-    for kid in collect(agent_knowledge)
-        piece = get(kb.knowledge_pieces, kid, nothing)
-        if !isnothing(piece) && knowledge_to_sector(kb, piece) == sector
-            push!(piece_ids, kid)
-        end
-    end
-
-    if isempty(piece_ids)
-        return
-    end
-
-    # Sort by usage (drop least used)
-    sort!(piece_ids, by=k -> get(kb.knowledge_usage, k, 0))
-
-    drop_count = max(1, Int(round(length(piece_ids) * clamp(severity * 0.4, 0.08, 0.65))))
-    for kid in piece_ids[1:min(drop_count, length(piece_ids))]
-        remove_agent_knowledge!(kb, agent, kid)
-    end
-end
+# v3.5.15: dead orphan function deleted (no callers in any release of v3.x).
 
 """
 Remove knowledge from an agent.
@@ -700,97 +656,9 @@ function remove_agent_knowledge!(kb::KnowledgeBase, agent, knowledge_id::String)
     end
 end
 
-"""
-Cull least-used knowledge when portfolios become too large.
-"""
-function forget_stale_knowledge!(
-    kb::KnowledgeBase,
-    agent,
-    current_round::Int;
-    max_size::Union{Int,Nothing}=nothing,
-    drop_fraction::Float64=0.1
-)
-    knowledge_ids = collect(get(kb.agent_knowledge, agent.id, Set{String}()))
-    if isempty(knowledge_ids)
-        return
-    end
+# v3.5.15: dead orphan function deleted (no callers in any release of v3.x).
 
-    config_max = get(kb.config.parameters, "MAX_AGENT_KNOWLEDGE", 120)
-    max_keep = isnothing(max_size) ? config_max : max_size
-    if max_keep <= 0
-        max_keep = 60
-    end
-
-    if length(knowledge_ids) <= max_keep
-        return
-    end
-
-    drop_count = length(knowledge_ids) - max_keep
-    drop_extra = max(1, Int(round(max_keep * drop_fraction)))
-    total_drop = max(1, drop_count + drop_extra)
-
-    # Score function for keeping knowledge
-    function keep_score(kid::String)::Float64
-        piece = get(kb.knowledge_pieces, kid, nothing)
-        usage = get(kb.knowledge_usage, kid, 0)
-        discovered_round = isnothing(piece) ? current_round : piece.discovered_round
-        age = max(0, current_round - discovered_round)
-        novelty_bonus = isnothing(piece) ? 0.0 : piece.level
-        return usage * 1.6 + novelty_bonus - age * 0.04
-    end
-
-    sorted_ids = sort(knowledge_ids, by=keep_score)
-
-    # Structured drop (lowest scores)
-    structured_drop = max(1, Int(round(total_drop * 0.6)))
-    to_remove = sorted_ids[1:min(structured_drop, length(sorted_ids))]
-
-    # Random additional drops
-    remaining = total_drop - length(to_remove)
-    if remaining > 0
-        random_pool = [kid for kid in knowledge_ids if !(kid in to_remove)]
-        if !isempty(random_pool)
-            n_random = min(length(random_pool), remaining)
-            random_remove = Random.shuffle(random_pool)[1:n_random]
-            append!(to_remove, random_remove)
-        end
-    end
-
-    # Remove knowledge
-    for kid in to_remove[1:min(total_drop, length(to_remove))]
-        remove_agent_knowledge!(kb, agent, kid)
-    end
-end
-
-"""
-Prune knowledge based on sector strength thresholds.
-"""
-function prune_by_sector_strength!(
-    kb::KnowledgeBase,
-    agent,
-    sector_levels::Dict{String,Float64};
-    threshold::Float64=0.05
-)
-    if isnothing(agent) || isempty(sector_levels)
-        return
-    end
-
-    knowledge_ids = collect(get(kb.agent_knowledge, agent.id, Set{String}()))
-    if isempty(knowledge_ids)
-        return
-    end
-
-    for kid in knowledge_ids
-        piece = get(kb.knowledge_pieces, kid, nothing)
-        if isnothing(piece)
-            continue
-        end
-        sector = knowledge_to_sector(kb, piece)
-        if get(sector_levels, sector, 1.0) < threshold
-            remove_agent_knowledge!(kb, agent, kid)
-        end
-    end
-end
+# v3.5.15: dead orphan function deleted (no callers in any release of v3.x).
 
 # apply_sector_decay! deleted in v3.5.11 (one-shot learning model;
 # see comment block above the prior apply_tier_decay! deletion).
@@ -802,32 +670,7 @@ end
 # adding it later, wire decay calls into simulation.jl's per-round step!
 # at the right phase rather than re-introducing dead functions.
 
-"""
-Update domain belief using Bayesian update.
-"""
-function update_domain_belief!(
-    kb::KnowledgeBase,
-    agent_id::Int,
-    domain::String,
-    evidence::Float64
-)::Float64
-    evidence = clamp(evidence, 0.0, 1.0)
-
-    if !haskey(kb.agent_domain_beliefs, agent_id)
-        kb.agent_domain_beliefs[agent_id] = Dict{String,Dict{String,Float64}}()
-    end
-
-    if !haskey(kb.agent_domain_beliefs[agent_id], domain)
-        kb.agent_domain_beliefs[agent_id][domain] = Dict("alpha" => 2.0, "beta" => 2.0)
-    end
-
-    belief = kb.agent_domain_beliefs[agent_id][domain]
-    belief["alpha"] += evidence
-    belief["beta"] += max(0.0, 1.0 - evidence)
-
-    total = belief["alpha"] + belief["beta"]
-    return total <= 0 ? 0.5 : belief["alpha"] / total
-end
+# v3.5.15: dead orphan function deleted (no callers in any release of v3.x).
 
 """
 Get current domain belief for an agent.

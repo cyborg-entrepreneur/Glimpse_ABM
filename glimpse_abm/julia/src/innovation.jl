@@ -73,15 +73,7 @@ function record_combination!(tracker::CombinationTracker, combination_signature:
     tracker.total_combinations += 1
 end
 
-"""
-Record the outcome of a combination.
-"""
-function record_outcome!(tracker::CombinationTracker, combination_signature::String, success::Float64)
-    if !haskey(tracker.combination_success, combination_signature)
-        tracker.combination_success[combination_signature] = Float64[]
-    end
-    push!(tracker.combination_success[combination_signature], success)
-end
+# v3.5.15: dead orphan function deleted (no callers in any release of v3.x).
 
 """
 Sample a random combination signature from history.

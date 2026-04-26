@@ -548,30 +548,7 @@ const MODIFIER_EFFECTS = Dict{String,Dict{String,Float64}}(
     "sustainable" => Dict("log_mu" => 0.04, "log_sigma" => 0.0, "failure_mean" => -0.02)
 )
 
-"""
-Apply feedback to branch parameters based on observed ROI.
-"""
-function apply_branch_feedback!(market::MarketEnvironment, branch_name::String, mean_roi::Float64)
-    params = get(market.branch_params, branch_name, nothing)
-    if isnothing(params)
-        return
-    end
-
-    profile = params["profile"]
-    rate = market.config.BRANCH_FEEDBACK_RATE
-    feedback = clamp(mean_roi, -1.0, 1.0) * rate
-
-    # Adjust log_mu based on ROI
-    log_range = (log(profile.return_range[1]), log(profile.return_range[2]))
-    params["log_mu"] = clamp(params["log_mu"] + feedback, log_range[1], log_range[2])
-
-    # Adjust failure_mean inversely
-    failure_range = profile.failure_range
-    params["failure_mean"] = clamp(
-        params["failure_mean"] - feedback * 0.5,
-        failure_range[1], failure_range[2]
-    )
-end
+# v3.5.15: dead orphan function deleted (no callers in any release of v3.x).
 
 """
 Create child branch parameters with drift.
@@ -1413,32 +1390,7 @@ function create_niche_opportunity(
     return niche_opp
 end
 
-"""
-Record innovation outcome and update opportunity characteristics.
-"""
-function record_innovation_outcome!(
-    market::MarketEnvironment,
-    opportunity::Opportunity,
-    success::Bool,
-    return_achieved::Float64
-)
-    if success
-        opportunity.market_impact = return_achieved
-        intrinsic_gain = clamp(return_achieved, 0.2, 3.5)
-
-        # Adjust return potential
-        opportunity.latent_return_potential = clamp(
-            opportunity.latent_return_potential + 0.05 * intrinsic_gain,
-            0.15, 4.0
-        )
-    else
-        opportunity.market_impact = 0.0
-        opportunity.latent_failure_potential = clamp(
-            opportunity.latent_failure_potential * 1.05,
-            0.05, 0.99
-        )
-    end
-end
+# v3.5.15: dead orphan function deleted (no callers in any release of v3.x).
 
 """
 Spawn a derivative opportunity from a successful innovation.
