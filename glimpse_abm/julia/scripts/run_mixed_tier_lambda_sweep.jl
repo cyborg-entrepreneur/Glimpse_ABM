@@ -7,9 +7,10 @@
 #   - saturation distribution (max, p95, frac above K_sat)
 #
 # Goal: identify a λ that produces (a) BLS 50-55% mean survival, (b) active
-# but not crushing crowding (frac above K_sat ~5-15%, p95 saturation ~1.5-2.5),
-# (c) preserves mid-tier dominance (basic ≈ advanced > premium > none, all
-# positive ATE).
+# but not crushing crowding (frac above K_sat ~5-15%, p95 saturation ~1.5-2.5).
+# Whatever per-tier pattern emerges at that λ is an empirical finding, not a
+# calibration target — calibration tunes only to observable real-world
+# benchmarks, never to produce a particular qualitative tier ordering.
 
 using Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
