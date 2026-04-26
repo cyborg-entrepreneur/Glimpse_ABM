@@ -10,6 +10,7 @@ Port of: glimpse_abm file I/O patterns
 
 using DataFrames
 using Arrow
+using CSV
 using JLD2
 using JSON3
 using Dates
@@ -48,17 +49,15 @@ end
 
 """
 Save DataFrame to CSV format (Python-compatible).
+
+v3.5.20: delegate to CSV.jl so values containing commas, newlines, or
+double quotes are properly RFC-4180 quoted. The previous hand-rolled
+writer joined raw `string(v)` with commas, corrupting any column whose
+string representation contained a delimiter (e.g. a sector name with
+embedded comma, or an error message).
 """
 function save_dataframe_csv(df::DataFrame, path::String)
-    open(path, "w") do io
-        # Write header
-        println(io, join(names(df), ","))
-        # Write rows
-        for row in eachrow(df)
-            vals = [ismissing(v) ? "" : string(v) for v in row]
-            println(io, join(vals, ","))
-        end
-    end
+    CSV.write(path, df)
 end
 
 # ============================================================================

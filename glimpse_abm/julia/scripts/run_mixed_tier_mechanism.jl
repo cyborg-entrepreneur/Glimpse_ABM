@@ -19,6 +19,8 @@ using CSV
 using Dates
 using Printf
 
+include(joinpath(@__DIR__, "_safe_stats.jl"))
+
 const N_AGENTS = 1000
 const N_ROUNDS = 60
 const N_RUNS = 50
@@ -145,12 +147,12 @@ function run_mechanism_simulation(run_idx::Int, seed::Int)
         out["$(tier)_maintain_share"] = total_actions > 0 ? action_counts["maintain"]/total_actions : 0.0
         out["$(tier)_mean_competition"] = isempty(all_competition) ? 0.0 : mean(all_competition)
         out["$(tier)_max_competition"] = isempty(all_competition) ? 0.0 : maximum(all_competition)
-        out["$(tier)_innovations_per_agent"] = mean(innovations)
+        out["$(tier)_innovations_per_agent"] = safe_mean(innovations)
         out["$(tier)_innovation_success_rate"] = sum(innovations) > 0 ? sum(successes)/sum(innovations) : 0.0
         out["$(tier)_total_niches"] = final_niches
         out["$(tier)_combinations"] = final_combos
         out["$(tier)_roi"] = total_invested > 0 ? (total_returned - total_invested) / total_invested : 0.0
-        out["$(tier)_mean_final_capital"] = mean(final_capitals)
+        out["$(tier)_mean_final_capital"] = safe_mean(final_capitals)
         out["$(tier)_survival_traj"] = survival_traj[tier]
         out["$(tier)_innovate_share_traj"] = innovate_share_traj[tier]
         out["$(tier)_explore_share_traj"] = explore_share_traj[tier]
@@ -220,19 +222,19 @@ function aggregate_per_tier_summary(panel::DataFrame)
         push!(rows, (
             tier = tier,
             n_runs = nrow(sub),
-            mean_survival = mean(sub.survival_rate),
-            std_survival = std(sub.survival_rate),
-            mean_innovate_share = mean(sub.innovate_share),
-            mean_explore_share = mean(sub.explore_share),
-            mean_invest_share = mean(sub.invest_share),
-            mean_maintain_share = mean(sub.maintain_share),
-            mean_competition = mean(sub.mean_competition),
-            mean_innovations_per_agent = mean(sub.innovations_per_agent),
-            mean_innovation_success_rate = mean(sub.innovation_success_rate),
-            mean_total_niches = mean(sub.total_niches),
-            mean_combinations = mean(sub.combinations),
-            mean_roi = mean(sub.roi),
-            mean_final_capital = mean(sub.mean_final_capital),
+            mean_survival = safe_mean(sub.survival_rate),
+            std_survival = safe_std(sub.survival_rate),
+            mean_innovate_share = safe_mean(sub.innovate_share),
+            mean_explore_share = safe_mean(sub.explore_share),
+            mean_invest_share = safe_mean(sub.invest_share),
+            mean_maintain_share = safe_mean(sub.maintain_share),
+            mean_competition = safe_mean(sub.mean_competition),
+            mean_innovations_per_agent = safe_mean(sub.innovations_per_agent),
+            mean_innovation_success_rate = safe_mean(sub.innovation_success_rate),
+            mean_total_niches = safe_mean(sub.total_niches),
+            mean_combinations = safe_mean(sub.combinations),
+            mean_roi = safe_mean(sub.roi),
+            mean_final_capital = safe_mean(sub.mean_final_capital),
         ))
     end
     return DataFrame(rows)
@@ -249,12 +251,12 @@ function save_trajectories(all_results::Vector{Dict}, output_dir::String)
             cap = [res["$(tier)_capital_traj"][r] for res in all_results]
             push!(rows, (
                 tier = tier, round = r,
-                mean_survival = mean(survs),
-                std_survival = std(survs),
-                mean_innovate_share = mean(innov),
-                mean_explore_share = mean(explr),
-                mean_competition = mean(comp),
-                mean_total_capital = mean(cap),
+                mean_survival = safe_mean(survs),
+                std_survival = safe_std(survs),
+                mean_innovate_share = safe_mean(innov),
+                mean_explore_share = safe_mean(explr),
+                mean_competition = safe_mean(comp),
+                mean_total_capital = safe_mean(cap),
             ))
         end
     end

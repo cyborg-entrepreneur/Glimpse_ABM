@@ -24,6 +24,8 @@ using CSV
 using Dates
 using Printf
 
+include(joinpath(@__DIR__, "_safe_stats.jl"))
+
 const N_AGENTS = 1000
 const N_ROUNDS = 60
 const N_RUNS = 50
@@ -192,17 +194,17 @@ function aggregate_condition(test::RefutationTest, results::Vector{Dict})
         "n_runs" => length(within_run_te_premium),
     )
     for tier in AI_TIERS
-        summary["$(tier)_survival_mean"] = mean(tier_survivals[tier])
-        summary["$(tier)_survival_std"] = std(tier_survivals[tier])
-        summary["$(tier)_capital_alive_mean"] = mean(tier_capital[tier])
-        summary["$(tier)_innov_per_agent"] = mean(tier_innov[tier])
+        summary["$(tier)_survival_mean"] = safe_mean(tier_survivals[tier])
+        summary["$(tier)_survival_std"] = safe_std(tier_survivals[tier])
+        summary["$(tier)_capital_alive_mean"] = safe_mean(tier_capital[tier])
+        summary["$(tier)_innov_per_agent"] = safe_mean(tier_innov[tier])
     end
-    summary["te_basic_pp"] = mean(within_run_te_basic) * 100
-    summary["te_basic_pp_std"] = std(within_run_te_basic) * 100
-    summary["te_advanced_pp"] = mean(within_run_te_advanced) * 100
-    summary["te_advanced_pp_std"] = std(within_run_te_advanced) * 100
-    summary["te_premium_pp"] = mean(within_run_te_premium) * 100
-    summary["te_premium_pp_std"] = std(within_run_te_premium) * 100
+    summary["te_basic_pp"] = safe_mean(within_run_te_basic) * 100
+    summary["te_basic_pp_std"] = safe_std(within_run_te_basic) * 100
+    summary["te_advanced_pp"] = safe_mean(within_run_te_advanced) * 100
+    summary["te_advanced_pp_std"] = safe_std(within_run_te_advanced) * 100
+    summary["te_premium_pp"] = safe_mean(within_run_te_premium) * 100
+    summary["te_premium_pp_std"] = safe_std(within_run_te_premium) * 100
     return summary
 end
 

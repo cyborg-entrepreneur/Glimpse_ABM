@@ -167,9 +167,17 @@ function run_single_mixed_simulation(run_idx::Int, seed::Int)
         # v3.5.18: paradox_signal reader migrated to the persistent agent field
         # added in v3.5.18 (was orphan-overwrite via agent.last_outcome before).
         # Per-tier mean of accumulated confidence-vs-ROI gap with inertia.
-        paradox_signals = Float64[Float64(a.paradox_signal) for a in tier_agents]
+        # v3.5.20: average only over agents that have actually had a paradox
+        # observation (paradox_obs_count > 0) to avoid diluting the signal
+        # with default-0.0 contributions from agents who never invested or
+        # innovated. tier_paradox_n is now the count of observed agents, not
+        # the tier size; tier_paradox_coverage gives the observed fraction.
+        observed_agents = [a for a in tier_agents if a.paradox_obs_count > 0]
+        paradox_signals = Float64[Float64(a.paradox_signal) for a in observed_agents]
         tier_paradox_mean = isempty(paradox_signals) ? 0.0 : mean(paradox_signals)
         tier_paradox_n = length(paradox_signals)
+        tier_paradox_coverage = isempty(tier_agents) ? 0.0 :
+            length(observed_agents) / length(tier_agents)
 
         tier_stats[tier] = Dict(
             "total" => length(tier_agents),
@@ -196,6 +204,7 @@ function run_single_mixed_simulation(run_idx::Int, seed::Int)
             "combinations_per_agent" => tier_combinations / length(tier_agents),
             "paradox_signal_mean" => tier_paradox_mean,
             "paradox_signal_n" => tier_paradox_n,
+            "paradox_signal_coverage" => tier_paradox_coverage,
         )
     end
 
@@ -274,6 +283,7 @@ function aggregate_results(all_results::AbstractVector{<:AbstractDict})
             "niches_per_agent" => Float64[],
             "combinations_per_agent" => Float64[],
             "paradox_signal_mean" => Float64[],
+            "paradox_signal_coverage" => Float64[],
         )
     end
 
@@ -299,6 +309,7 @@ function aggregate_results(all_results::AbstractVector{<:AbstractDict})
                 push!(tier_data[tier]["niches_per_agent"], stats["niches_per_agent"])
                 push!(tier_data[tier]["combinations_per_agent"], stats["combinations_per_agent"])
                 push!(tier_data[tier]["paradox_signal_mean"], stats["paradox_signal_mean"])
+                push!(tier_data[tier]["paradox_signal_coverage"], get(stats, "paradox_signal_coverage", 0.0))
                 push!(all_trajectories[tier], stats["trajectory"])
             end
         end
@@ -344,6 +355,7 @@ function aggregate_results(all_results::AbstractVector{<:AbstractDict})
             "mean_combinations_per_agent" => safe_mean(d["combinations_per_agent"]),
             "mean_paradox_signal" => safe_mean(d["paradox_signal_mean"]),
             "std_paradox_signal" => safe_std(d["paradox_signal_mean"]),
+            "mean_paradox_coverage" => safe_mean(d["paradox_signal_coverage"]),
             "n_runs" => length(d["survival_rate"]),
             "trajectory" => get(mean_trajectories, tier, Float64[])
         )
@@ -402,6 +414,7 @@ function save_results(summary::Dict, all_results::AbstractVector{<:AbstractDict}
             mean_combinations_per_agent=s["mean_combinations_per_agent"],
             mean_paradox_signal=s["mean_paradox_signal"],
             std_paradox_signal=s["std_paradox_signal"],
+            mean_paradox_coverage=s["mean_paradox_coverage"],
             n_runs=s["n_runs"]
         ))
     end
@@ -433,6 +446,7 @@ function save_results(summary::Dict, all_results::AbstractVector{<:AbstractDict}
                     combinations_per_agent=s["combinations_per_agent"],
                     paradox_signal_mean=get(s, "paradox_signal_mean", 0.0),
                     paradox_signal_n=get(s, "paradox_signal_n", 0),
+                    paradox_signal_coverage=get(s, "paradox_signal_coverage", 0.0),
                 ))
             end
         end

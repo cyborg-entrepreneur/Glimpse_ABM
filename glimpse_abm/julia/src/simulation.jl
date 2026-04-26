@@ -848,11 +848,25 @@ function compile_round_stats(
         capital_returned["invest"] += ret
     end
 
-    # Calculate ROIC by action type (matches Python)
+    # Calculate ROIC by action type (matches Python).
+    # v3.5.20: NB this is a *round-level* PnL ratio: numerator is THIS round's
+    # matured returns (from investments deployed several rounds ago — see the
+    # all_matured loop above and agents.jl maturity period), denominator is
+    # THIS round's new deploys. The two windows do not match. Pre-fix the
+    # gate emitted 0.0 when deployed=0 but returned>0, which read as "0%
+    # return" but actually meant "ratio undefined." We now emit NaN in that
+    # case so consumers can distinguish "no economic activity" from
+    # "returns happened but no new deploys to ratio against." Consumers
+    # needing a true cumulative ROIC should use total_capital_deployed_*
+    # / total_capital_returned_* (already exported separately above) and
+    # accumulate across rounds; net_capital_flow_invest gives the current
+    # round's signed delta.
     mean_roic_invest = capital_deployed["invest"] > 0 ?
-        (capital_returned["invest"] - capital_deployed["invest"]) / capital_deployed["invest"] : 0.0
+        (capital_returned["invest"] - capital_deployed["invest"]) / capital_deployed["invest"] :
+        (capital_returned["invest"] > 0 ? NaN : 0.0)
     mean_roic_innovate = capital_deployed["innovate"] > 0 ?
-        (capital_returned["innovate"] - capital_deployed["innovate"]) / capital_deployed["innovate"] : 0.0
+        (capital_returned["innovate"] - capital_deployed["innovate"]) / capital_deployed["innovate"] :
+        (capital_returned["innovate"] > 0 ? NaN : 0.0)
     mean_roic_explore = 0.0  # Explore doesn't have direct return
 
     # Net capital flow by action type
@@ -1157,6 +1171,16 @@ function summary_stats(sim::EmergentSimulation)::Dict{String,Any}
     total_failures = sum(a.failure_count for a in sim.agents)
     total_innovations = sum(a.innovation_count for a in sim.agents)
 
+    # v3.5.20: paradox aggregates over agents that actually had at least one
+    # observation. Default-0.0 agents would otherwise dilute the diagnostic
+    # toward 0 (default-state averaging dilution archetype).
+    observed = [a for a in sim.agents if a.paradox_obs_count > 0]
+    paradox_vals = Float64[a.paradox_signal for a in observed]
+    mean_paradox_signal = isempty(paradox_vals) ? 0.0 : mean(paradox_vals)
+    mean_abs_paradox_signal = isempty(paradox_vals) ? 0.0 : mean(abs.(paradox_vals))
+    paradox_coverage = isempty(sim.agents) ? 0.0 :
+        length(observed) / length(sim.agents)
+
     # Uncertainty averages from history
     if !isempty(sim.history)
         mean_actor_ignorance = mean(get(h, "actor_ignorance", 0.0) for h in sim.history)
@@ -1188,6 +1212,9 @@ function summary_stats(sim::EmergentSimulation)::Dict{String,Any}
         "mean_practical_indeterminism" => mean_practical_indet,
         "mean_agentic_novelty" => mean_agentic_novelty,
         "mean_competitive_recursion" => mean_competitive_rec,
+        "mean_paradox_signal" => mean_paradox_signal,
+        "mean_abs_paradox_signal" => mean_abs_paradox_signal,
+        "paradox_coverage" => paradox_coverage,
         "elapsed_seconds" => (now() - sim.start_time).value / 1000.0
     )
 end

@@ -345,7 +345,11 @@ mutable struct EmergentAgent
     # (agents.jl:762, update_state_from_outcome! at :2996). Move to a
     # dedicated field so the signal accumulates across rounds for paper
     # diagnostics.
+    # v3.5.20: paradox_obs_count tracks how many times the writer has fired.
+    # Aggregators must distinguish "true neutral 0.0" from "no observation
+    # yet" — pre-fix means were diluted by zero-observation agents.
     paradox_signal::Float64
+    paradox_obs_count::Int
 
     # Portfolio
     active_investments::Vector{Dict{String,Any}}
@@ -459,6 +463,7 @@ function EmergentAgent(
         "maintain",  # last_action
         Dict{String,Any}(),  # last_outcome
         0.0,  # paradox_signal (v3.5.18, persistent)
+        0,    # paradox_obs_count (v3.5.20, dilution guard)
         Dict{String,Any}[],  # active_investments
         AgentUncertaintyMetrics(),  # uncertainty_metrics (emergent, agent-level)
         rng
@@ -1450,6 +1455,7 @@ function snapshot(agent::EmergentAgent, round::Int)::Dict{String,Any}
         "competence" => agent.competence,
         "ai_trust" => agent.ai_trust,
         "paradox_signal" => agent.paradox_signal,
+        "paradox_obs_count" => agent.paradox_obs_count,
     )
 end
 
@@ -3103,6 +3109,9 @@ function record_paradox_observation!(
     inertia = 0.85
     new_signal = inertia * agent.paradox_signal + (1.0 - inertia) * gap * weight
     agent.paradox_signal = clamp(new_signal, -1.0, 1.0)
+    # v3.5.20: count observations so aggregators can distinguish
+    # "true neutral 0.0" from "no observation yet."
+    agent.paradox_obs_count += 1
 end
 
 # ============================================================================

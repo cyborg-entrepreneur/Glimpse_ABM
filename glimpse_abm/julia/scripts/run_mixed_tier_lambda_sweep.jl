@@ -23,6 +23,8 @@ using CSV
 using Dates
 using Printf
 
+include(joinpath(@__DIR__, "_safe_stats.jl"))
+
 const N_AGENTS = 1000
 const N_ROUNDS = 60
 const N_RUNS = 30
@@ -122,9 +124,9 @@ function run_one(seed::Int, lambda::Float64)
         out["sat_p75"] = quantile(all_sats, 0.75)
         out["frac_above_K_overall"] = count(s -> s > K_SAT_FIXED, all_sats) / length(all_sats)
         out["max_round_peak"] = maximum(round_maxes)
-        out["mean_round_peak"] = mean(round_maxes)
+        out["mean_round_peak"] = safe_mean(round_maxes)
         out["max_frac_above_K"] = maximum(round_fracs_K)
-        out["mean_frac_above_K_per_round"] = mean(round_fracs_K)
+        out["mean_frac_above_K_per_round"] = safe_mean(round_fracs_K)
         out["n_obs"] = length(all_sats)
     end
     return out
@@ -136,21 +138,21 @@ function summarize(results::Vector{Dict}, lambda::Float64)
     none_survs = [r["none_survival"] for r in rows]
     for tier in AI_TIERS
         sv = [r["$(tier)_survival"] for r in rows]
-        summary["$(tier)_survival_mean"] = mean(sv)
-        summary["$(tier)_survival_std"] = std(sv)
-        summary["$(tier)_te_pp"] = (mean(sv) - mean(none_survs)) * 100
+        summary["$(tier)_survival_mean"] = safe_mean(sv)
+        summary["$(tier)_survival_std"] = safe_std(sv)
+        summary["$(tier)_te_pp"] = (safe_mean(sv) - safe_mean(none_survs)) * 100
     end
-    summary["mean_survival_overall"] = mean(
-        [mean([r["$(t)_survival"] for r in rows]) for t in AI_TIERS])
-    summary["sat_max_overall_mean"] = mean(r["sat_max_overall"] for r in rows)
-    summary["sat_p95_mean"] = mean(r["sat_p95"] for r in rows)
-    summary["sat_p75_mean"] = mean(r["sat_p75"] for r in rows)
-    summary["frac_above_K_overall_mean"] = mean(r["frac_above_K_overall"] for r in rows)
-    summary["max_round_peak_mean"] = mean(r["max_round_peak"] for r in rows)
-    summary["mean_round_peak_mean"] = mean(r["mean_round_peak"] for r in rows)
-    summary["max_frac_above_K_mean"] = mean(r["max_frac_above_K"] for r in rows)
-    summary["mean_frac_above_K_per_round_mean"] = mean(r["mean_frac_above_K_per_round"] for r in rows)
-    summary["n_obs_mean"] = mean(r["n_obs"] for r in rows)
+    summary["mean_survival_overall"] = safe_mean(
+        [safe_mean([r["$(t)_survival"] for r in rows]) for t in AI_TIERS])
+    summary["sat_max_overall_mean"] = safe_mean([r["sat_max_overall"] for r in rows])
+    summary["sat_p95_mean"] = safe_mean([r["sat_p95"] for r in rows])
+    summary["sat_p75_mean"] = safe_mean([r["sat_p75"] for r in rows])
+    summary["frac_above_K_overall_mean"] = safe_mean([r["frac_above_K_overall"] for r in rows])
+    summary["max_round_peak_mean"] = safe_mean([r["max_round_peak"] for r in rows])
+    summary["mean_round_peak_mean"] = safe_mean([r["mean_round_peak"] for r in rows])
+    summary["max_frac_above_K_mean"] = safe_mean([r["max_frac_above_K"] for r in rows])
+    summary["mean_frac_above_K_per_round_mean"] = safe_mean([r["mean_frac_above_K_per_round"] for r in rows])
+    summary["n_obs_mean"] = safe_mean([r["n_obs"] for r in rows])
     return summary
 end
 
