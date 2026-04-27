@@ -26,12 +26,15 @@ using Printf
 
 include(joinpath(@__DIR__, "_safe_stats.jl"))
 
-const N_AGENTS = 2000
-const N_ROUNDS = 60
-const N_RUNS = 50
+# v3.5.21+: env-parameterized so we can scale N independently of the headline
+# baseline. Refutation traversing 31 conditions × 50 seeds is ~5× the compute
+# of a single baseline at the same N; running at N=1000 keeps wall under 6h.
+const N_AGENTS = parse(Int, get(ENV, "N_AGENTS", "1000"))
+const N_ROUNDS = parse(Int, get(ENV, "N_ROUNDS", "60"))
+const N_RUNS   = parse(Int, get(ENV, "N_RUNS",   "50"))
 const AGENTS_PER_TIER = N_AGENTS ÷ 4
 const AI_TIERS = ["none", "basic", "advanced", "premium"]
-const BASE_SEED = 20260425
+const BASE_SEED = parse(Int, get(ENV, "BASE_SEED", "20260425"))
 
 const OUTPUT_DIR = joinpath(@__DIR__, "..", "results",
     "mixed_tier_refutation_v3_$(Dates.format(now(), "yyyymmdd_HHMMSS"))")
